@@ -32,7 +32,9 @@ const App = {
     } else {
       // Redirect operations users to operations system
       const userSystem = API.currentUser.system || 'maintenance';
-      if (userSystem === 'operations') {
+      const params = new URLSearchParams(window.location.search);
+      const gotoPage = params.get('goto');
+      if (userSystem === 'operations' || gotoPage === 'operations.html') {
         window.location.href = 'operations.html';
         return;
       }
@@ -111,12 +113,16 @@ const App = {
       if (btn) { btn.disabled = false; btn.textContent = '登录'; }
       return;
     }
-    // Route to correct system (all operations users go to operations page)
+    // Route to correct system based on account type
     const userSystem = result.user.system || 'maintenance';
-    if (userSystem === 'operations') {
+    const params = new URLSearchParams(window.location.search);
+    const gotoPage = params.get('goto');
+
+    if (userSystem === 'operations' || gotoPage === 'operations.html') {
       window.location.href = 'operations.html';
       return;
     }
+    // Maintenance users stay on index.html
 
     // Show sidebar, hamburger, and topbar, add logged-in class
     document.body.classList.add('logged-in');

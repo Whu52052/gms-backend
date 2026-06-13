@@ -13,8 +13,12 @@ const OpsApp = {
 
     const online = await API.init();
     if (!API.currentUser) {
-      // Show login form directly on this page
-      this.showLogin(online ? '' : '离线模式 — 数据保存在本地浏览器');
+      // No login on this page - redirect to index.html (single login entry)
+      if (online) {
+        window.location.href = 'index.html?goto=operations.html';
+        return;
+      }
+      this.showLogin('离线模式 — 数据保存在本地浏览器');
     } else {
       const userSystem = API.currentUser.system || 'maintenance';
       if (userSystem === 'maintenance' && API.currentUser.role !== 'superadmin') {
