@@ -1958,11 +1958,19 @@ const App = {
         <div class="machine-status-grid" id="machine-card-grid">
           ${allMachineNumbers.map(num => {
             const m = latestByMachine[num];
+            const st = m.status || 'offline';
+            const stMap = {
+              online: { cls: 'online', label: '🟢 在线' },
+              offline: { cls: 'offline', label: '🔴 离线' },
+              waiting_repair: { cls: 'waiting-repair', label: '🔴 等待维修' },
+              repairing: { cls: 'repairing', label: '🟡 维修中' },
+            };
+            const s = stMap[st] || stMap.offline;
             return `
-            <div class="machine-card ${m.status === 'online' ? 'online' : 'offline'}" onclick="App.showMachineDetail('${num}')" style="cursor:pointer;" title="点击查看详情">
+            <div class="machine-card ${s.cls}" onclick="App.showMachineDetail('${num}')" style="cursor:pointer;" title="点击查看详情">
               <div class="machine-number">${typeIcon[m.deviceType] || '🖥️'} #${num}</div>
               <div class="machine-type">${typeLabel[m.deviceType] || '未知类型'}</div>
-              <div class="machine-status">${m.status === 'online' ? '🟢 在线' : '🔴 离线'}</div>
+              <div class="machine-status">${s.label}</div>
             </div>
           `}).join('')}
         </div>
@@ -3481,6 +3489,16 @@ const App = {
     this._showInfoModal(`📎 ${snCode} 附件`, contentHtml);
   },
 
+  // ==================== DURATION FORMATTER ====================
+  _fmtDuration(seconds) {
+    if (seconds == null) return '-';
+    const s = Math.round(seconds);
+    if (s < 60) return s + '秒';
+    const m = Math.floor(s / 60);
+    const remain = s % 60;
+    return remain > 0 ? m + '分' + remain + '秒' : m + '分';
+  },
+
   // ==================== TECH SUPPORT ====================
   _updateTechSupportNav() {
     const user = API.currentUser;
@@ -3539,7 +3557,7 @@ const App = {
         {k:'machineNumber',l:'设备编号'},{k:'equipmentTypeName',l:'故障设备'},{k:'faultType',l:'故障现象'},
         {k:'submitterName',l:'操作员'},{k:'submittedAt',l:'提交时间'},{k:'status',l:'状态'},
         {k:'responderName',l:'维修人员'},{k:'respondedAt',l:'响应时间'},{k:'completedAt',l:'恢复时间'},
-        {k:'totalMinutes',l:'总时长'}
+        {k:'totalSeconds',l:'总时长'}
       ];
       const sc = this._tsSortCol || 'submittedAt';
       const sd = this._tsSortDir || 'desc';
@@ -3556,7 +3574,7 @@ const App = {
             <td><span class="ts-status-badge ${s.c}">${s.icon} ${s.l}</span></td>
             <td>${item.responderName||'-'}</td><td style="font-size:0.8rem;white-space:nowrap;">${fm(item.respondedAt)}</td>
             <td style="font-size:0.8rem;white-space:nowrap;">${fm(item.completedAt)}</td>
-            <td>${item.totalMinutes!=null?item.totalMinutes+'分':'-'}</td>
+            <td>${this._fmtDuration(item.totalSeconds)}</td>
           </tr>`; }).join('')}
       </tbody></table></div>`;
     } else {
@@ -3570,7 +3588,7 @@ const App = {
             <div class="ts-card-footer">
               <span>👤 ${item.submitterName||'-'}</span><span>🕐 ${fm(item.submittedAt)}</span>
               ${item.responderName?`<span>🔧 ${item.responderName}</span>`:''}
-              ${item.totalMinutes!=null?`<span>⏱ ${item.totalMinutes}分钟</span>`:''}
+              ${item.totalSeconds!=null?`<span>⏱ ${this._fmtDuration(item.totalSeconds)}</span>`:''}
               <span style="margin-left:auto;"><span class="ts-status-badge ${s.c}">${s.l}</span></span>
             </div>
           </div>`; }).join('')}
@@ -3663,9 +3681,9 @@ const App = {
       </div>
       <div class="ts-detail-card"><h3>⏱ 耗时统计</h3>
         <div class="ts-detail-grid">
-          <div class="ts-detail-field"><span class="lbl">等待时长</span><span class="val">${item.waitMinutes!=null?item.waitMinutes+' 分钟':'-'}</span></div>
-          <div class="ts-detail-field"><span class="lbl">维修时长</span><span class="val">${item.repairMinutes!=null?item.repairMinutes+' 分钟':'-'}</span></div>
-          <div class="ts-detail-field"><span class="lbl">总耗时</span><span class="val">${item.totalMinutes!=null?item.totalMinutes+' 分钟':'-'}</span></div>
+          <div class="ts-detail-field"><span class="lbl">等待时长</span><span class="val">${this._fmtDuration(item.waitSeconds)}</span></div>
+          <div class="ts-detail-field"><span class="lbl">维修时长</span><span class="val">${this._fmtDuration(item.repairSeconds)}</span></div>
+          <div class="ts-detail-field"><span class="lbl">总耗时</span><span class="val">${this._fmtDuration(item.totalSeconds)}</span></div>
         </div>
       </div>
       <div class="ts-action-bar">

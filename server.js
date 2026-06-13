@@ -307,6 +307,16 @@ async function migrateFromJSON() {
 }
 
 // ==================== AUTH ====================
+// Format seconds into "X分Y秒" display
+function _fmtDuration(seconds) {
+  if (seconds == null) return '-';
+  const s = Math.round(seconds);
+  if (s < 60) return s + '秒';
+  const m = Math.floor(s / 60);
+  const remain = s % 60;
+  return remain > 0 ? m + '分' + remain + '秒' : m + '分';
+}
+
 function hashPassword(pw) {
   return crypto.createHash('sha256').update(pw + 'gms-salt').digest('hex');
 }
@@ -663,12 +673,15 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
     result: '',
     submittedAt: now,
     createdAt: now,
-    waitMinutes: null,
-    repairMinutes: null,
-    totalMinutes: null,
+    waitSeconds: null,
+    repairSeconds: null,
+    totalSeconds: null,
   };
   await pool.execute('INSERT INTO tech_support (id, data) VALUES (?, ?)', [id, JSON.stringify(item)]);
+  // Update machine status to waiting_repair
+  await _updateMachineStatusByNumber(item.machineNumber, 'waiting_repair');
   broadcastSSE('tech_support_updated', { action: 'created', id });
+  broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
 }
 
@@ -688,9 +701,12 @@ async function handleRespondTechSupport(req, res, authUser, id) {
   item.responderId = authUser.userId;
   item.responderName = authUser.username;
   item.respondedAt = now;
-  item.waitMinutes = Math.round((new Date(now) - new Date(item.submittedAt)) / 60000 * 10) / 10;
+  item.waitSeconds = Math.round((new Date(now) - new Date(item.submittedAt)) / 1000);
   await pool.execute('REPLACE INTO tech_support (id, data) VALUES (?, ?)', [id, JSON.stringify(item)]);
+  // Update machine status to repairing
+  await _updateMachineStatusByNumber(item.machineNumber, 'repairing');
   broadcastSSE('tech_support_updated', { action: 'responded', id });
+  broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
 }
 
@@ -710,12 +726,45 @@ async function handleCompleteTechSupport(req, res, authUser, id, body) {
   item.completedAt = now;
   item.result = (body && body.result) || '';
   if (item.respondedAt) {
-    item.repairMinutes = Math.round((new Date(now) - new Date(item.respondedAt)) / 60000 * 10) / 10;
+    item.repairSeconds = Math.round((new Date(now) - new Date(item.respondedAt)) / 1000);
   }
-  item.totalMinutes = Math.round((new Date(now) - new Date(item.submittedAt)) / 60000 * 10) / 10;
+  item.totalSeconds = Math.round((new Date(now) - new Date(item.submittedAt)) / 1000);
   await pool.execute('REPLACE INTO tech_support (id, data) VALUES (?, ?)', [id, JSON.stringify(item)]);
+  // Restore machine status to online
+  await _updateMachineStatusByNumber(item.machineNumber, 'online');
   broadcastSSE('tech_support_updated', { action: 'completed', id });
+  broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
+}
+
+// Helper: Update the latest machine record's status by machineNumber
+async function _updateMachineStatusByNumber(machineNumber, newStatus) {
+  if (!machineNumber) return;
+  try {
+    const [allRows] = await pool.execute('SELECT id, data FROM machines');
+    let latestRow = null;
+    let latestTime = 0;
+    let matchCount = 0;
+    for (const row of allRows) {
+      let d;
+      try { d = JSON.parse(row.data); } catch { continue; }
+      if (d.machineNumber === machineNumber) {
+        matchCount++;
+        const t = d.updatedAt ? new Date(d.updatedAt).getTime() : 0;
+        if (t > latestTime || latestRow === null) { latestTime = t; latestRow = { id: row.id, data: d }; }
+      }
+    }
+    if (latestRow) {
+      latestRow.data.status = newStatus;
+      latestRow.data.updatedAt = new Date().toISOString();
+      await pool.execute('REPLACE INTO machines (id, data) VALUES (?, ?)', [latestRow.id, JSON.stringify(latestRow.data)]);
+      console.log(`[Machine Status] ${machineNumber} -> ${newStatus} (matched ${matchCount} records)`);
+    } else {
+      console.log(`[Machine Status] ${machineNumber} not found in ${allRows.length} machine records`);
+    }
+  } catch (e) {
+    console.error('[Machine Status Update Error]', e.message);
+  }
 }
 
 // ==================== POPUP MESSAGES ====================
@@ -1189,9 +1238,9 @@ async function handleExportTechSupportXLSX(req, res, user) {
     '维修人员': t.responderName || '-',
     '响应时间': t.respondedAt ? new Date(t.respondedAt).toLocaleString('zh-CN') : '-',
     '恢复时间': t.completedAt ? new Date(t.completedAt).toLocaleString('zh-CN') : '-',
-    '等待时长(分钟)': t.waitMinutes != null ? t.waitMinutes : '-',
-    '维修时长(分钟)': t.repairMinutes != null ? t.repairMinutes : '-',
-    '总时长(分钟)': t.totalMinutes != null ? t.totalMinutes : '-',
+    '等待时长': _fmtDuration(t.waitSeconds),
+    '维修时长': _fmtDuration(t.repairSeconds),
+    '总时长': _fmtDuration(t.totalSeconds),
     '处理结果': t.result || '-',
   }));
 

@@ -974,6 +974,16 @@ const OpsApp = {
     }
   },
 
+  // ==================== DURATION FORMATTER ====================
+  _fmtDuration(seconds) {
+    if (seconds == null) return '-';
+    const s = Math.round(seconds);
+    if (s < 60) return s + '秒';
+    const m = Math.floor(s / 60);
+    const remain = s % 60;
+    return remain > 0 ? m + '分' + remain + '秒' : m + '分';
+  },
+
   // ==================== POPUP MODAL HELPER ====================
   _showPopupModal(title, message, onClose) {
     const overlay = document.getElementById('modal-overlay');
@@ -1297,7 +1307,7 @@ const OpsApp = {
             <td>${item.faultType||'-'}</td><td style="font-size:0.8rem;white-space:nowrap;">${fm(item.submittedAt)}</td>
             <td><span class="ts-status-badge ${s.c}">${s.icon} ${s.l}</span></td><td>${item.responderName||'-'}</td>
             <td style="font-size:0.8rem;white-space:nowrap;">${fm(item.respondedAt)}</td>
-            <td style="font-size:0.8rem;white-space:nowrap;">${fm(item.completedAt)}</td><td>${item.totalMinutes!=null?item.totalMinutes+'分':'-'}</td>
+            <td style="font-size:0.8rem;white-space:nowrap;">${fm(item.completedAt)}</td><td>${this._fmtDuration(item.totalSeconds)}</td>
           </tr>`; }).join('')}
       </tbody></table></div>`;
     } else {
@@ -1311,7 +1321,7 @@ const OpsApp = {
             <div class="ts-card-footer">
               <span>🕐 ${fm(item.submittedAt)}</span>
               ${item.responderName?`<span>🔧 ${item.responderName}</span>`:''}
-              ${item.totalMinutes!=null?`<span>⏱ ${item.totalMinutes}分钟</span>`:''}
+              ${item.totalSeconds!=null?`<span>⏱ ${this._fmtDuration(item.totalSeconds)}</span>`:''}
               <span style="margin-left:auto;"><span class="ts-status-badge ${s.c}">${s.l}</span></span>
             </div>
           </div>`; }).join('')}
@@ -1381,9 +1391,9 @@ const OpsApp = {
     </div>
     <div class="ts-detail-card"><h3>⏱ 耗时统计</h3>
       <div class="ts-detail-grid">
-        <div class="ts-detail-field"><span class="lbl">等待时长</span><span class="val">${item.waitMinutes!=null?item.waitMinutes+' 分钟':'-'}</span></div>
-        <div class="ts-detail-field"><span class="lbl">维修时长</span><span class="val">${item.repairMinutes!=null?item.repairMinutes+' 分钟':'-'}</span></div>
-        <div class="ts-detail-field"><span class="lbl">总耗时</span><span class="val">${item.totalMinutes!=null?item.totalMinutes+' 分钟':'-'}</span></div>
+        <div class="ts-detail-field"><span class="lbl">等待时长</span><span class="val">${this._fmtDuration(item.waitSeconds)}</span></div>
+        <div class="ts-detail-field"><span class="lbl">维修时长</span><span class="val">${this._fmtDuration(item.repairSeconds)}</span></div>
+        <div class="ts-detail-field"><span class="lbl">总耗时</span><span class="val">${this._fmtDuration(item.totalSeconds)}</span></div>
       </div>
     </div>`;
     this.showModal('🔧 维修详情', html, () => true);
