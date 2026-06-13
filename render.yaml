@@ -5,8 +5,7 @@ services:
     dockerfilePath: ./Dockerfile
     region: singapore
     plan: free
+    healthCheckPath: /api/health
     envVars:
-      - key: PORT
-        value: "8765"
       - key: TZ
         value: Asia/Shanghai
