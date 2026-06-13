@@ -32,9 +32,7 @@ const App = {
     } else {
       // Redirect operations users to operations system
       const userSystem = API.currentUser.system || 'maintenance';
-      const params = new URLSearchParams(window.location.search);
-      const gotoPage = params.get('goto');
-      if (userSystem === 'operations' || gotoPage === 'operations.html') {
+      if (userSystem === 'operations') {
         window.location.href = 'operations.html';
         return;
       }
@@ -115,10 +113,8 @@ const App = {
     }
     // Route to correct system based on account type
     const userSystem = result.user.system || 'maintenance';
-    const params = new URLSearchParams(window.location.search);
-    const gotoPage = params.get('goto');
 
-    if (userSystem === 'operations' || gotoPage === 'operations.html') {
+    if (userSystem === 'operations') {
       window.location.href = 'operations.html';
       return;
     }

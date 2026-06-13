@@ -13,18 +13,13 @@ const OpsApp = {
 
     const online = await API.init();
     if (!API.currentUser) {
-      // No login on this page - redirect to index.html (single login entry)
+      // Not logged in - redirect to index.html (single login entry)
       if (online) {
-        window.location.href = 'index.html?goto=operations.html';
+        window.location.href = 'index.html';
         return;
       }
       this.showLogin('离线模式 — 数据保存在本地浏览器');
     } else {
-      const userSystem = API.currentUser.system || 'maintenance';
-      if (userSystem === 'maintenance' && API.currentUser.role !== 'superadmin') {
-        window.location.href = 'index.html';
-        return;
-      }
       if (online) { await this._syncFromServer(); }
       document.body.classList.add('logged-in');
       const sidebar = document.querySelector('.sidebar');
