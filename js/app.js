@@ -30,10 +30,11 @@ const App = {
     if (!API.currentUser) {
       this.showLogin(online ? '' : '离线模式 — 检查网络连接后刷新页面重试');
     } else {
-      // Redirect operations users to operations system
+      // Redirect operations users to operations system (pass auth via hash)
       const userSystem = API.currentUser.system || 'maintenance';
       if (userSystem === 'operations') {
-        window.location.href = 'operations.html';
+        const authData = btoa(JSON.stringify({t: API.token, u: API.currentUser}));
+        window.location.href = 'operations.html#' + authData;
         return;
       }
       if (online) {
