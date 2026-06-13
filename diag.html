@@ -38,18 +38,29 @@ function log(msg) { LOG.textContent += msg + '\n'; }
     log('Token: ' + (d.token ? d.token.substring(0,20)+'...' : 'NONE'));
 
     if (d.token) {
-      // Test token
+      // Test token validity
       log('\n--- Token Test ---');
       const r2 = await fetch('/api/settings', {
         headers: {'Authorization': 'Bearer ' + d.token}
       });
       log('Token valid: ' + (r2.status === 200 ? 'YES' : 'NO ('+r2.status+')'));
 
-      // Test operations page access with token
-      log('\n--- Operations Page ---');
-      const r3 = await fetch('/operations.html');
-      log('Ops page: ' + r3.status);
-      log('Ops page size: ' + r3.headers.get('content-length') || 'unknown');
+      // Test sessionStorage persistence
+      log('\n--- Storage Test ---');
+      sessionStorage.setItem('_test_key', 'test_value_' + Date.now());
+      const testVal = sessionStorage.getItem('_test_key');
+      log('sessionStorage write/read: ' + (testVal ? 'WORKS' : 'FAILS'));
+
+      localStorage.setItem('_test_key', 'test_value_local');
+      const testLocal = localStorage.getItem('_test_key');
+      log('localStorage write/read: ' + (testLocal ? 'WORKS' : 'FAILS'));
+
+      // Simulate full login flow: save token, then reload check
+      sessionStorage.setItem('gms_token', d.token);
+      sessionStorage.setItem('gms_user', JSON.stringify(d.user));
+      log('\n--- Simulated redirect ---');
+      log('Token saved. On next page load, sessionStorage should have token.');
+      log('If you see "session token: NONE" above, the redirect loses it.');
     }
   } catch(e) { log('Login FAIL: ' + e.message); }
 
