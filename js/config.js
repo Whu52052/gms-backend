@@ -4,4 +4,6 @@
  * Leave empty for local development (falls back to same-origin).
  */
 // 当前公网地址（留空 = 自动使用当前域名）
+// v4.0 — single login entry
 window.__GMS_SERVER_URL__ = '';
+window.__GMS_VERSION__ = Date.now();
