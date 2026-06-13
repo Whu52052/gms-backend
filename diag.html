@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Login Test</title></head>
+<body>
+<h1>Login Flow Test</h1>
+<div id="log" style="background:#111;color:#0f0;padding:16px;font-family:monospace;white-space:pre-wrap;"></div>
+<script>
+const LOG = document.getElementById('log');
+function log(msg) { LOG.textContent += msg + '\n'; }
+
+(async () => {
+  log('=== START ===');
+  log('Origin: ' + window.location.origin);
+
+  // Check sessionStorage
+  const token = sessionStorage.getItem('gms_token');
+  const user = sessionStorage.getItem('gms_user');
+  log('session token: ' + (token ? token.substring(0,20)+'...' : 'NONE'));
+  log('session user: ' + (user || 'NONE'));
+
+  // Test health
+  log('\n--- Health Check ---');
+  try {
+    const r = await fetch('/api/health');
+    log('Health: ' + r.status + ' ' + JSON.stringify(await r.json()));
+  } catch(e) { log('Health FAIL: ' + e.message); }
+
+  // Try login
+  log('\n--- Login Test ---');
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({username:'yunying', password:'yunying1025'})
+    });
+    const d = await r.json();
+    log('Login status: ' + r.status);
+    log('User: ' + (d.user ? d.user.username + '/' + d.user.system + '/' + d.user.role : 'NONE'));
+    log('Token: ' + (d.token ? d.token.substring(0,20)+'...' : 'NONE'));
+
+    if (d.token) {
+      // Test token
+      log('\n--- Token Test ---');
+      const r2 = await fetch('/api/settings', {
+        headers: {'Authorization': 'Bearer ' + d.token}
+      });
+      log('Token valid: ' + (r2.status === 200 ? 'YES' : 'NO ('+r2.status+')'));
+
+      // Test operations page access with token
+      log('\n--- Operations Page ---');
+      const r3 = await fetch('/operations.html');
+      log('Ops page: ' + r3.status);
+      log('Ops page size: ' + r3.headers.get('content-length') || 'unknown');
+    }
+  } catch(e) { log('Login FAIL: ' + e.message); }
+
+  log('\n=== DONE ===');
+})();
+</script>
+</body></html>
