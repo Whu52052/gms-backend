@@ -30,9 +30,9 @@ const App = {
     if (!API.currentUser) {
       this.showLogin(online ? '' : '离线模式 — 检查网络连接后刷新页面重试');
     } else {
-      // Redirect operations users to operations system (superadmin can access both)
+      // Redirect operations users to operations system
       const userSystem = API.currentUser.system || 'maintenance';
-      if (userSystem === 'operations' && API.currentUser.role !== 'superadmin') {
+      if (userSystem === 'operations') {
         window.location.href = 'operations.html';
         return;
       }
@@ -111,9 +111,9 @@ const App = {
       if (btn) { btn.disabled = false; btn.textContent = '登录'; }
       return;
     }
-    // Route to correct system (superadmin can stay on either)
+    // Route to correct system (all operations users go to operations page)
     const userSystem = result.user.system || 'maintenance';
-    if (userSystem === 'operations' && result.user.role !== 'superadmin') {
+    if (userSystem === 'operations') {
       window.location.href = 'operations.html';
       return;
     }
