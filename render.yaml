@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: gms-backend
+    env: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: "8765"
+      - key: TZ
+        value: Asia/Shanghai
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        sync: false
+    plan: free
