@@ -115,7 +115,9 @@ const App = {
     const userSystem = result.user.system || 'maintenance';
 
     if (userSystem === 'operations') {
-      window.location.href = 'operations.html';
+      // Pass auth via URL hash to survive any browser storage restrictions
+      const authData = btoa(JSON.stringify({t: result.token, u: result.user}));
+      window.location.href = 'operations.html#' + authData;
       return;
     }
     // Maintenance users stay on index.html

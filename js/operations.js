@@ -11,6 +11,22 @@ const OpsApp = {
     this.applyTheme();
     this.bindNavigation();
 
+    // Restore auth from URL hash (passed by index.html after login)
+    if (window.location.hash && window.location.hash.length > 1) {
+      try {
+        const authData = JSON.parse(atob(window.location.hash.slice(1)));
+        if (authData.t && authData.u) {
+          API.token = authData.t;
+          API.currentUser = authData.u;
+          API.online = true; // skip health check
+          localStorage.setItem('gms_token', authData.t);
+          localStorage.setItem('gms_user', JSON.stringify(authData.u));
+          // Clean URL
+          history.replaceState(null, '', window.location.pathname);
+        }
+      } catch(e) {}
+    }
+
     const online = await API.init();
     if (!API.currentUser) {
       // Not logged in - redirect to index.html (single login entry)
