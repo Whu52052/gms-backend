@@ -1044,7 +1044,18 @@ async function handleAdjustInventory(req, res, user, type, body) {
 
 // -- Machines --
 async function handleGetMachines(req, res, user) {
-  sendJSON(res, await readJSONArray('machines'));
+  const all = await readJSONArray('machines');
+  // Deduplicate: return only the latest record per machineNumber
+  const latest = new Map();
+  for (const m of all) {
+    const num = m.machineNumber;
+    if (!num) continue;
+    const cur = latest.get(num);
+    if (!cur || (m.updatedAt && new Date(m.updatedAt) > new Date(cur.updatedAt || 0))) {
+      latest.set(num, m);
+    }
+  }
+  sendJSON(res, Array.from(latest.values()));
 }
 async function handleAddMachine(req, res, user, body) {
   const id = body.id || ('m-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
