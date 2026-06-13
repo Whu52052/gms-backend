@@ -12,14 +12,14 @@ const API = {
   _refreshTimer: null,
 
   async init() {
-    this.token = sessionStorage.getItem('gms_token');
-    this.currentUser = JSON.parse(sessionStorage.getItem('gms_user') || 'null');
+    this.token = localStorage.getItem('gms_token') || sessionStorage.getItem('gms_token');
+    this.currentUser = JSON.parse(localStorage.getItem('gms_user') || sessionStorage.getItem('gms_user') || 'null');
     this.baseURL = window.__GMS_SERVER_URL__ || window.location.origin;
 
     // Fast switch: system switcher set this flag — skip health check, assume online
-    const fastSwitch = sessionStorage.getItem('gms_fast_switch');
+    const fastSwitch = localStorage.getItem('gms_fast_switch');
     if (fastSwitch && this.token) {
-      sessionStorage.removeItem('gms_fast_switch');
+      localStorage.removeItem('gms_fast_switch');
       this.online = true;
     } else {
       this.online = await this._checkServer();
@@ -30,12 +30,12 @@ const API = {
       const hist = this._getLoginHistory();
       if (hist) {
         this.currentUser = { username: hist.username, role: hist.role, system: hist.system };
-        sessionStorage.setItem('gms_user', JSON.stringify(this.currentUser));
+        localStorage.setItem('gms_user', JSON.stringify(this.currentUser));
         // Try to restore token from localStorage
         const savedToken = localStorage.getItem('gms_login_token');
         if (savedToken) {
           this.token = savedToken;
-          sessionStorage.setItem('gms_token', savedToken);
+          localStorage.setItem('gms_token', savedToken);
         }
       }
     }
@@ -86,8 +86,8 @@ const API = {
         if (res.ok) {
           this.token = data.token;
           this.currentUser = data.user;
-          sessionStorage.setItem('gms_token', data.token);
-          sessionStorage.setItem('gms_user', JSON.stringify(data.user));
+          localStorage.setItem('gms_token', data.token);
+          localStorage.setItem('gms_user', JSON.stringify(data.user));
           this._saveLoginHistory(data.user);
           this._listenSSE();
           this._setupBeforeUnload();
@@ -109,8 +109,8 @@ const API = {
 
     this.currentUser = { username: user.username, role: user.role, system: user.system || 'maintenance' };
     this.online = false;
-    sessionStorage.setItem('gms_user', JSON.stringify(this.currentUser));
-    sessionStorage.removeItem('gms_token');
+    localStorage.setItem('gms_user', JSON.stringify(this.currentUser));
+    localStorage.removeItem('gms_token'); sessionStorage.removeItem('gms_token');
     this._saveLoginHistory(this.currentUser);
     return { success: true, user: this.currentUser };
   },
@@ -126,8 +126,8 @@ const API = {
     this.token = null;
     this.currentUser = null;
     this.online = false;
-    sessionStorage.removeItem('gms_token');
-    sessionStorage.removeItem('gms_user');
+    localStorage.removeItem('gms_token'); sessionStorage.removeItem('gms_token');
+    localStorage.removeItem('gms_user'); sessionStorage.removeItem('gms_user');
     localStorage.removeItem('gms_login_history');
     localStorage.removeItem('gms_login_token');
     if (this.eventSource) { this.eventSource.close(); this.eventSource = null; }
