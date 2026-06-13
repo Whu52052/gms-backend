@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gms-backend
+  labels:
+    app: gms-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gms-backend
+  template:
+    metadata:
+      labels:
+        app: gms-backend
+    spec:
+      initContainers:
+      - name: setup
+        image: node:20-alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          apk add --no-cache git
+          git clone --depth 1 https://github.com/Whu52052/gms-backend.git /app
+          cd /app
+          npm ci --omit=dev
+        volumeMounts:
+        - name: app-data
+          mountPath: /app
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+      containers:
+      - name: gms-backend
+        image: node:20-alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          cd /app
+          node server.js
+        ports:
+        - containerPort: 8765
+        env:
+        - name: TZ
+          value: Asia/Shanghai
+        - name: PORT
+          value: "8765"
+        volumeMounts:
+        - name: app-data
+          mountPath: /app
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: app-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gms-backend
+spec:
+  selector:
+    app: gms-backend
+  ports:
+  - port: 8765
+    targetPort: 8765
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gms-backend
+spec:
+  rules:
+  - host: gms-backend.sealos.run
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: gms-backend
+            port:
+              number: 8765
