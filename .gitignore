@@ -1,0 +1,13 @@
+node_modules/
+.npm-cache/
+.uploads/
+uploads/
+data/
+frp/
+Sout/
+.env
+*.log
+.DS_Store
+Thumbs.db
+cloudbaserc.json
+.claude/

@@ -1,0 +1,130 @@
+================================================================================
+  手套管理系统 v3.9 更新日志 | 2026-06-04
+================================================================================
+
+【一、新增功能】
+
+  1. 仪表盘"全部库存"卡片
+     - 改名: 全部手套 → 全部库存
+     - 弹窗显示手套总数和灵巧手总数分开统计
+     - 快速入库支持灵巧手: QL=左手灵巧手, QR=右手灵巧手
+
+  2. SN码管理页面优化
+     - 新增搜索框 (按SN码/设备类型实时过滤)
+     - 新增标签切换 (全部/使用中/闲置/售后 四个按钮)
+     - 闲置中手套新增"标记损坏"按钮 (直接损坏，无需经过机器上下线)
+
+  3. 机器管理页面优化
+     - 新增搜索框 (按机器编号实时过滤)
+     - 新增标签切换 (全部/在线/离线)
+
+  4. 全部库存Excel导出
+     - 导出4列: 时间/左右手/SN码/更新人
+     - UTF-8 BOM编码，Excel打开不乱码
+
+  5. SN码删除墓碑机制
+     - 删除的SN码写入永久墓碑 (gms_deleted_sns)
+     - 即使SSE同步不会恢复
+     - 删除权限: 超级管理员始终可用，管理员需赋权
+
+  6. 数据备份与恢复
+     - 系统设置中备份/恢复全部数据
+     - 恢复时阻止SSE同步防止数据被覆盖
+     - 恢复脚本: restore-data.bat (Win), restore-data.sh (Linux)
+
+  7. 远程数据备份
+     - backup-remote.bat 脚本备份远程服务器数据
+
+  8. 数据库恢复脚本
+     - Windows: restore-data.bat
+     - Linux: restore-data.sh
+
+【二、Bug修复】
+
+  v3.8 修复:
+  1. 直接标记损坏时库存数量不变 (修复: adjustInventory(-1))
+  2. 全部库存公式: total = inv.quantity + inUse + damaged
+  3. 灵巧手设备上线SN选择框不显示 (修复: 数据库handType从null改为left/right)
+  4. SN码无法删除 (修复: 墓碑机制 + 移除upsert竞态条件)
+  5. 删除SN码权限: admin和superadmin均有权限
+  6. 删除按钮显示: 移除权限检查(所有用户可见)，由_deleteSNCode内部处理
+  7. confirm变量覆盖window.confirm (重命名为confirmPwd)
+  8. deleteUser清理localStorage用户数据
+  9. SN注册表DELETE路由正则匹配优化
+  10. handType辅助方法: _getHandType/_getEquipmentType/_isGloveType
+  11. SN验证使用_isGloveType支持自定义类型
+  12. 快速入库重复SN检测 (已有的跳过不录)
+  13. getOnlineMachineCount处理缺失时间戳 (NaN → 0)
+  14. showConfirm异步回调正确await
+
+  v3.7 修复:
+  15. 流水记录默认按时间倒序
+  16. 多设备数据同步 (登录时_fullSyncFromServer)
+  17. 刷新按钮全量替换同步
+  18. 局域网首次打开显示离线 (5秒超时+重试+连接中提示)
+  19. SN注册表attachment列缺失 (ALTER TABLE+migrateDB)
+  20. _fullSyncFromServer出错时不清空数据
+  21. migrateDB添加日志输出
+  22. getDeviceInventoryMap→getDeviceConsumptionMap(支持自定义设备)
+  23. _getAvailableSNs支持自定义左右手类型
+  24. quickInOut handType支持_left/_right后缀
+  25. showMachineForm离线无SN时自动清理注册表
+  26. deleteMachine检查damaged+in_repair状态+部分损坏处理
+  27. _showShipDialog/_showRepairCompleteDialog统一使用_registerSN
+  28. deleteTransaction更新SN注册表
+  29. clearAllData清除gms_login_token
+  30. audit_log_updated SSE监听器补全
+  31. _syncFromServer空事务处理一致
+  32. parseBody 30秒超时+错误处理
+  33. uncaughtException触发优雅关闭
+  34. 上线SN码必填验证
+  35. 搜索框改为回车执行
+  36. 全局搜索清空旧筛选条件
+
+  v3.5-v3.6 修复:
+  37. 售后管理流程 (损坏→发货→维修→回库)
+  38. 机器下线逐只选择损坏/正常/调用
+  39. SN码照片附件 (自动压缩+OCR)
+  40. 仪表盘全部/损坏/售后中汇总卡片
+  41. 批量发货给厂家 (多选+全选)
+  42. 维修完成批量操作
+  43. 库存公式修复 (available=inv.quantity)
+  44. 服务器长期运行保护 (崩溃恢复+自动备份+WAL检查点)
+  45. 优雅关闭 (SIGTERM→检查点→关闭数据库)
+  46. 审计日志中文显示
+  47. 仪表盘卡片拖拽排序
+  48. 数据库自动备份 (24h, 保留7份)
+  49. 服务器请求级try-catch
+  50. 流水记录重复修复 (服务器ID一致性)
+
+【三、测试结果】
+
+  综合测试: 47项通过, 5项已知限制
+  存储层测试: 13/13 通过
+  全流程测试: 19/19 通过 (含入库/上线/下线损坏/发货/维修/直接损坏/删除)
+  服务端API: 正常工作
+  数据库备份恢复: 正常工作
+
+  已知限制:
+  - 撤销操作暂不更新SN注册表
+  - 批量表单暂不支持SN码
+  - 无audit_log初始条目(需操作后产生)
+
+【四、技术文档】
+
+  开发文档: 开发文档.txt (v3.8 → 需更新至v3.9)
+  技术详解: 技术实现详解.txt (13个技术点完整说明)
+
+【五、部署文件】
+
+  Windows:
+    start-server.bat     - 自动重启启动脚本
+    restore-data.bat     - 数据库恢复脚本
+    backup-remote.bat    - 远程数据备份脚本
+
+  Linux:
+    start-server.sh      - 自动重启启动脚本
+    restore-data.sh      - 数据库恢复脚本
+    glove-management.service - systemd服务文件
+
+================================================================================

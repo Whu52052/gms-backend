@@ -1,0 +1,23 @@
+[Unit]
+Description=Glove Management System Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/glove-management
+ExecStart=/usr/bin/node /opt/glove-management/server.js
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/glove-management.log
+StandardError=append:/var/log/glove-management-error.log
+Environment=NODE_ENV=production
+Environment=PORT=8765
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

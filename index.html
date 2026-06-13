@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>运维系统</title>
+  <link rel="stylesheet" href="css/style.css?v=6.0">
+</head>
+<body>
+  <!-- ==================== SIDEBAR ==================== -->
+  <aside class="sidebar" style="display:none;">
+    <div class="sidebar-brand">📦 设备管理系统</div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">
+        <div class="nav-section-title">概览</div>
+        <button class="nav-item active" data-tab="dashboard">
+          <span class="nav-icon">📊</span> 系统总览
+        </button>
+      </div>
+      <div class="nav-section" id="sidebar-inventory">
+        <div class="nav-section-title">设备管理</div>
+        <div class="sidebar-select-group">
+          <select id="sidebar-device-select" class="sidebar-select" onchange="App.onSidebarDeviceChange(this.value)">
+            <option value="">-- 选择设备 --</option>
+          </select>
+          <button id="sidebar-add-device-btn" class="btn btn-xs btn-outline sidebar-add-btn" onclick="App.switchTab('equipment-config')" title="管理设备类型" style="display:none;">+</button>
+        </div>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">设备资产</div>
+        <button class="nav-item" data-tab="transactions">
+          <span class="nav-icon">📋</span> 流水记录
+        </button>
+        <button class="nav-item" data-tab="reports">
+          <span class="nav-icon">📈</span> 报表统计
+        </button>
+        <button class="nav-item" data-tab="audit">
+          <span class="nav-icon">📝</span> 审计日志
+        </button>
+        <button class="nav-item" data-tab="sn-codes">
+          <span class="nav-icon">🏷️</span> SN码
+        </button>
+        <button class="nav-item" data-tab="after-sales">
+          <span class="nav-icon">🔧</span> 售后管理
+        </button>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">现场运维</div>
+        <button class="nav-item" data-tab="machines">
+          <span class="nav-icon">🖥️</span> 机器管理
+        </button>
+        <button class="nav-item" data-tab="tech-support" id="nav-tech-support">
+          <span class="nav-icon">🛠</span> 技术支持
+        </button>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">系统</div>
+        <button class="nav-item" data-tab="equipment-config" id="nav-equipment-config" style="display:none;">
+          <span class="nav-icon">🔩</span> 设备类型配置
+        </button>
+        <button class="nav-item" data-tab="inventory-config" id="nav-inventory-config" style="display:none;">
+          <span class="nav-icon">📦</span> 库存类型配置
+        </button>
+        <button class="nav-item" data-tab="users" id="nav-users" style="display:none;">
+          <span class="nav-icon">👥</span> 用户管理
+        </button>
+        <button class="nav-item" data-tab="settings">
+          <span class="nav-icon">⚙️</span> 系统设置
+        </button>
+        <button class="nav-item" data-tab="popup-messages" id="nav-popup-messages" style="display:none;">
+          <span class="nav-icon">💬</span> 弹窗句子管理
+        </button>
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <button id="theme-toggle" title="切换深色/浅色模式">🌓 切换主题</button>
+    </div>
+  </aside>
+
+  <!-- ==================== MAIN ==================== -->
+  <div class="main-area">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="hamburger-btn" class="hamburger-btn" onclick="document.body.classList.toggle('sidebar-open')" title="菜单">☰</button>
+        <span class="topbar-title">设备库存与机器管理系统</span>
+      </div>
+      <div class="topbar-right">
+        <span id="health-dot" class="health-dot" title="服务器连接状态"></span>
+        <button id="refresh-btn" class="btn btn-sm btn-outline" onclick="App.manualRefresh()" title="刷新数据" style="font-size:0.75rem;">⟳ 刷新</button>
+        <input type="text" id="search-global" placeholder="🔍 全局搜索 (Ctrl+S)" title="搜索SN码、更新人、机器编号">
+        <span id="topbar-user"></span>
+        <div class="topbar-info">
+          <span id="current-time">--</span>
+        </div>
+      </div>
+    </header>
+    <div id="main-content">
+      <!-- Dynamic content rendered by app.js -->
+    </div>
+  </div>
+
+  <!-- ==================== MODAL ==================== -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal Title</h3>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="modal-close-btn">取消</button>
+        <button class="btn btn-primary" id="modal-save">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== NOTIFICATIONS ==================== -->
+  <div id="notification-container"></div>
+
+  <!-- ==================== SCRIPTS ==================== -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="js/config.js?v=3"></script>
+  <script src="js/api.js?v=6.0"></script>
+  <script src="js/storage.js?v=5.0"></script>
+  <script src="js/app.js?v=6.2"></script>
+  <script>
+    // Update current time in topbar
+    function updateTime() {
+      const el = document.getElementById('current-time');
+      if (el) {
+        el.textContent = new Date().toLocaleString('zh-CN', {
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+      }
+    }
+    setInterval(updateTime, 1000);
+    updateTime();
+  </script>
+</body>
+</html>

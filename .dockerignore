@@ -1,0 +1,17 @@
+node_modules/
+.npm-cache/
+.claude/
+data/
+uploads/
+*.bat
+*.sh
+*.md
+*.txt
+test_*.js
+debug_*.js
+repro_*.js
+simulate_*.js
+restore-*.js
+frp/
+glove-management.service
+Users¤92glove-management-systemdatagms.db

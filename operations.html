@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>运营系统</title>
+  <link rel="stylesheet" href="css/style.css?v=6.0">
+  <link rel="stylesheet" href="css/operations.css?v=6.0">
+</head>
+<body>
+  <!-- ==================== SIDEBAR ==================== -->
+  <aside class="sidebar" style="display:none;">
+    <!-- Search box -->
+    <div class="sidebar-search">
+      <input type="text" id="ops-global-search" placeholder="搜索..." oninput="OpsApp.globalSearch(this.value)">
+    </div>
+
+    <!-- User info -->
+    <div class="sidebar-user" id="sidebar-user-info">
+      <div class="sidebar-avatar" id="sidebar-avatar">?</div>
+      <div class="sidebar-user-detail">
+        <div class="sidebar-username" id="sidebar-username">--</div>
+        <div class="sidebar-role" id="sidebar-role">--</div>
+      </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="sidebar-nav">
+      <!-- 总览 section -->
+      <div class="nav-group">
+        <button class="nav-group-title" onclick="OpsApp.toggleNavGroup('overview')">
+          <span>📊 总览</span>
+          <span class="nav-group-arrow" id="arrow-overview">▼</span>
+        </button>
+        <div class="nav-group-items" id="group-overview">
+          <button class="nav-item active" data-tab="personal-analysis">
+            <span class="nav-icon">📋</span> 个人分析与个人数据
+          </button>
+          <button class="nav-item" data-tab="task-list">
+            <span class="nav-icon">✅</span> 任务列表
+          </button>
+          <button class="nav-item" data-tab="data-analysis">
+            <span class="nav-icon">📈</span> 数据分析
+          </button>
+        </div>
+      </div>
+
+      <!-- 分组 section -->
+      <div class="nav-group">
+        <button class="nav-group-title" onclick="OpsApp.toggleNavGroup('group')">
+          <span>👥 分组</span>
+          <span class="nav-group-arrow" id="arrow-group">▼</span>
+        </button>
+        <div class="nav-group-items" id="group-group">
+          <button class="nav-item" data-tab="team-members">
+            <span class="nav-icon">🧑‍🤝‍🧑</span> 组员
+          </button>
+          <button class="nav-item" data-tab="requirements">
+            <span class="nav-icon">📝</span> 需求
+          </button>
+        </div>
+      </div>
+
+      <!-- 用户管理 section (仅管理员/超级管理员可见) -->
+      <div class="nav-group" id="nav-group-user-management" style="display:none;">
+        <button class="nav-group-title" onclick="OpsApp.toggleNavGroup('usermgmt')">
+          <span>👤 用户管理</span>
+          <span class="nav-group-arrow" id="arrow-usermgmt">▼</span>
+        </button>
+        <div class="nav-group-items" id="group-usermgmt">
+          <button class="nav-item" data-tab="user-management">
+            <span class="nav-icon">👥</span> 账户管理
+          </button>
+          <button class="nav-item" data-tab="popup-messages">
+            <span class="nav-icon">💬</span> 弹窗句子管理
+          </button>
+        </div>
+      </div>
+
+      <!-- 技术支持 section (仅普通用户可见) -->
+      <div class="nav-group" id="nav-group-tech-support" style="display:none;">
+        <button class="nav-group-title" onclick="OpsApp.toggleNavGroup('support')">
+          <span>🛠 技术支持</span>
+          <span class="nav-group-arrow" id="arrow-support">▼</span>
+        </button>
+        <div class="nav-group-items" id="group-support">
+          <button class="nav-item" data-tab="tech-support-submit">
+            <span class="nav-icon">📩</span> 提交请求
+          </button>
+          <button class="nav-item" data-tab="tech-support-my" id="nav-tech-support-log">
+            <span class="nav-icon">📋</span> 维修日志
+          </button>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Theme toggle -->
+    <div class="sidebar-footer">
+      <button id="theme-toggle" title="切换深色/浅色模式">🌓 切换主题</button>
+    </div>
+  </aside>
+
+  <!-- ==================== MAIN ==================== -->
+  <div class="main-area">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="hamburger-btn" class="hamburger-btn" onclick="document.body.classList.toggle('sidebar-open')" title="菜单">☰</button>
+        <span class="topbar-title" id="topbar-page-title">个人分析与个人数据</span>
+      </div>
+      <div class="topbar-right">
+        <span id="health-dot" class="health-dot" title="服务器连接状态"></span>
+        <button id="refresh-btn" class="btn btn-sm btn-outline" onclick="OpsApp.manualRefresh()" title="刷新数据" style="font-size:0.75rem;">⟳ 刷新</button>
+        <span id="topbar-user"></span>
+        <div class="topbar-info">
+          <span id="current-time">--</span>
+        </div>
+      </div>
+    </header>
+    <div id="main-content">
+      <!-- Dynamic content -->
+    </div>
+  </div>
+
+  <!-- ==================== MODAL ==================== -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal Title</h3>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="modal-close-btn">取消</button>
+        <button class="btn btn-primary" id="modal-save">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== NOTIFICATIONS ==================== -->
+  <div id="notification-container"></div>
+
+  <!-- ==================== SCRIPTS ==================== -->
+  <script src="js/config.js?v=3"></script>
+  <script src="js/api.js?v=6.0"></script>
+  <script src="js/storage.js?v=5.0"></script>
+  <script src="js/operations.js?v=5.0"></script>
+  <script>
+    function updateTime() {
+      const el = document.getElementById('current-time');
+      if (el) {
+        el.textContent = new Date().toLocaleString('zh-CN', {
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+      }
+    }
+    setInterval(updateTime, 1000);
+    updateTime();
+    OpsApp.init();
+  </script>
+</body>
+</html>

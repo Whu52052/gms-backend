@@ -1,0 +1,23 @@
+{
+  "name": "glove-management-system",
+  "version": "3.0.0",
+  "description": "手套/灵巧手/夹爪库存与机器管理系统 - 多人协作版",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "inventory",
+    "management",
+    "glove",
+    "dexterous-hand",
+    "gripper"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "adm-zip": "^0.5.17",
+    "mysql2": "^3.22.5",
+    "xlsx": "^0.18.5"
+  }
+}
