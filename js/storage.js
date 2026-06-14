@@ -653,10 +653,10 @@ const Storage = {
       }
     } catch(e) { console.log('Sync inv:', e.message); }
     try { const machines = await API.getMachines();
-      if (Array.isArray(machines)) this.saveMachines(machines);
+      if (Array.isArray(machines) && machines.length > 0) this.saveMachines(machines);
     } catch(e) { console.log('Sync machines:', e.message); }
     try { const txs = await API.getTransactions();
-      if (Array.isArray(txs)) {
+      if (Array.isArray(txs) && txs.length > 0) {
         // Filter out locally-deleted transactions to prevent SSE race
         try {
           const deletedIds = JSON.parse(localStorage.getItem('gms_deleted_tx_ids') || '[]');
@@ -696,8 +696,11 @@ const Storage = {
   // Bulk apply sync data (used by polling fallback — one response, all tables)
   _applySync(data) {
     if (!data) return;
+    // Protection: if server returns empty machines (e.g. during restart), don't wipe local data
+    const hasData = (data.machines && data.machines.length > 0) || (data.inventory && data.inventory.length > 0);
+    if (!hasData) return;
     try {
-      if (Array.isArray(data.inventory)) {
+      if (Array.isArray(data.inventory) && data.inventory.length > 0) {
         // Incremental sync: only update types the server actually returned
         // Do NOT zero-out missing types — avoids UI flash
         data.inventory.forEach(item => {
