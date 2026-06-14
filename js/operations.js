@@ -41,6 +41,7 @@ const OpsApp = {
       this.renderCurrentTab();
       this.startAutoRefresh();
       this.startHealthCheck();
+      this.initStatusBar();
     }
   },
 
@@ -122,6 +123,7 @@ const OpsApp = {
     this.renderCurrentTab();
     this.startAutoRefresh();
     this.startHealthCheck();
+    this.initStatusBar();
     this._updateTechSupportNav();
     this._updateUserManagementNav();
     this.notify('欢迎，' + result.user.username + '！');
@@ -1490,6 +1492,34 @@ const OpsApp = {
     dot.className = 'health-dot ' + (API.online ? 'online' : 'offline');
     dot.title = API.online ? '服务器已连接' : '服务器未连接';
   },
+  // ==================== STATUS BAR ====================
+  async refreshStatusBar() {
+    try {
+      const res = await fetch(API.baseURL + '/api/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+      setEl('stat-online', data.onlineUsers);
+      setEl('stat-uptime', this._fmtUptime(data.uptime));
+      setEl('stat-memory', data.memory + 'MB');
+      setEl('stat-sse', data.sseClients);
+    } catch {}
+  },
+
+  _fmtUptime(seconds) {
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (d > 0) return d + '天' + h + '时';
+    if (h > 0) return h + '时' + m + '分';
+    return m + '分';
+  },
+
+  initStatusBar() {
+    this.refreshStatusBar();
+    setInterval(() => this.refreshStatusBar(), 30000);
+  },
+
   startHealthCheck() {
     setInterval(async () => {
       API.online = await API._checkServer();

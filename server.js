@@ -1816,6 +1816,21 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, { status: 'ok', uptime: process.uptime() });
     }
 
+    if (req.url === '/api/status' && req.method === 'GET') {
+      const mem = process.memoryUsage();
+      const onlineIds = new Set();
+      Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
+      return sendJSON(res, {
+        status: 'ok',
+        uptime: process.uptime(),
+        memory: Math.round(mem.heapUsed / 1048576),
+        memoryTotal: Math.round(mem.heapTotal / 1048576),
+        onlineUsers: onlineIds.size,
+        sseClients: sseClients.size,
+        version: '3.9.0',
+      });
+    }
+
     if (req.url === '/api/events' && req.method === 'GET') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
