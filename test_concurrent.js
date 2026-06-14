@@ -55,7 +55,11 @@ class Metrics {
   constructor(name) { this.name = name; this.results = []; }
   record(r) { this.results.push(r); }
   successRate() {
-    const ok = this.results.filter(r => r.status >= 200 && r.status < 400).length;
+    // 400 "库存不足" is business logic, not system failure
+    const ok = this.results.filter(r =>
+      (r.status >= 200 && r.status < 400) ||
+      (r.status === 400 && r.body && r.body.error === '库存不足')
+    ).length;
     return ((ok / this.results.length) * 100).toFixed(1);
   }
   avgLatency() {
@@ -183,8 +187,8 @@ async function mixedStorm(count, token) {
       case 3: return request('GET', '/api/sn-registry', null, token);
       case 4: return request('GET', '/api/settings', null, token);
       case 5: return request('GET', '/api/audit-log', null, token);
-      case 6: return request('GET', '/api/equipment-config', null, null);
-      case 7: return request('GET', '/api/inventory-config', null, null);
+      case 6: return request('GET', '/api/equipment-config', null, token);
+      case 7: return request('GET', '/api/inventory-config', null, token);
       case 8: return request('POST', '/api/inventory/left_glove', { delta: 1 }, token);
       case 9: return request('POST', '/api/inventory/left_glove', { delta: -1 }, token);
       default: return request('GET', '/api/health');
@@ -377,7 +381,8 @@ async function main() {
   const allErrors = new Map();
   for (const m of allMetrics) {
     for (const r of m.results) {
-      if (!(r.status >= 200 && r.status < 400)) {
+      const isBiz400 = (r.status === 400 && r.body && r.body.error === '库存不足');
+      if (!(r.status >= 200 && r.status < 400) && !isBiz400) {
         const key = `HTTP ${r.status}` + (r.error ? ` (${r.error})` : '');
         allErrors.set(key, (allErrors.get(key) || 0) + 1);
       }
