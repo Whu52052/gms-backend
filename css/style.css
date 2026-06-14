@@ -260,6 +260,18 @@ body:not(.logged-in) .main-area { margin-left: 0; }
 .status-bar .status-item strong { color: var(--color-primary); font-weight: 700; }
 [data-theme="dark"] .status-bar { background: rgba(30,41,59,0.6); border-bottom-color: rgba(71,85,105,0.4); }
 
+/* Status bar mobile */
+@media (max-width: 768px) {
+  .status-bar { padding: 6px 14px; gap: 14px; font-size: 0.73rem; }
+}
+@media (max-width: 600px) {
+  .status-bar { gap: 10px; font-size: 0.7rem; }
+  .status-item.stat-mem, .status-item.stat-sse { display: none; }
+}
+@media (max-width: 400px) {
+  .status-bar { padding: 4px 10px; gap: 8px; font-size: 0.65rem; }
+}
+
 #main-content { padding: 24px 28px; flex: 1; }
 
 .fade-in { animation: fadeIn 0.3s ease; }
