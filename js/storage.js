@@ -643,20 +643,12 @@ const Storage = {
     // Sync each data type independently — one failure doesn't block others
     try { const allInv = await API.getAllInventory();
       if (Array.isArray(allInv)) {
-        // Build map of server inventory
-        const serverInv = {};
-        allInv.forEach(item => { if (item.type) serverInv[item.type] = item.quantity; });
-        // Update known keys: set to 0 if not on server, otherwise to server value
-        const knownTypes = ['left_glove', 'right_glove', 'left_dexterous_hand', 'right_dexterous_hand', 'gripper'];
-        const invConfig = this.getInventoryConfig();
-        invConfig.forEach(c => {
-          if (c.hasLeftRight) { knownTypes.push(c.id + '_left'); knownTypes.push(c.id + '_right'); }
-          else { knownTypes.push(c.id); }
-        });
-        [...new Set(knownTypes)].forEach(type => {
-          const qty = serverInv.hasOwnProperty(type) ? serverInv[type] : 0;
-          const item = allInv.find(i => i.type === type) || {};
-          localStorage.setItem(this._inventoryKey(type), JSON.stringify({ quantity: qty, updatedAt: item.updatedAt || null, updatedBy: item.updatedBy || '' }));
+        // Incremental sync: only update types the server actually returned
+        // Do NOT zero-out other types — avoids UI flicker from reset-then-fill
+        allInv.forEach(item => {
+          if (item.type && item.quantity !== undefined) {
+            localStorage.setItem(this._inventoryKey(item.type), JSON.stringify({ quantity: item.quantity, updatedAt: item.updatedAt, updatedBy: item.updatedBy || '' }));
+          }
         });
       }
     } catch(e) { console.log('Sync inv:', e.message); }
@@ -706,23 +698,8 @@ const Storage = {
     if (!data) return;
     try {
       if (Array.isArray(data.inventory)) {
-        const serverTypes = new Set(data.inventory.map(i => i.type).filter(Boolean));
-        // Reset all known types to 0, then fill from server (same logic as _syncFromServer)
-        const knownTypes = ['left_glove', 'right_glove', 'left_dexterous_hand', 'right_dexterous_hand', 'gripper'];
-        try {
-          const invConfig = JSON.parse(localStorage.getItem('gms_inventory_config') || '[]');
-          if (Array.isArray(invConfig)) {
-            invConfig.forEach(c => {
-              if (c.hasLeftRight) { knownTypes.push(c.id + '_left'); knownTypes.push(c.id + '_right'); }
-              else { knownTypes.push(c.id); }
-            });
-          }
-        } catch {}
-        [...new Set(knownTypes)].forEach(type => {
-          if (!serverTypes.has(type)) {
-            localStorage.setItem(this._inventoryKey(type), JSON.stringify({ quantity: 0, updatedAt: null, updatedBy: '' }));
-          }
-        });
+        // Incremental sync: only update types the server actually returned
+        // Do NOT zero-out missing types — avoids UI flash
         data.inventory.forEach(item => {
           if (item.type && item.quantity !== undefined) {
             localStorage.setItem(this._inventoryKey(item.type), JSON.stringify({ quantity: item.quantity, updatedAt: item.updatedAt, updatedBy: item.updatedBy || '' }));
