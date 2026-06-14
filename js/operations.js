@@ -1494,15 +1494,17 @@ const OpsApp = {
   },
   // ==================== STATUS BAR ====================
   async refreshStatusBar() {
+    const el = document.getElementById('status-bar-info');
+    if (!el) return;
     try {
       const res = await fetch(API.baseURL + '/api/status');
-      if (!res.ok) return;
+      if (!res.ok) throw new Error('bad status');
       const data = await res.json();
-      const el = document.getElementById('status-bar-info');
-      if (!el) return;
       const icons = { idle: '⚪', smooth: '🟢', busy: '🟡', full: '🔴' };
       el.textContent = icons[data.loadLevel] + ' ' + data.loadLabel + ' ' + data.onlineUsers + '人';
-    } catch {}
+    } catch {
+      el.textContent = '⚫ 离线';
+    }
   },
 
   initStatusBar() {
