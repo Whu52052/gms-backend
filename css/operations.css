@@ -424,6 +424,14 @@
 [data-theme="dark"] .um-role-superadmin { background: #6d28d940; color: #c4b5fd; }
 [data-theme="dark"] .um-role-admin { background: #1d4ed840; color: #93c5fd; }
 [data-theme="dark"] .um-role-user { background: #37415140; color: #9ca3af; }
+.um-sys-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 0.75rem; font-weight: 600;
+}
+.um-sys-maintenance { background: #fef3c7; color: #b45309; }
+.um-sys-operations { background: #e0e7ff; color: #4338ca; }
+[data-theme="dark"] .um-sys-maintenance { background: #b4530940; color: #fcd34d; }
+[data-theme="dark"] .um-sys-operations { background: #4338ca40; color: #a5b4fc; }
 .um-status-dot {
   display: inline-block; width: 8px; height: 8px; border-radius: 50%;
   vertical-align: middle;

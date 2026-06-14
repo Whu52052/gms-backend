@@ -892,6 +892,8 @@ const OpsApp = {
           <thead>
             <tr>
               <th>用户名</th>
+              <th>账号</th>
+              <th>系统</th>
               <th>角色</th>
               <th>状态</th>
               <th>创建时间</th>
@@ -901,11 +903,14 @@ const OpsApp = {
           <tbody>
             ${users.map(u => {
               const roleMap = { superadmin: '超级管理员', admin: '管理员', user: '普通用户' };
+              const sysMap = { maintenance: '运维', operations: '运营' };
               const isSelf = u.id === user.id;
               const dname = u.displayName || u.username;
+              const sysName = sysMap[u.system] || u.system || '运维';
               return '<tr>'
                 + '<td><strong>' + dname + '</strong>' + (isSelf ? ' <span style="color:var(--text-tertiary);font-size:0.75rem;">(我)</span>' : '') + '</td>'
                 + '<td style="font-size:0.8rem;color:var(--text-secondary);">' + (u.username || '-') + '</td>'
+                + '<td><span class="um-sys-badge um-sys-' + (u.system || 'maintenance') + '">' + sysName + '</span></td>'
                 + '<td><span class="um-role-badge um-role-' + u.role + '">' + (roleMap[u.role] || u.role) + '</span></td>'
                 + '<td><span class="um-status-dot ' + (u.online ? 'online' : 'offline') + '"></span> ' + (u.online ? '在线' : '离线') + '</td>'
                 + '<td style="font-size:0.8rem;color:var(--text-secondary);">' + (u.createdAt ? new Date(u.createdAt).toLocaleDateString('zh-CN') : '-') + '</td>'
