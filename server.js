@@ -1820,10 +1820,10 @@ const server = http.createServer(async (req, res) => {
       const onlineIds = new Set();
       Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
       const count = onlineIds.size;
-      // Load level: idle(0) / smooth(1-9) / busy(10-49) / full(50+)
+      // Load level: idle(0) / smooth(1-99) / busy(100-199) / full(200+)
       let level = 'idle', label = '空闲';
-      if (count >= 50) { level = 'full'; label = '爆满'; }
-      else if (count >= 10) { level = 'busy'; label = '拥挤'; }
+      if (count >= 200) { level = 'full'; label = '爆满'; }
+      else if (count >= 100) { level = 'busy'; label = '拥挤'; }
       else if (count >= 1) { level = 'smooth'; label = '畅通'; }
       return sendJSON(res, {
         status: 'ok',
