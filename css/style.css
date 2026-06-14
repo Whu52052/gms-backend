@@ -1209,7 +1209,7 @@ input:checked + .slider::before { transform: translateX(20px); }
   .data-table th, .data-table td { padding: 6px 8px; }
   .badge { font-size: 0.68rem; padding: 2px 7px; }
   .notification { max-width: 85vw; padding: 10px 14px; font-size: 0.78rem; }
-  #notification-container { right: 10px; top: 10px; }
+  #notification-container { left: 50%; transform: translateX(-50%); right: auto; top: 10px; width: auto; }
   .quick-actions { grid-template-columns: 1fr 1fr; }
   .pagination { flex-direction: column; gap: 8px; }
   .online-badge { font-size: 0.75rem; padding: 5px 10px; }
