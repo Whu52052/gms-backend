@@ -40,7 +40,7 @@ async function initPool() {
     database: DB_NAME,
     charset: 'utf8mb4',
     waitForConnections: true,
-    connectionLimit: 10,
+    connectionLimit: 100,
     queueLimit: 0,
     enableKeepAlive: true,
     keepAliveInitialDelay: 10000,
@@ -117,7 +117,11 @@ function initDB() {
       shippedAt VARCHAR(64),
       repairedAt VARCHAR(64),
       updatedAt VARCHAR(64),
-      attachment TEXT
+      attachment TEXT,
+      INDEX idx_sn_updated (updatedAt),
+      INDEX idx_sn_status (status),
+      INDEX idx_sn_equipment (equipmentType),
+      INDEX idx_sn_machine (machineNumber)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
     `CREATE TABLE IF NOT EXISTS tech_support (
       id VARCHAR(64) PRIMARY KEY,
@@ -375,7 +379,8 @@ function validateTable(table) {
 async function readJSONArray(table, limit) {
   validateTable(table);
   let sql = `SELECT data FROM ${table} ORDER BY id DESC`;
-  if (limit) sql += ` LIMIT ${parseInt(limit)}`;
+  const effectiveLimit = limit ? parseInt(limit) : 500;
+  sql += ` LIMIT ${Math.min(effectiveLimit, 50000)}`;
   const [rows] = await pool.execute(sql);
   return rows.map(r => JSON.parse(r.data)).reverse();
 }
@@ -1061,16 +1066,15 @@ async function handleAdjustInventory(req, res, user, type, body) {
 
 // -- Machines --
 async function handleGetMachines(req, res, user) {
-  const all = await readJSONArray('machines');
+  // Fetch latest records (limit to avoid scanning entire history)
+  const [rows] = await pool.execute('SELECT data FROM machines ORDER BY id DESC LIMIT 5000');
+  const all = rows.map(r => JSON.parse(r.data));
   // Deduplicate: return only the latest record per machineNumber
   const latest = new Map();
   for (const m of all) {
     const num = m.machineNumber;
     if (!num) continue;
-    const cur = latest.get(num);
-    if (!cur || (m.updatedAt && new Date(m.updatedAt) > new Date(cur.updatedAt || 0))) {
-      latest.set(num, m);
-    }
+    if (!latest.has(num)) latest.set(num, m);
   }
   sendJSON(res, Array.from(latest.values()));
 }
@@ -1108,7 +1112,9 @@ async function handleDeleteTransaction(req, res, user, txId) {
 
 // -- Audit Log --
 async function handleGetAuditLog(req, res, user) {
-  sendJSON(res, await readJSONArray('audit_log'));
+  const url = new URL(req.url, 'http://localhost');
+  const limit = parseInt(url.searchParams.get('limit')) || 500;
+  sendJSON(res, await readJSONArray('audit_log', Math.min(limit, 5000)));
 }
 
 // -- Settings --
@@ -1535,7 +1541,9 @@ function _snToInvType(equipmentType, handType) {
 
 // ==================== SN REGISTRY ====================
 async function handleGetSNRegistry(req, res) {
-  const [rows] = await pool.execute('SELECT * FROM sn_registry ORDER BY updatedAt DESC');
+  const url = new URL(req.url, 'http://localhost');
+  const limit = parseInt(url.searchParams.get('limit')) || 5000;
+  const [rows] = await pool.execute(`SELECT * FROM sn_registry ORDER BY updatedAt DESC LIMIT ${Math.min(limit, 50000)}`);
   sendJSON(res, rows);
 }
 
@@ -1689,21 +1697,35 @@ function handleDeleteUpload(req, res, body) {
 
 // -- Sync endpoint (polling fallback) --
 async function handleSync(req, res) {
-  const [inventory] = await pool.execute('SELECT * FROM inventory');
-  const [snRegistry] = await pool.execute('SELECT * FROM sn_registry ORDER BY updatedAt DESC');
-  const [tsRows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC');
+  // Parallel queries for speed
+  const [inventory, snRegistry, tsRows, machines, transactions,
+    settings, equipmentConfig, inventoryConfig,
+    opsOrders, opsCustomers, opsProduction] = await Promise.all([
+    pool.execute('SELECT * FROM inventory'),
+    pool.execute('SELECT * FROM sn_registry ORDER BY updatedAt DESC LIMIT 5000'),
+    pool.execute('SELECT data FROM tech_support ORDER BY id DESC LIMIT 1000'),
+    pool.execute('SELECT data FROM machines ORDER BY id DESC LIMIT 5000'),
+    pool.execute('SELECT data FROM transactions ORDER BY id DESC LIMIT 500'),
+    pool.execute('SELECT skey, value FROM settings'),
+    pool.execute('SELECT data FROM equipment_config ORDER BY id DESC'),
+    pool.execute('SELECT data FROM inventory_config ORDER BY id DESC'),
+    pool.execute('SELECT data FROM ops_orders ORDER BY id DESC'),
+    pool.execute('SELECT data FROM ops_customers ORDER BY id DESC'),
+    pool.execute('SELECT data FROM ops_production ORDER BY id DESC'),
+  ]);
+
   sendJSON(res, {
-    inventory: inventory.map(r => ({ type: r.inv_type, quantity: r.quantity, updatedAt: r.updatedAt, updatedBy: r.updatedBy })),
-    machines: await readJSONArray('machines'),
-    transactions: await readJSONArray('transactions', 500),
-    snRegistry,
-    settings: await readJSONObject('settings'),
-    equipmentConfig: await readJSONArray('equipment_config'),
-    inventoryConfig: await readJSONArray('inventory_config'),
-    opsOrders: await readJSONArray('ops_orders'),
-    opsCustomers: await readJSONArray('ops_customers'),
-    opsProduction: await readJSONArray('ops_production'),
-    techSupport: tsRows.map(r => JSON.parse(r.data)),
+    inventory: inventory[0].map(r => ({ type: r.inv_type, quantity: r.quantity, updatedAt: r.updatedAt, updatedBy: r.updatedBy })),
+    machines: machines[0].map(r => JSON.parse(r.data)),
+    transactions: transactions[0].map(r => JSON.parse(r.data)).reverse(),
+    snRegistry: snRegistry[0],
+    settings: (() => { const obj = {}; settings[0].forEach(r => { try { obj[r.skey] = JSON.parse(r.value); } catch { obj[r.skey] = r.value; } }); return obj; })(),
+    equipmentConfig: equipmentConfig[0].map(r => JSON.parse(r.data)),
+    inventoryConfig: inventoryConfig[0].map(r => JSON.parse(r.data)),
+    opsOrders: opsOrders[0].map(r => JSON.parse(r.data)),
+    opsCustomers: opsCustomers[0].map(r => JSON.parse(r.data)),
+    opsProduction: opsProduction[0].map(r => JSON.parse(r.data)),
+    techSupport: tsRows[0].map(r => JSON.parse(r.data)),
   });
 }
 
