@@ -1086,10 +1086,11 @@ input:checked + .slider::before { transform: translateX(20px); }
   align-items: center;
   gap: 8px;
   font-size: 0.82rem;
+  flex-wrap: wrap;
 }
 .topbar-user-name { font-weight: 600; color: var(--color-primary); white-space: nowrap; }
 .topbar-offline { font-size: 0.78rem; color: var(--text-tertiary); white-space: nowrap; }
-.topbar-title { font-weight: 600; }
+.topbar-title { font-weight: 600; white-space: nowrap; }
 
 /* ==================== RESPONSIVE ==================== */
 
@@ -1126,12 +1127,12 @@ input:checked + .slider::before { transform: translateX(20px); }
   .sidebar .sidebar-footer { justify-content: center; }
   body.logged-in .main-area { margin-left: 0 !important; }
   .main-area { min-width: 0; }
-  .topbar { padding: 10px 14px; gap: 10px; }
-  .topbar-left { gap: 8px; }
-  .topbar-right { gap: 8px; }
+  .topbar { padding: 8px 12px; gap: 8px; }
+  .topbar-left { gap: 6px; flex-shrink: 0; }
+  .topbar-right { gap: 6px; flex-shrink: 1; overflow: hidden; }
   #main-content { padding: 14px; }
-  #search-global { width: 120px; font-size: 0.78rem; padding: 7px 12px; }
-  .topbar-info { gap: 8px; font-size: 0.75rem; }
+  #search-global { width: 100px; font-size: 0.75rem; padding: 6px 10px; }
+  .topbar-info { gap: 6px; font-size: 0.72rem; }
   .stat-cards { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .stat-card { padding: 14px 16px; }
   .stat-card .stat-value { font-size: 1.6rem; }
