@@ -30,11 +30,10 @@ const App = {
     if (!API.currentUser) {
       this.showLogin(online ? '' : '离线模式 — 检查网络连接后刷新页面重试');
     } else {
-      // Redirect operations users to operations system (pass auth via hash)
+      // Redirect operations users to operations system (superadmin can use switcher)
       const userSystem = API.currentUser.system || 'maintenance';
-      if (userSystem === 'operations') {
-        const authData = btoa(JSON.stringify({t: API.token, u: API.currentUser}));
-        window.location.href = 'operations.html#' + authData;
+      if (userSystem === 'operations' && API.currentUser.role !== 'superadmin') {
+        window.location.replace('operations.html');
         return;
       }
       if (online) {
@@ -115,13 +114,12 @@ const App = {
     // Route to correct system based on account type
     const userSystem = result.user.system || 'maintenance';
 
-    if (userSystem === 'operations') {
-      // Pass auth via URL hash to survive any browser storage restrictions
-      const authData = btoa(JSON.stringify({t: result.token, u: result.user}));
-      window.location.href = 'operations.html#' + authData;
+    // Superadmin can access both; operations users go to operations page
+    if (userSystem === 'operations' && result.user.role !== 'superadmin') {
+      window.location.replace('operations.html');
       return;
     }
-    // Maintenance users stay on index.html
+    // Maintenance users and operations superadmin stay on index.html
 
     // Show sidebar, hamburger, and topbar, add logged-in class
     document.body.classList.add('logged-in');
@@ -3502,6 +3500,16 @@ const App = {
     const m = Math.floor(s / 60);
     const remain = s % 60;
     return remain > 0 ? m + '分' + remain + '秒' : m + '分';
+  },
+
+  // ==================== USERS NAV ====================
+  _updateUsersNav() {
+    // Show user management nav for admin/superadmin
+    const user = API.currentUser;
+    const navEl = document.getElementById('users-nav') || document.getElementById('nav-users');
+    if (navEl) {
+      navEl.style.display = (user && (user.role === 'admin' || user.role === 'superadmin')) ? '' : 'none';
+    }
   },
 
   // ==================== TECH SUPPORT ====================
