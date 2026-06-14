@@ -560,14 +560,13 @@ async function handleForceLogout(req, res, user, targetUserId) {
 async function handleGetUsers(req, res, user) {
   if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限' }, 403);
   const [allUsers] = await pool.execute('SELECT * FROM users');
-  let users = allUsers;
+  // Everyone only sees users in their own system (运营 ↔ 运维 隔离)
+  let users = allUsers.filter(u => (u.system || 'maintenance') === user.system);
   if (user.role === 'admin') {
-    // Admin only sees same-system users they created (subordinates via parentId or createdBy)
-    users = allUsers.filter(u => (u.system || 'maintenance') === user.system && (u.id === user.userId || u.parentId === user.userId || u.createdBy === user.userId));
-  } else if (user.role !== 'superadmin') {
-    // Non-admin non-superadmin should not reach here, but filter as safeguard
-    users = allUsers.filter(u => (u.system || 'maintenance') === user.system);
+    // Admin only sees their own subordinates (via parentId or createdBy)
+    users = users.filter(u => u.id === user.userId || u.parentId === user.userId || u.createdBy === user.userId);
   }
+  // Superadmin sees all users within their own system
   const onlineIds = new Set();
   Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
   sendJSON(res, users.map(u => ({ id: u.id, username: u.username, displayName: u.displayName || u.username, role: u.role, system: u.system || 'maintenance', parentId: u.parentId || null, createdAt: u.createdAt, online: onlineIds.has(u.id) })));
