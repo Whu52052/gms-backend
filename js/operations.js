@@ -16,6 +16,12 @@ const OpsApp = {
       // Show login form directly (no redirect)
       this.showLogin(online ? '' : '离线模式 — 数据保存在本地浏览器');
     } else {
+      // Kick maintenance users back (except superadmin who can access both)
+      const uSys = API.currentUser.system || 'maintenance';
+      if (uSys === 'maintenance' && API.currentUser.role !== 'superadmin') {
+        window.location.replace('index.html');
+        return;
+      }
       if (online) { await this._syncFromServer(); }
       document.body.classList.add('logged-in');
       const sidebar = document.querySelector('.sidebar');

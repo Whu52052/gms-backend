@@ -156,7 +156,7 @@ const API = {
       const data = JSON.parse(localStorage.getItem('gms_login_history'));
       if (!data) return null;
       const elapsed = Date.now() - data.loginAt;
-      if (elapsed > 10 * 60 * 1000) { localStorage.removeItem('gms_login_history'); return null; }
+      if (elapsed > 2 * 60 * 60 * 1000) { localStorage.removeItem('gms_login_history'); return null; }
       if (data.deviceId !== this._getDeviceId()) { localStorage.removeItem('gms_login_history'); return null; }
       return data;
     } catch { return null; }

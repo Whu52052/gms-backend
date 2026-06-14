@@ -16,7 +16,7 @@ const DB_PASSWORD = process.env.DB_PASSWORD || process.env.MYSQL_PASSWORD || 'Wh
 const DB_NAME = process.env.DB_NAME || process.env.MYSQL_DATABASE || 'gms';
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DATA_DIR = path.join(__dirname, 'data');
-const TOKEN_EXPIRY = 3 * 60 * 1000; // 3 minutes sliding window
+const TOKEN_EXPIRY = 2 * 60 * 60 * 1000; // 2 hours sliding window
 
 // ==================== DATABASE ====================
 const mysql = require('mysql2/promise');
