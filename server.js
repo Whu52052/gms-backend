@@ -500,8 +500,11 @@ async function handleGetUsers(req, res, user) {
   const [allUsers] = await pool.execute('SELECT * FROM users');
   let users = allUsers;
   if (user.role === 'admin') {
-    // Admin only sees self + users they created (subordinates via parentId or createdBy)
-    users = allUsers.filter(u => u.id === user.userId || u.parentId === user.userId || u.createdBy === user.userId);
+    // Admin only sees same-system users they created (subordinates via parentId or createdBy)
+    users = allUsers.filter(u => (u.system || 'maintenance') === user.system && (u.id === user.userId || u.parentId === user.userId || u.createdBy === user.userId));
+  } else if (user.role !== 'superadmin') {
+    // Non-admin non-superadmin should not reach here, but filter as safeguard
+    users = allUsers.filter(u => (u.system || 'maintenance') === user.system);
   }
   const onlineIds = new Set();
   Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
