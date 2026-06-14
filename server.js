@@ -146,6 +146,7 @@ function migrateDB() {
     `ALTER TABLE sn_registry ADD COLUMN repairedAt VARCHAR(64)`,
     `ALTER TABLE users ADD COLUMN parentId VARCHAR(64)`,
     `ALTER TABLE users ADD COLUMN displayName VARCHAR(64)`,
+    `UPDATE users SET displayName = username WHERE displayName IS NULL`,
   ];
   return Promise.all(migrations.map(sql =>
     pool.execute(sql).catch(() => { /* column likely already exists */ })
