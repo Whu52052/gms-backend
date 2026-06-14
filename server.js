@@ -970,7 +970,7 @@ async function handleGetGroupMembers(req, res, authUser) {
   // System isolation: admins only see same-system users; superadmin sees all
   const systemFilter = authUser.role === 'superadmin' ? '' : `AND \`system\` = '${authUser.system}'`;
   const [users] = await pool.execute(
-    `SELECT id, username, role, \`system\`, parentId, createdBy, createdAt
+    `SELECT id, username, displayName, role, \`system\`, parentId, createdBy, createdAt
      FROM users WHERE role = 'user' ${systemFilter} ORDER BY username`
   );
   // Group by parentId
@@ -980,16 +980,21 @@ async function handleGetGroupMembers(req, res, authUser) {
     if (!groups[parent]) groups[parent] = { adminId: parent, members: [] };
     groups[parent].members.push(u);
   });
-  // Get admin names
+  // Get admin names (only from same system for non-superadmin)
   const adminIds = Object.keys(groups);
   if (adminIds.length > 0) {
+    const adminSystemFilter = authUser.role === 'superadmin' ? '' : `AND \`system\` = '${authUser.system}'`;
     const [admins] = await pool.execute(
-      `SELECT id, username FROM users WHERE id IN (${adminIds.map(() => '?').join(',')})`,
+      `SELECT id, username, displayName FROM users WHERE id IN (${adminIds.map(() => '?').join(',')}) ${adminSystemFilter}`,
       adminIds
     );
     admins.forEach(a => {
-      if (groups[a.id]) groups[a.id].adminName = a.username;
+      if (groups[a.id]) groups[a.id].adminName = a.displayName || a.username;
     });
+    // Remove groups whose admin wasn't found (different system)
+    for (const gid of Object.keys(groups)) {
+      if (!groups[gid].adminName) delete groups[gid];
+    }
   }
   sendJSON(res, Object.values(groups));
 }
