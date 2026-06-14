@@ -30,9 +30,9 @@ const App = {
     if (!API.currentUser) {
       this.showLogin(online ? '' : '离线模式 — 检查网络连接后刷新页面重试');
     } else {
-      // Redirect operations users to operations system (superadmin can use switcher)
+      // Redirect operations users to their system
       const userSystem = API.currentUser.system || 'maintenance';
-      if (userSystem === 'operations' && API.currentUser.role !== 'superadmin') {
+      if (userSystem === 'operations') {
         window.location.replace('operations.html');
         return;
       }
@@ -114,12 +114,11 @@ const App = {
     // Route to correct system based on account type
     const userSystem = result.user.system || 'maintenance';
 
-    // Superadmin can access both; operations users go to operations page
-    if (userSystem === 'operations' && result.user.role !== 'superadmin') {
+    // Route operations users to operations page
+    if (userSystem === 'operations') {
       window.location.replace('operations.html');
       return;
     }
-    // Maintenance users and operations superadmin stay on index.html
 
     // Show sidebar, hamburger, and topbar, add logged-in class
     document.body.classList.add('logged-in');

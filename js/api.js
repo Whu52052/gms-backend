@@ -134,18 +134,9 @@ const API = {
   },
 
   _setupBeforeUnload() {
-    if (this._beforeUnloadAdded) return;
-    this._beforeUnloadAdded = true;
-    window.addEventListener('beforeunload', () => {
-      if (this.token && this.online && this.baseURL) {
-        try {
-          navigator.sendBeacon(
-            this.baseURL + '/api/beacon-logout',
-            new Blob([JSON.stringify({ token: this.token })], { type: 'application/json' })
-          );
-        } catch {}
-      }
-    });
+    // No beacon on unload — token expires naturally after 3 min inactivity.
+    // Previously caused redirect-loop because navigating index→operations
+    // would delete the token before operations could validate it.
   },
 
   _getDeviceId() {

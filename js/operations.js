@@ -13,12 +13,8 @@ const OpsApp = {
 
     const online = await API.init();
     if (!API.currentUser) {
-      // Not logged in - redirect to index.html (single login entry)
-      if (online) {
-        window.location.href = 'index.html';
-        return;
-      }
-      this.showLogin('离线模式 — 数据保存在本地浏览器');
+      // Show login form directly (no redirect)
+      this.showLogin(online ? '' : '离线模式 — 数据保存在本地浏览器');
     } else {
       if (online) { await this._syncFromServer(); }
       document.body.classList.add('logged-in');
