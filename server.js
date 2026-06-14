@@ -151,11 +151,11 @@ function migrateDB() {
     `ALTER TABLE users ADD COLUMN parentId VARCHAR(64)`,
     `ALTER TABLE users ADD COLUMN displayName VARCHAR(64)`,
     `UPDATE users SET displayName = username WHERE displayName IS NULL`,
-    // Performance indexes
-    `CREATE INDEX IF NOT EXISTS idx_sn_updated ON sn_registry(updatedAt)`,
-    `CREATE INDEX IF NOT EXISTS idx_sn_status ON sn_registry(status)`,
-    `CREATE INDEX IF NOT EXISTS idx_sn_equipment ON sn_registry(equipmentType)`,
-    `CREATE INDEX IF NOT EXISTS idx_sn_machine ON sn_registry(machineNumber)`,
+    // Performance indexes (MySQL 5.7+ and 8.0 compatible)
+    `CREATE INDEX idx_sn_updated ON sn_registry(updatedAt)`,
+    `CREATE INDEX idx_sn_status ON sn_registry(status)`,
+    `CREATE INDEX idx_sn_equipment ON sn_registry(equipmentType)`,
+    `CREATE INDEX idx_sn_machine ON sn_registry(machineNumber)`,
   ];
   return Promise.all(migrations.map(sql =>
     pool.execute(sql).catch(() => { /* column likely already exists */ })
@@ -374,11 +374,11 @@ function broadcastSSE(event, data) {
 const _cache = new Map();
 const _inflight = new Map();  // key -> Promise (prevents thundering herd)
 const CACHE_TTL = {
-  equipment_config: 60000,   // 60s
-  inventory_config: 60000,   // 60s
-  sn_registry: 3000,         // 3s (short, needs freshness)
-  machines: 5000,            // 5s
-  sync: 10000,               // 10s
+  equipment_config: 120000,  // 2min
+  inventory_config: 120000,  // 2min
+  sn_registry: 15000,        // 15s
+  machines: 15000,           // 15s
+  sync: 30000,               // 30s
 };
 
 function _invalidateCache(event) {

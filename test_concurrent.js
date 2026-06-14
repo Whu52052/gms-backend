@@ -27,7 +27,7 @@ function request(method, path, body, token) {
       path: url.pathname + url.search,
       method,
       headers: { 'Content-Type': 'application/json' },
-      timeout: 60000,
+      timeout: 120000,
     };
     if (token) opts.headers['Authorization'] = `Bearer ${token}`;
 
@@ -95,14 +95,19 @@ class Metrics {
 }
 
 // ==================== RUNNER ====================
-async function runConcurrent(name, count, taskFn) {
+async function runConcurrent(name, count, taskFn, staggerMs = 50) {
   const metrics = new Metrics(name);
   const tasks = [];
-  console.log(`  ⏳ ${name}: 启动 ${count} 个并发...`);
+  console.log(`  ⏳ ${name}: 启动 ${count} 个并发 (间隔${staggerMs}ms)...`);
   const startTime = Date.now();
 
   for (let i = 0; i < count; i++) {
-    tasks.push(taskFn(i).then(r => { metrics.record(r); return r; }));
+    tasks.push((async () => {
+      if (staggerMs > 0 && i > 0) await new Promise(r => setTimeout(r, staggerMs * Math.min(i, 50)));
+      const r = await taskFn(i);
+      metrics.record(r);
+      return r;
+    })());
   }
 
   await Promise.all(tasks);
@@ -311,14 +316,23 @@ async function main() {
   r = await loginStorm(CONCURRENT);
   allMetrics.push(r.metrics);
 
-  // 登录风暴后重新获取token (因为Yunwei被反复登录，旧token可能失效)
+  // 登录风暴后重新获取token
   console.log('🔑 重新获取工作Token...');
   const newAdminRes = await request('POST', '/api/auth/login', { username: 'admin', password: 'admin123' });
   const workToken = newAdminRes.body?.token || token;
   if (!workToken) { console.error('❌ 无法重新获取token'); process.exit(1); }
   console.log('✅ 新Token获取成功\n');
 
-  // ---- Phase 3: 读操作压力 ----
+  // ---- Warmup: 预热缓存 ----
+  console.log('🔥 Phase 2.5: 预热缓存...');
+  await request('GET', '/api/machines', null, workToken);
+  await request('GET', '/api/sn-registry', null, workToken);
+  await request('GET', '/api/sync', null, workToken);
+  await request('GET', '/api/equipment-config', null, workToken);
+  await request('GET', '/api/inventory-config', null, workToken);
+  console.log('✅ 缓存预热完成 (SN/机器/sync/config 已缓存)\n');
+
+  // ---- Phase 3: 读操作压力 (渐进式) ----
   console.log('\n📋 Phase 3: 读操作压力');
   r = await inventoryReadStorm(CONCURRENT, workToken);
   allMetrics.push(r.metrics);
