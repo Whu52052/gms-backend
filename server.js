@@ -749,8 +749,8 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
   broadcastSSE('tech_support_updated', { action: 'created', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
-  // Sync to Feishu (async, don't block response)
-  feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Submit sync error:', e.message));
+  // Sync to Feishu (background, zero impact on response time)
+  setImmediate(() => feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Submit sync error:', e.message)));
 }
 
 async function handleRespondTechSupport(req, res, authUser, id) {
@@ -776,8 +776,8 @@ async function handleRespondTechSupport(req, res, authUser, id) {
   broadcastSSE('tech_support_updated', { action: 'responded', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
-  // Sync to Feishu (async)
-  feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Respond sync error:', e.message));
+  // Sync to Feishu (background, zero impact on response time)
+  setImmediate(() => feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Respond sync error:', e.message)));
 }
 
 async function handleCompleteTechSupport(req, res, authUser, id, body) {
@@ -805,8 +805,8 @@ async function handleCompleteTechSupport(req, res, authUser, id, body) {
   broadcastSSE('tech_support_updated', { action: 'completed', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
-  // Sync to Feishu (async)
-  feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Complete sync error:', e.message));
+  // Sync to Feishu (background, zero impact on response time)
+  setImmediate(() => feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Complete sync error:', e.message)));
 }
 
 async function handleDeleteTechSupport(req, res, authUser, id) {
@@ -819,8 +819,8 @@ async function handleDeleteTechSupport(req, res, authUser, id) {
   await deleteJSON('tech_support', id);
   broadcastSSE('tech_support_updated', { action: 'deleted', id });
   sendJSON(res, { success: true });
-  // Sync delete to Feishu (async)
-  feishu.deleteFromFeishu(id).catch(e => console.error('[Feishu] Delete sync error:', e.message));
+  // Sync delete to Feishu (background, zero impact on response time)
+  setImmediate(() => feishu.deleteFromFeishu(id).catch(e => console.error('[Feishu] Delete sync error:', e.message)));
 }
 
 // Helper: Update the latest machine record's status by machineNumber
@@ -2020,8 +2020,8 @@ async function startup() {
     await seedDefaults();
     console.log('[DB] Database initialized successfully');
 
-    // Initialize Feishu sync (non-blocking)
-    feishu.initFeishuSync().catch(e => console.error('[Feishu] Init failed (non-fatal):', e.message));
+    // Initialize Feishu sync (delayed, zero impact on startup)
+    setTimeout(() => feishu.initFeishuSync().catch(e => console.error('[Feishu] Init failed (non-fatal):', e.message)), 10000);
   } catch (e) {
     console.error('[FATAL] Database initialization failed:', e.message);
     process.exit(1);
