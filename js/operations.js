@@ -1501,8 +1501,7 @@ const OpsApp = {
       const el = document.getElementById('status-bar-info');
       if (!el) return;
       const icons = { idle: '⚪', smooth: '🟢', busy: '🟡', full: '🔴' };
-      el.innerHTML = icons[data.loadLevel] + ' 服务器<strong>' + data.loadLabel + '</strong> · 在线 ' + data.onlineUsers + ' 人';
-      document.getElementById('status-bar').className = 'status-bar status-' + data.loadLevel;
+      el.textContent = icons[data.loadLevel] + ' ' + data.loadLabel + ' ' + data.onlineUsers + '人';
     } catch {}
   },
 

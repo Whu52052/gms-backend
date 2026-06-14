@@ -8,10 +8,6 @@
   <link rel="stylesheet" href="css/operations.css?v=6.0">
 </head>
 <body>
-  <!-- ==================== STATUS BAR ==================== -->
-  <div class="status-bar" id="status-bar">
-    <span class="status-item" id="status-bar-info">🔌 连接中...</span>
-  </div>
   <!-- ==================== SIDEBAR ==================== -->
   <aside class="sidebar" style="display:none;">
     <!-- Search box -->
@@ -116,6 +112,8 @@
         <button id="refresh-btn" class="btn btn-sm btn-outline" onclick="OpsApp.manualRefresh()" title="刷新数据" style="font-size:0.75rem;">⟳ 刷新</button>
         <span id="topbar-user"></span>
         <div class="topbar-info">
+          <span id="status-bar-info">🔌</span>
+          <span style="color:var(--border-color);">|</span>
           <span id="current-time">--</span>
         </div>
       </div>
