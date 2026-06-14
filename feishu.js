@@ -160,9 +160,9 @@ function mapToFeishuFields(item) {
 }
 
 function formatDuration(seconds) {
-  if (seconds == null || seconds === '') return '';
+  if (seconds == null || seconds === '') return null;  // Return null for empty, not ''
   const s = parseInt(seconds);
-  if (isNaN(s)) return '';
+  if (isNaN(s)) return null;
   if (s < 60) return s + '秒';
   if (s < 3600) return Math.floor(s / 60) + '分' + (s % 60) + '秒';
   const h = Math.floor(s / 3600);
@@ -178,6 +178,20 @@ const recordIdMap = {}; // tech_support_id → feishu_record_id
 // ==================== SYNC FUNCTIONS ====================
 
 /**
+ * Remove null/undefined values from fields object
+ * Feishu silently rejects null values for Date/Number fields
+ */
+function cleanFields(fields) {
+  const cleaned = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== null && value !== undefined) {
+      cleaned[key] = value;
+    }
+  }
+  return cleaned;
+}
+
+/**
  * Sync a tech_support record to Feishu (create or update)
  */
 async function syncToFeishu(item) {
@@ -186,7 +200,7 @@ async function syncToFeishu(item) {
 
     if (existingRecordId) {
       // Update existing record
-      const fields = mapToFeishuFields(item);
+      const fields = cleanFields(mapToFeishuFields(item));
       const res = await feishuAuthRequest(
         'PUT',
         `/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.tableId}/records/${existingRecordId}`,
@@ -204,7 +218,7 @@ async function syncToFeishu(item) {
       }
     } else {
       // Create new record
-      const fields = mapToFeishuFields(item);
+      const fields = cleanFields(mapToFeishuFields(item));
       const res = await feishuAuthRequest(
         'POST',
         `/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.tableId}/records`,
