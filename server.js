@@ -370,8 +370,9 @@ function broadcastSSE(event, data) {
   _invalidateCache(event);
 }
 
-// ==================== IN-MEMORY CACHE ====================
+// ==================== IN-MEMORY CACHE + REQUEST COALESCING ====================
 const _cache = new Map();
+const _inflight = new Map();  // key -> Promise (prevents thundering herd)
 const CACHE_TTL = {
   equipment_config: 60000,   // 60s
   inventory_config: 60000,   // 60s
@@ -381,7 +382,6 @@ const CACHE_TTL = {
 };
 
 function _invalidateCache(event) {
-  // Map SSE events to cache keys
   const map = {
     'equipment_config_updated': 'equipment_config',
     'inventory_config_updated': 'inventory_config',
@@ -391,17 +391,30 @@ function _invalidateCache(event) {
   for (const [evt, key] of Object.entries(map)) {
     if (event === evt) _cache.delete(key);
   }
-  // Any mutation invalidates sync
   if (event !== 'connected') _cache.delete('sync');
 }
 
 async function _cached(key, fetcher, ttlOverride) {
   const ttl = ttlOverride || CACHE_TTL[key] || 3000;
+  // Check cache
   const entry = _cache.get(key);
   if (entry && (Date.now() - entry.ts) < ttl) return entry.data;
-  const data = await fetcher();
-  _cache.set(key, { data, ts: Date.now() });
-  return data;
+
+  // Single-flight: if already fetching, wait for that result
+  if (_inflight.has(key)) return _inflight.get(key);
+
+  const promise = (async () => {
+    try {
+      const data = await fetcher();
+      _cache.set(key, { data, ts: Date.now() });
+      return data;
+    } finally {
+      _inflight.delete(key);
+    }
+  })();
+
+  _inflight.set(key, promise);
+  return promise;
 }
 
 // ==================== JSON HELPERS ====================
