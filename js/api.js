@@ -482,6 +482,12 @@ const API = {
     return data || { success: false, message: '请求失败' };
   },
 
+  async deleteTechSupport(id) {
+    if (!this.online) return { success: false, message: '离线模式不支持删除' };
+    const data = await this._fetch('DELETE', '/api/tech-support/' + id);
+    return data || { success: false, message: '请求失败' };
+  },
+
   // Group Transfer
   async getGroupTransfers() {
     if (!this.online) return [];

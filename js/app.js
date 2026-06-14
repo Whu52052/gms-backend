@@ -3620,21 +3620,52 @@ const App = {
     this.renderTechSupport('table');
   },
 
-  async exportTechSupportXLSX() {
+  exportTechSupportXLSX() {
+    // Show date range picker dialog
+    const today = new Date().toISOString().slice(0, 10);
+    const html = `
+      <div style="padding:16px;">
+        <div class="form-group"><label>📅 日期（留空=全部）</label><input type="date" id="ts-export-date" style="width:100%;padding:8px;"></div>
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <div class="form-group" style="flex:1;"><label>🕖 开始时间</label><input type="time" id="ts-export-start" value="07:00" style="width:100%;padding:8px;"></div>
+          <div class="form-group" style="flex:1;"><label>🕐 结束时间</label><input type="time" id="ts-export-end" value="02:00" style="width:100%;padding:8px;"></div>
+        </div>
+        <div style="margin-top:4px;font-size:0.75rem;color:var(--color-text-secondary);">
+          💡 结束时间早于开始时间=跨天（如7:00~次日2:00）<br>
+          💡 只填日期=导出当天全部记录<br>
+          💡 只填时间=仅按时间段筛选<br>
+          💡 全留空=导出全部
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px;">
+          <button class="btn btn-primary" onclick="App._doExportTS()" style="flex:1;">📥 导出</button>
+          <button class="btn btn-outline" onclick="App.closeModal()">取消</button>
+        </div>
+      </div>`;
+    this.showModal('📊 导出维修日志', html, () => false);
+  },
+
+  async _doExportTS() {
     try {
+      this.closeModal();
       const token = API.token;
       if (!token) { this.notify('请先登录', 'warning'); return; }
-      const res = await fetch(API.baseURL + '/api/export/tech-support-xlsx', {
-        headers: { 'Authorization': 'Bearer ' + token }
-      });
+      const params = new URLSearchParams();
+      const dateVal = document.getElementById('ts-export-date')?.value;
+      const startVal = document.getElementById('ts-export-start')?.value;
+      const endVal = document.getElementById('ts-export-end')?.value;
+      if (dateVal) params.set('date', dateVal);
+      if (startVal) params.set('startTime', startVal);
+      if (endVal) params.set('endTime', endVal);
+      const qs = params.toString();
+      const url = API.baseURL + '/api/export/tech-support-xlsx' + (qs ? '?' + qs : '');
+      const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
       if (!res.ok) { this.notify('导出失败', 'error'); return; }
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = '维修日志-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+      a.href = URL.createObjectURL(blob);
+      const label = dateVal || '全部';
+      a.download = '维修日志-' + label + '.xlsx';
       a.click();
-      URL.revokeObjectURL(url);
       this.notify('导出成功');
     } catch(e) { this.notify('导出失败: ' + e.message, 'error'); }
   },
@@ -3702,6 +3733,7 @@ const App = {
         ${item.status==='pending'?`<button class="btn btn-primary" onclick="App.doRespondTechSupport('${item.id}')">响应请求</button>`:''}
         ${(item.status==='pending'||item.status==='responded')?`<button class="btn btn-success" onclick="App.doCompleteTechSupport('${item.id}')">维修完成</button>`:''}
         <button class="btn btn-outline" onclick="App.renderTechSupport()">返回列表</button>
+        ${(API.currentUser.system==='maintenance'&&(API.currentUser.role==='admin'||API.currentUser.role==='superadmin'))?`<button class="btn btn-danger" onclick="App.doDeleteTechSupport('${item.id}')" style="margin-left:auto;">删除记录</button>`:''}
       </div>
     </div>`;
   },
@@ -3731,6 +3763,17 @@ const App = {
         this.notify(result?.error || result?.message || '操作失败', 'error');
       }
     });
+  },
+
+  async doDeleteTechSupport(id) {
+    if (!confirm('⚠ 确定要删除这条维修记录吗？此操作不可恢复！')) return;
+    const result = await API.deleteTechSupport(id);
+    if (result && result.success) {
+      this.notify('维修记录已删除');
+      this.renderTechSupport();
+    } else {
+      this.notify(result?.error || '删除失败', 'error');
+    }
   },
 
   // ==================== POPUP MODAL HELPER ====================

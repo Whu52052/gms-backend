@@ -737,6 +737,18 @@ async function handleCompleteTechSupport(req, res, authUser, id, body) {
   sendJSON(res, { success: true, item });
 }
 
+async function handleDeleteTechSupport(req, res, authUser, id) {
+  // Only maintenance system admin/superadmin can delete
+  if (authUser.system !== 'maintenance' || (authUser.role !== 'admin' && authUser.role !== 'superadmin')) {
+    return sendJSON(res, { error: '仅运维系统管理员可删除维修日志' }, 403);
+  }
+  const item = await readJSONById('tech_support', id);
+  if (!item) return sendJSON(res, { error: '记录不存在' }, 404);
+  await deleteJSON('tech_support', id);
+  broadcastSSE('tech_support_updated', { action: 'deleted', id });
+  sendJSON(res, { success: true });
+}
+
 // Helper: Update the latest machine record's status by machineNumber
 async function _updateMachineStatusByNumber(machineNumber, newStatus) {
   if (!machineNumber) return;
@@ -1231,11 +1243,62 @@ async function handleExportXLSX(req, res, user) {
 // -- Tech Support XLSX Export --
 async function handleExportTechSupportXLSX(req, res, user) {
   const XLSX = require('xlsx');
+  const url = new URL(req.url, 'http://localhost');
+  const dateParam = url.searchParams.get('date');       // YYYY-MM-DD
+  const startParam = url.searchParams.get('start');     // ISO datetime
+  const endParam = url.searchParams.get('end');         // ISO datetime
+  const startTime = url.searchParams.get('startTime');  // HH:MM e.g. "07:00"
+  const endTime = url.searchParams.get('endTime');      // HH:MM e.g. "02:00"
+
   const items = await readJSONArray('tech_support');
   // Permission: operations users only see their own
-  const data = (user.system === 'operations' && user.role !== 'superadmin')
+  let data = (user.system === 'operations' && user.role !== 'superadmin')
     ? items.filter(i => i.submitterId === user.userId)
     : items;
+
+  // Date/time range filter
+  if (dateParam || startParam || endParam || startTime || endTime) {
+    data = data.filter(t => {
+      const ts = t.submittedAt ? new Date(t.submittedAt) : null;
+      if (!ts || isNaN(ts.getTime())) return false;
+
+      if (dateParam) {
+        // Single date: match YYYY-MM-DD
+        const d = dateParam.split('-').map(Number);
+        if (ts.getFullYear() !== d[0] || ts.getMonth() + 1 !== d[1] || ts.getDate() !== d[2]) return false;
+      }
+
+      if (startParam) {
+        if (ts < new Date(startParam)) return false;
+      }
+      if (endParam) {
+        if (ts > new Date(endParam)) return false;
+      }
+
+      if (startTime || endTime) {
+        const hourMin = ts.getHours() * 60 + ts.getMinutes();
+        if (startTime) {
+          const [sh, sm] = startTime.split(':').map(Number);
+          const startMin = sh * 60 + sm;
+          // If endTime < startTime, it spans midnight (e.g. 7:00 to 02:00 next day)
+          if (endTime) {
+            const [eh, em] = endTime.split(':').map(Number);
+            const endMin = eh * 60 + em;
+            if (endMin < startMin) {
+              // Spanning midnight: allow >= startMin OR <= endMin
+              if (hourMin < startMin && hourMin > endMin) return false;
+            } else {
+              // Normal range: startMin <= hourMin <= endMin
+              if (hourMin < startMin || hourMin > endMin) return false;
+            }
+          } else {
+            if (hourMin < startMin) return false;
+          }
+        }
+      }
+      return true;
+    });
+  }
 
   const statusMap = { pending: '待响应', responded: '处理中', completed: '已完成', closed: '已关闭' };
   const rows = data.map(t => ({
@@ -1735,6 +1798,8 @@ const server = http.createServer(async (req, res) => {
     if (tsRespondMatch && req.method === 'POST') return handleRespondTechSupport(req, res, authUser, tsRespondMatch[1]);
     const tsCompleteMatch = url.pathname.match(/^\/api\/tech-support\/([^/]+)\/complete$/);
     if (tsCompleteMatch && req.method === 'POST') return handleCompleteTechSupport(req, res, authUser, tsCompleteMatch[1], body);
+    const tsDeleteMatch = url.pathname.match(/^\/api\/tech-support\/([^/]+)$/);
+    if (tsDeleteMatch && req.method === 'DELETE') return handleDeleteTechSupport(req, res, authUser, tsDeleteMatch[1]);
 
     // Popup Messages
     if (url.pathname === '/api/popup-messages' && req.method === 'GET') return handleGetPopupMessages(req, res, authUser);

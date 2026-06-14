@@ -1328,21 +1328,47 @@ const OpsApp = {
     document.getElementById('main-content').innerHTML = `<div class="page-header"><h2>📋 维修日志</h2><span style="color:var(--text-secondary);font-size:0.85rem;">${items.length} 条记录</span></div>${statsHtml}${toolbar}${body}`;
   },
 
-  async exportTechSupportXLSX() {
+  exportTechSupportXLSX() {
+    const today = new Date().toISOString().slice(0, 10);
+    const html = `
+      <div style="padding:16px;">
+        <div class="form-group"><label>📅 日期（留空=全部）</label><input type="date" id="ts-export-date" style="width:100%;padding:8px;"></div>
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <div class="form-group" style="flex:1;"><label>🕖 开始时间</label><input type="time" id="ts-export-start" value="07:00" style="width:100%;padding:8px;"></div>
+          <div class="form-group" style="flex:1;"><label>🕐 结束时间</label><input type="time" id="ts-export-end" value="02:00" style="width:100%;padding:8px;"></div>
+        </div>
+        <div style="margin-top:4px;font-size:0.75rem;color:var(--text-secondary);">
+          💡 全留空=导出全部 | 日期+时间=精确筛选
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px;">
+          <button class="btn btn-primary" onclick="OpsApp._doExportTS()" style="flex:1;">📥 导出</button>
+          <button class="btn btn-outline" onclick="OpsApp.closeModal()">取消</button>
+        </div>
+      </div>`;
+    this.showModal('📊 导出维修日志', html, () => false);
+  },
+
+  async _doExportTS() {
     try {
+      this.closeModal();
       const token = API.token;
       if (!token) { this.notify('请先登录', 'warning'); return; }
-      const res = await fetch(API.baseURL + '/api/export/tech-support-xlsx', {
-        headers: { 'Authorization': 'Bearer ' + token }
-      });
+      const params = new URLSearchParams();
+      const dateVal = document.getElementById('ts-export-date')?.value;
+      const startVal = document.getElementById('ts-export-start')?.value;
+      const endVal = document.getElementById('ts-export-end')?.value;
+      if (dateVal) params.set('date', dateVal);
+      if (startVal) params.set('startTime', startVal);
+      if (endVal) params.set('endTime', endVal);
+      const qs = params.toString();
+      const url = API.baseURL + '/api/export/tech-support-xlsx' + (qs ? '?' + qs : '');
+      const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
       if (!res.ok) { this.notify('导出失败', 'error'); return; }
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = '维修日志-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+      a.href = URL.createObjectURL(blob);
+      a.download = '维修日志-' + (dateVal || '全部') + '.xlsx';
       a.click();
-      URL.revokeObjectURL(url);
       this.notify('导出成功');
     } catch(e) { this.notify('导出失败: ' + e.message, 'error'); }
   },
