@@ -1196,17 +1196,20 @@ input:checked + .slider::before { transform: translateX(20px); }
   .detail-hero-icon { width: 50px; height: 50px; font-size: 2.2rem; }
   .timeline { padding-left: 22px; max-height: 280px; }
   .timeline-item { padding: 10px; margin-bottom: 12px; }
-  .modal { width: 96%; max-height: 92vh; border-radius: var(--radius); }
-  .modal-header { padding: 14px 16px; }
-  .modal-body { padding: 14px 16px; }
-  .modal-footer { padding: 10px 16px; }
+	  .modal { width: 94%; max-width: 94vw; max-height: 85vh; border-radius: var(--radius); font-size: 0.88rem; }
+	  .modal-header { padding: 12px 14px; }
+  .modal-header h3 { font-size: 0.95rem; }
+	  .modal-body { padding: 12px 14px; }
+	  .modal-footer { padding: 10px 14px; flex-wrap: wrap; }
+  .modal-footer .btn { flex: 1; min-width: 80px; }
   .btn { min-height: 42px; padding: 9px 14px; }
   .btn-sm { min-height: 36px; padding: 6px 10px; font-size: 0.78rem; }
   .btn-xs { min-height: 30px; padding: 4px 8px; font-size: 0.68rem; }
   .data-table { font-size: 0.75rem; }
   .data-table th, .data-table td { padding: 6px 8px; }
   .badge { font-size: 0.68rem; padding: 2px 7px; }
-  .notification { min-width: auto; max-width: 90vw; padding: 12px 16px; font-size: 0.8rem; }
+  .notification { max-width: 85vw; padding: 10px 14px; font-size: 0.78rem; }
+  #notification-container { right: 10px; top: 10px; }
   .quick-actions { grid-template-columns: 1fr 1fr; }
   .pagination { flex-direction: column; gap: 8px; }
   .online-badge { font-size: 0.75rem; padding: 5px 10px; }
@@ -1235,10 +1238,10 @@ input:checked + .slider::before { transform: translateX(20px); }
   .stat-card .stat-footer { font-size: 0.6rem; margin-top: 4px; padding-top: 4px; }
   .filter-bar { padding: 8px; gap: 4px; }
   .page-header h2 { font-size: 1.1rem; }
-  .modal { width: 98%; max-height: 94vh; }
-  .modal-header { padding: 10px 12px; }
-  .modal-body { padding: 10px 12px; }
-  .modal-footer { padding: 8px 12px; }
+  .modal { width: 96%; max-width: 96vw; max-height: 88vh; font-size: 0.82rem; }
+  .modal-header { padding: 8px 10px; }
+  .modal-body { padding: 8px 10px; }
+  .modal-footer { padding: 8px 10px; flex-wrap: wrap; }
   .btn { min-height: 38px; padding: 7px 10px; font-size: 0.78rem; }
   .btn-sm { min-height: 32px; padding: 5px 8px; font-size: 0.7rem; }
   .btn-xs { min-height: 28px; padding: 3px 6px; font-size: 0.65rem; }
