@@ -711,10 +711,10 @@ const Storage = {
       }
     } catch(e) { console.log('_applySync inv:', e.message); }
     try {
-      if (Array.isArray(data.machines)) this.saveMachines(data.machines);
+      if (Array.isArray(data.machines) && data.machines.length > 0) this.saveMachines(data.machines);
     } catch(e) { console.log('_applySync machines:', e.message); }
     try {
-      if (Array.isArray(data.transactions)) {
+      if (Array.isArray(data.transactions) && data.transactions.length > 0) {
         try {
           const deletedIds = JSON.parse(localStorage.getItem('gms_deleted_tx_ids') || '[]');
           const activeDeleted = new Set(deletedIds.filter(e => e.expires > Date.now()).map(e => e.id));
