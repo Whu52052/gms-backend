@@ -1817,16 +1817,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.url === '/api/status' && req.method === 'GET') {
-      const mem = process.memoryUsage();
       const onlineIds = new Set();
       Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
+      const count = onlineIds.size;
+      // Load level: idle(0) / smooth(1-9) / busy(10-49) / full(50+)
+      let level = 'idle', label = '空闲';
+      if (count >= 50) { level = 'full'; label = '爆满'; }
+      else if (count >= 10) { level = 'busy'; label = '拥挤'; }
+      else if (count >= 1) { level = 'smooth'; label = '畅通'; }
       return sendJSON(res, {
         status: 'ok',
-        uptime: process.uptime(),
-        memory: Math.round(mem.heapUsed / 1048576),
-        memoryTotal: Math.round(mem.heapTotal / 1048576),
-        onlineUsers: onlineIds.size,
-        sseClients: sseClients.size,
+        onlineUsers: count,
+        loadLevel: level,
+        loadLabel: label,
         version: '3.9.0',
       });
     }

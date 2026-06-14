@@ -65,21 +65,12 @@ const App = {
       const res = await fetch(API.baseURL + '/api/status');
       if (!res.ok) return;
       const data = await res.json();
-      const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-      setEl('stat-online', data.onlineUsers);
-      setEl('stat-uptime', this._fmtUptime(data.uptime));
-      setEl('stat-memory', data.memory + 'MB');
-      setEl('stat-sse', data.sseClients);
+      const el = document.getElementById('status-bar-info');
+      if (!el) return;
+      const icons = { idle: '⚪', smooth: '🟢', busy: '🟡', full: '🔴' };
+      el.innerHTML = icons[data.loadLevel] + ' 服务器<strong>' + data.loadLabel + '</strong> · 在线 ' + data.onlineUsers + ' 人';
+      document.getElementById('status-bar').className = 'status-bar status-' + data.loadLevel;
     } catch {}
-  },
-
-  _fmtUptime(seconds) {
-    const d = Math.floor(seconds / 86400);
-    const h = Math.floor((seconds % 86400) / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    if (d > 0) return d + '天' + h + '时';
-    if (h > 0) return h + '时' + m + '分';
-    return m + '分';
   },
 
   initStatusBar() {
