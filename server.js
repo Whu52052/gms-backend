@@ -145,6 +145,7 @@ function migrateDB() {
     `ALTER TABLE sn_registry ADD COLUMN shippedAt VARCHAR(64)`,
     `ALTER TABLE sn_registry ADD COLUMN repairedAt VARCHAR(64)`,
     `ALTER TABLE users ADD COLUMN parentId VARCHAR(64)`,
+    `ALTER TABLE users ADD COLUMN displayName VARCHAR(64)`,
   ];
   return Promise.all(migrations.map(sql =>
     pool.execute(sql).catch(() => { /* column likely already exists */ })
@@ -155,13 +156,13 @@ async function seedDefaults() {
   const [[{ c }]] = await pool.execute('SELECT COUNT(*) as c FROM users');
   if (c === 0) {
     const users = [
-      ['sa-001', 'Yunwei', hashPassword('yunwei1025'), 'superadmin', 'maintenance', null, new Date().toISOString()],
-      ['sa-002', 'yunying', hashPassword('yunying1025'), 'superadmin', 'operations', null, new Date().toISOString()],
-      ['admin-001', 'admin', hashPassword('admin123'), 'admin', 'maintenance', null, new Date().toISOString()],
+      ['sa-001', 'Yunwei', hashPassword('yunwei1025'), 'superadmin', 'maintenance', '运维超管', null, new Date().toISOString()],
+      ['sa-002', 'yunying', hashPassword('yunying1025'), 'superadmin', 'operations', '运营超管', null, new Date().toISOString()],
+      ['admin-001', 'admin', hashPassword('admin123'), 'admin', 'maintenance', '管理员', null, new Date().toISOString()],
     ];
     for (const u of users) {
       await pool.execute(
-        'INSERT INTO users (id, username, passwordHash, role, \`system\`, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (id, username, passwordHash, role, \`system\`, displayName, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         u
       );
     }
@@ -337,7 +338,7 @@ try {
 
 function createToken(user) {
   const token = crypto.randomBytes(32).toString('hex');
-  tokens[token] = { userId: user.id, username: user.username, role: user.role, system: user.system || 'maintenance', expires: Date.now() + TOKEN_EXPIRY, lastActive: Date.now() };
+  tokens[token] = { userId: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, system: user.system || 'maintenance', expires: Date.now() + TOKEN_EXPIRY, lastActive: Date.now() };
   saveTokens();
   return token;
 }
@@ -482,7 +483,7 @@ async function handleLogin(req, res, body) {
   const existingToken = Object.keys(tokens).find(k => tokens[k].userId === user.id);
   if (existingToken) delete tokens[existingToken];
   const token = createToken(user);
-  sendJSON(res, { token, user: { id: user.id, username: user.username, role: user.role, system: user.system || 'maintenance' } });
+  sendJSON(res, { token, user: { id: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, system: user.system || 'maintenance' } });
 }
 
 async function handleForceLogout(req, res, user, targetUserId) {
@@ -503,12 +504,12 @@ async function handleGetUsers(req, res, user) {
   }
   const onlineIds = new Set();
   Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
-  sendJSON(res, users.map(u => ({ id: u.id, username: u.username, role: u.role, system: u.system || 'maintenance', parentId: u.parentId || null, createdAt: u.createdAt, online: onlineIds.has(u.id) })));
+  sendJSON(res, users.map(u => ({ id: u.id, username: u.username, displayName: u.displayName || u.username, role: u.role, system: u.system || 'maintenance', parentId: u.parentId || null, createdAt: u.createdAt, online: onlineIds.has(u.id) })));
 }
 
 async function handleAddUser(req, res, user, body) {
   if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限添加用户' }, 403);
-  const { username, password, role, system } = body;
+  const { username, password, role, system, displayName } = body;
   if (!username || !password) return sendJSON(res, { error: '请输入用户名和密码' }, 400);
   if (user.role === 'admin' && role === 'admin') return sendJSON(res, { error: '管理员只能创建普通用户' }, 403);
   if (role === 'superadmin') return sendJSON(res, { error: '无法创建超级管理员账户' }, 403);
@@ -519,11 +520,11 @@ async function handleAddUser(req, res, user, body) {
   // When admin creates a user, set parentId to establish hierarchy
   const parentId = (user.role === 'admin' || user.role === 'superadmin') ? user.userId : null;
   await pool.execute(
-    'INSERT INTO users (id, username, passwordHash, role, `system`, createdBy, parentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, username, hashPassword(password), role || 'user', userSystem, user.userId, parentId, new Date().toISOString()]
+    'INSERT INTO users (id, username, passwordHash, role, `system`, displayName, createdBy, parentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, username, hashPassword(password), role || 'user', userSystem, displayName || username, user.userId, parentId, new Date().toISOString()]
   );
   broadcastSSE('users_updated', {});
-  sendJSON(res, { success: true, user: { id, username, role: role || 'user', system: userSystem, parentId } });
+  sendJSON(res, { success: true, user: { id, username, displayName: displayName || username, role: role || 'user', system: userSystem, parentId } });
 }
 
 async function handleDeleteUser(req, res, user, userId) {
@@ -658,7 +659,7 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
   const item = {
     id,
     submitterId: authUser.userId,
-    submitterName: authUser.username,
+    submitterName: authUser.displayName || authUser.username,
     equipmentType,
     equipmentTypeName: equipmentTypeName || equipmentType,
     machineId,

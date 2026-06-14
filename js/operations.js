@@ -902,8 +902,10 @@ const OpsApp = {
             ${users.map(u => {
               const roleMap = { superadmin: '超级管理员', admin: '管理员', user: '普通用户' };
               const isSelf = u.id === user.id;
+              const dname = u.displayName || u.username;
               return '<tr>'
-                + '<td><strong>' + (u.username || '-') + '</strong>' + (isSelf ? ' <span style="color:var(--text-tertiary);font-size:0.75rem;">(我)</span>' : '') + '</td>'
+                + '<td><strong>' + dname + '</strong>' + (isSelf ? ' <span style="color:var(--text-tertiary);font-size:0.75rem;">(我)</span>' : '') + '</td>'
+                + '<td style="font-size:0.8rem;color:var(--text-secondary);">' + (u.username || '-') + '</td>'
                 + '<td><span class="um-role-badge um-role-' + u.role + '">' + (roleMap[u.role] || u.role) + '</span></td>'
                 + '<td><span class="um-status-dot ' + (u.online ? 'online' : 'offline') + '"></span> ' + (u.online ? '在线' : '离线') + '</td>'
                 + '<td style="font-size:0.8rem;color:var(--text-secondary);">' + (u.createdAt ? new Date(u.createdAt).toLocaleDateString('zh-CN') : '-') + '</td>'
@@ -923,8 +925,12 @@ const OpsApp = {
   showAddUserForm() {
     const html = `
       <div class="form-group">
+        <label>中文名 <span class="required">*</span></label>
+        <input type="text" id="new-user-displayname" placeholder="输入中文姓名（用于显示）" required>
+      </div>
+      <div class="form-group">
         <label>用户名 <span class="required">*</span></label>
-        <input type="text" id="new-user-username" placeholder="输入用户名" required>
+        <input type="text" id="new-user-username" placeholder="输入登录用户名" required>
       </div>
       <div class="form-group">
         <label>密码 <span class="required">*</span></label>
@@ -932,13 +938,15 @@ const OpsApp = {
       </div>
     `;
     this.showModal('创建新账户', html, async () => {
+      const displayName = document.getElementById('new-user-displayname')?.value.trim();
       const username = document.getElementById('new-user-username')?.value.trim();
       const password = document.getElementById('new-user-password')?.value.trim();
+      if (!displayName) { this.notify('请输入中文名', 'warning'); return false; }
       if (!username || !password) { this.notify('请填写用户名和密码', 'warning'); return false; }
       if (password.length < 4) { this.notify('密码至少4个字符', 'warning'); return false; }
-      const result = await API.addUser({ username, password, role: 'user', system: 'operations' });
+      const result = await API.addUser({ username, password, role: 'user', system: 'operations', displayName });
       if (result && result.success) {
-        this.notify('账户创建成功');
+        this.notify(`${displayName} 账户创建成功`);
         this.renderUserManagement();
         return true;
       } else {
@@ -1436,7 +1444,7 @@ const OpsApp = {
           <button class="sys-btn" onclick="OpsApp.switchSystem('maintenance')" title="切换到运维系统">🔧 运维</button>
           <span class="sys-btn active">📊 运营</span>
         </span>` : '';
-      el.innerHTML = switcherHtml + ' <span class="topbar-user-name">👤 ' + user.username + roleLabel + '</span>'
+      el.innerHTML = switcherHtml + ' <span class="topbar-user-name">👤 ' + (user.displayName || user.username) + roleLabel + '</span>'
         + '<button class="btn btn-xs btn-outline" onclick="OpsApp.showChangePasswordForm()" style="font-size:0.7rem;" title="修改密码">🔑</button>'
         + '<button class="btn btn-xs btn-outline" onclick="OpsApp.doLogout()" style="font-size:0.7rem;">退出</button>';
     } else {

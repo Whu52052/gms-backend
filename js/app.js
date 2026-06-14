@@ -247,7 +247,7 @@ const App = {
           <span class="sys-btn active">🔧 运维</span>
           <button class="sys-btn" onclick="App.switchSystem('operations')" title="切换到运营系统">📊 运营</button>
         </span>` : '';
-      el.innerHTML = `${switcherHtml}<span class="topbar-user-name">👤 ${user.username}${roleLabel}</span>
+      el.innerHTML = `${switcherHtml}<span class="topbar-user-name">👤 ${user.displayName || user.username}${roleLabel}</span>
         <button class="btn btn-xs btn-outline" onclick="App.showChangePasswordForm()" style="font-size:0.7rem;" title="修改密码">🔑</button>
         <button class="btn btn-xs btn-outline" onclick="App.doLogout()" style="font-size:0.7rem;">退出</button>`;
     } else {
@@ -4946,7 +4946,7 @@ const App = {
               return `
               <tr>
                 <td><span class="online-dot ${u.online ? 'online' : 'offline'}" title="${u.online ? '在线' : '离线'}"></span></td>
-                <td><strong>${u.username}</strong>${currentUser && u.id === currentUser.id ? ' <span class="badge badge-info">当前</span>' : ''}</td>
+                <td><strong>${u.displayName || u.username}</strong>${currentUser && u.id === currentUser.id ? ' <span class="badge badge-info">当前</span>' : ''}</td>
                 <td><span class="badge ${roleBadge(u.role)}">${roleLabel(u.role)}</span></td>
                 <td>
                   ${isSuperAdmin && u.role !== 'superadmin' ? `<button class="btn btn-xs ${canDelSN ? 'btn-success' : 'btn-outline'}" onclick="App._toggleSNDeletePerm('${u.id}')" title="${canDelSN ? '点击取消SN码删除权限' : '点击授予SN码删除权限'}">🗑 ${canDelSN ? '已授权' : '未授权'}</button>`
@@ -4968,8 +4968,12 @@ const App = {
     const isSuperAdmin = API.currentUser && API.currentUser.role === 'superadmin';
     const contentHtml = `
       <div class="form-group">
+        <label>中文名 <span class="required">*</span></label>
+        <input type="text" id="new-displayname" placeholder="输入中文姓名（用于显示）" required>
+      </div>
+      <div class="form-group">
         <label>用户名 <span class="required">*</span></label>
-        <input type="text" id="new-username" placeholder="输入用户名" required>
+        <input type="text" id="new-username" placeholder="输入登录用户名" required>
       </div>
       <div class="form-group">
         <label>密码 <span class="required">*</span></label>
@@ -4993,17 +4997,19 @@ const App = {
       </div>` : ''}
     `;
     this.showModal('添加用户', contentHtml, async () => {
+      const displayName = document.getElementById('new-displayname').value.trim();
       const username = document.getElementById('new-username').value.trim();
       const password = document.getElementById('new-password').value.trim();
       const role = document.getElementById('new-role').value;
       const system = isSuperAdmin ? document.getElementById('new-system').value : '';
+      if (!displayName) { this.notify('请输入中文名', 'error'); return false; }
       if (!username || !password) { this.notify('请输入用户名和密码', 'error'); return false; }
       if (username.length < 2) { this.notify('用户名至少2个字符', 'error'); return false; }
       if (password.length < 4) { this.notify('密码至少4个字符', 'error'); return false; }
 
-      const result = await this._addUser(username, password, role, system);
+      const result = await this._addUser(username, password, role, system, displayName);
       if (!result.success) { this.notify(result.message, 'error'); return false; }
-      this.notify(`用户 ${username} 创建成功`);
+      this.notify(`用户 ${displayName}(${username}) 创建成功`);
       this.renderUserManagement();
       return true;
     });
@@ -5061,10 +5067,10 @@ const App = {
     } catch { return []; }
   },
 
-  async _addUser(username, password, role, system) {
+  async _addUser(username, password, role, system, displayName) {
     if (!API.online) return { success: false, message: '离线模式不支持用户管理' };
     try {
-      const body = { username, password, role };
+      const body = { username, password, role, displayName };
       if (system) body.system = system;
       const res = await fetch(API.baseURL + '/api/users', {
         method: 'POST', headers: API._headers(),
