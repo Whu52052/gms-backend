@@ -406,6 +406,11 @@ const App = {
     overlay.onclick = (e) => { if (e.target === overlay) overlay.style.display = 'none'; };
   },
 
+  closeModal() {
+    const overlay = document.getElementById('modal-overlay');
+    if (overlay) overlay.style.display = 'none';
+  },
+
   // ==================== DASHBOARD ====================
   renderDashboard() {
     const onlineCount = Storage.getOnlineMachineCount();
@@ -3642,6 +3647,9 @@ const App = {
         </div>
       </div>`;
     this.showModal('📊 导出维修日志', html, () => false);
+    // Hide modal save button — export has its own button
+    const saveBtn = document.getElementById('modal-save');
+    if (saveBtn) saveBtn.style.display = 'none';
   },
 
   async _doExportTS() {
