@@ -7,6 +7,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+// ==================== FEISHU SYNC ====================
+const feishu = require('./feishu');
+
 // ==================== CONFIG ====================
 const PORT = process.env.PORT || 8765;
 const DB_HOST = process.env.DB_HOST || process.env.MYSQL_HOST || 'sh-cynosdbmysql-grp-pbo2ohcm.sql.tencentcdb.com';
@@ -747,6 +750,8 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
   broadcastSSE('tech_support_updated', { action: 'created', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
+  // Sync to Feishu (async, don't block response)
+  feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Submit sync error:', e.message));
 }
 
 async function handleRespondTechSupport(req, res, authUser, id) {
@@ -772,6 +777,8 @@ async function handleRespondTechSupport(req, res, authUser, id) {
   broadcastSSE('tech_support_updated', { action: 'responded', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
+  // Sync to Feishu (async)
+  feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Respond sync error:', e.message));
 }
 
 async function handleCompleteTechSupport(req, res, authUser, id, body) {
@@ -799,6 +806,8 @@ async function handleCompleteTechSupport(req, res, authUser, id, body) {
   broadcastSSE('tech_support_updated', { action: 'completed', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
+  // Sync to Feishu (async)
+  feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Complete sync error:', e.message));
 }
 
 async function handleDeleteTechSupport(req, res, authUser, id) {
@@ -811,6 +820,8 @@ async function handleDeleteTechSupport(req, res, authUser, id) {
   await deleteJSON('tech_support', id);
   broadcastSSE('tech_support_updated', { action: 'deleted', id });
   sendJSON(res, { success: true });
+  // Sync delete to Feishu (async)
+  feishu.deleteFromFeishu(id).catch(e => console.error('[Feishu] Delete sync error:', e.message));
 }
 
 // Helper: Update the latest machine record's status by machineNumber
@@ -1991,6 +2002,9 @@ async function startup() {
     await migrateFromJSON();
     await seedDefaults();
     console.log('[DB] Database initialized successfully');
+
+    // Initialize Feishu sync (non-blocking)
+    feishu.initFeishuSync().catch(e => console.error('[Feishu] Init failed (non-fatal):', e.message));
   } catch (e) {
     console.error('[FATAL] Database initialization failed:', e.message);
     process.exit(1);
