@@ -151,6 +151,11 @@ function migrateDB() {
     `ALTER TABLE users ADD COLUMN parentId VARCHAR(64)`,
     `ALTER TABLE users ADD COLUMN displayName VARCHAR(64)`,
     `UPDATE users SET displayName = username WHERE displayName IS NULL`,
+    // Performance indexes
+    `CREATE INDEX IF NOT EXISTS idx_sn_updated ON sn_registry(updatedAt)`,
+    `CREATE INDEX IF NOT EXISTS idx_sn_status ON sn_registry(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_sn_equipment ON sn_registry(equipmentType)`,
+    `CREATE INDEX IF NOT EXISTS idx_sn_machine ON sn_registry(machineNumber)`,
   ];
   return Promise.all(migrations.map(sql =>
     pool.execute(sql).catch(() => { /* column likely already exists */ })
@@ -361,6 +366,42 @@ const sseClients = new Set();
 function broadcastSSE(event, data) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   sseClients.forEach(res => { try { res.write(msg); } catch { sseClients.delete(res); } });
+  // Invalidate cache on data mutations
+  _invalidateCache(event);
+}
+
+// ==================== IN-MEMORY CACHE ====================
+const _cache = new Map();
+const CACHE_TTL = {
+  equipment_config: 60000,   // 60s
+  inventory_config: 60000,   // 60s
+  sn_registry: 3000,         // 3s (short, needs freshness)
+  machines: 5000,            // 5s
+  sync: 10000,               // 10s
+};
+
+function _invalidateCache(event) {
+  // Map SSE events to cache keys
+  const map = {
+    'equipment_config_updated': 'equipment_config',
+    'inventory_config_updated': 'inventory_config',
+    'sn_registry_updated': 'sn_registry',
+    'machines_updated': 'machines',
+  };
+  for (const [evt, key] of Object.entries(map)) {
+    if (event === evt) _cache.delete(key);
+  }
+  // Any mutation invalidates sync
+  if (event !== 'connected') _cache.delete('sync');
+}
+
+async function _cached(key, fetcher, ttlOverride) {
+  const ttl = ttlOverride || CACHE_TTL[key] || 3000;
+  const entry = _cache.get(key);
+  if (entry && (Date.now() - entry.ts) < ttl) return entry.data;
+  const data = await fetcher();
+  _cache.set(key, { data, ts: Date.now() });
+  return data;
 }
 
 // ==================== JSON HELPERS ====================
@@ -1066,17 +1107,18 @@ async function handleAdjustInventory(req, res, user, type, body) {
 
 // -- Machines --
 async function handleGetMachines(req, res, user) {
-  // Fetch latest records (limit to avoid scanning entire history)
-  const [rows] = await pool.execute('SELECT data FROM machines ORDER BY id DESC LIMIT 5000');
-  const all = rows.map(r => JSON.parse(r.data));
-  // Deduplicate: return only the latest record per machineNumber
-  const latest = new Map();
-  for (const m of all) {
-    const num = m.machineNumber;
-    if (!num) continue;
-    if (!latest.has(num)) latest.set(num, m);
-  }
-  sendJSON(res, Array.from(latest.values()));
+  const result = await _cached('machines', async () => {
+    const [rows] = await pool.execute('SELECT data FROM machines ORDER BY id DESC LIMIT 5000');
+    const all = rows.map(r => JSON.parse(r.data));
+    const latest = new Map();
+    for (const m of all) {
+      const num = m.machineNumber;
+      if (!num) continue;
+      if (!latest.has(num)) latest.set(num, m);
+    }
+    return Array.from(latest.values());
+  });
+  sendJSON(res, result);
 }
 async function handleAddMachine(req, res, user, body) {
   const id = body.id || ('m-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
@@ -1131,7 +1173,8 @@ async function handleSaveSettings(req, res, user, body) {
 
 // -- Equipment Config --
 async function handleGetEquipmentConfig(req, res) {
-  sendJSON(res, await readJSONArray('equipment_config'));
+  const result = await _cached('equipment_config', () => readJSONArray('equipment_config'));
+  sendJSON(res, result);
 }
 async function handleSaveEquipmentConfig(req, res, body) {
   await pool.execute('DELETE FROM equipment_config');
@@ -1151,7 +1194,8 @@ async function handleDeleteEquipmentConfig(req, res, id) {
 
 // -- Inventory Config --
 async function handleGetInventoryConfig(req, res) {
-  sendJSON(res, await readJSONArray('inventory_config'));
+  const result = await _cached('inventory_config', () => readJSONArray('inventory_config'));
+  sendJSON(res, result);
 }
 async function handleSaveInventoryConfig(req, res, body) {
   await pool.execute('DELETE FROM inventory_config');
@@ -1541,9 +1585,10 @@ function _snToInvType(equipmentType, handType) {
 
 // ==================== SN REGISTRY ====================
 async function handleGetSNRegistry(req, res) {
-  const url = new URL(req.url, 'http://localhost');
-  const limit = parseInt(url.searchParams.get('limit')) || 5000;
-  const [rows] = await pool.execute(`SELECT * FROM sn_registry ORDER BY updatedAt DESC LIMIT ${Math.min(limit, 50000)}`);
+  const rows = await _cached('sn_registry', async () => {
+    const [r] = await pool.execute('SELECT * FROM sn_registry ORDER BY updatedAt DESC LIMIT 5000');
+    return r;
+  });
   sendJSON(res, rows);
 }
 
@@ -1697,10 +1742,11 @@ function handleDeleteUpload(req, res, body) {
 
 // -- Sync endpoint (polling fallback) --
 async function handleSync(req, res) {
-  // Parallel queries for speed
-  const [inventory, snRegistry, tsRows, machines, transactions,
-    settings, equipmentConfig, inventoryConfig,
-    opsOrders, opsCustomers, opsProduction] = await Promise.all([
+  const cachedData = await _cached('sync', async () => {
+    // Parallel queries for speed
+    const [inventory, snRegistry, tsRows, machines, transactions,
+      settings, equipmentConfig, inventoryConfig,
+      opsOrders, opsCustomers, opsProduction] = await Promise.all([
     pool.execute('SELECT * FROM inventory'),
     pool.execute('SELECT * FROM sn_registry ORDER BY updatedAt DESC LIMIT 5000'),
     pool.execute('SELECT data FROM tech_support ORDER BY id DESC LIMIT 1000'),
@@ -1714,7 +1760,7 @@ async function handleSync(req, res) {
     pool.execute('SELECT data FROM ops_production ORDER BY id DESC'),
   ]);
 
-  sendJSON(res, {
+  return {
     inventory: inventory[0].map(r => ({ type: r.inv_type, quantity: r.quantity, updatedAt: r.updatedAt, updatedBy: r.updatedBy })),
     machines: machines[0].map(r => JSON.parse(r.data)),
     transactions: transactions[0].map(r => JSON.parse(r.data)).reverse(),
@@ -1726,7 +1772,9 @@ async function handleSync(req, res) {
     opsCustomers: opsCustomers[0].map(r => JSON.parse(r.data)),
     opsProduction: opsProduction[0].map(r => JSON.parse(r.data)),
     techSupport: tsRows[0].map(r => JSON.parse(r.data)),
+  };
   });
+  sendJSON(res, cachedData);
 }
 
 // ==================== SERVER ====================
