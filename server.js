@@ -967,10 +967,11 @@ async function handleGetGroupMembers(req, res, authUser) {
   if (authUser.role !== 'admin' && authUser.role !== 'superadmin') {
     return sendJSON(res, { error: '仅组长可查看组员' }, 403);
   }
-  // Return all users grouped by parentId for cross-group visibility
+  // System isolation: admins only see same-system users; superadmin sees all
+  const systemFilter = authUser.role === 'superadmin' ? '' : `AND \`system\` = '${authUser.system}'`;
   const [users] = await pool.execute(
     `SELECT id, username, role, \`system\`, parentId, createdBy, createdAt
-     FROM users WHERE role = 'user' ORDER BY username`
+     FROM users WHERE role = 'user' ${systemFilter} ORDER BY username`
   );
   // Group by parentId
   const groups = {};
