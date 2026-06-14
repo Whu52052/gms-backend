@@ -896,19 +896,13 @@ async function handleApproveGroupTransfer(req, res, authUser, transferId) {
   if (item.toAdminId !== authUser.userId && item.fromAdminId !== authUser.userId) {
     return sendJSON(res, { error: '您不是该调配的相关组长，无权审批' }, 403);
   }
-  if (item.toAdminId === authUser.userId) {
-    // The other admin is approving → transfer takes effect
-    const targetParentId = item.direction === 'out'
-      ? item.toAdminId   // sending my user out → their parent becomes the other admin
-      : item.fromAdminId; // bringing their user in → my user now
-    // For 'out': authUser (toAdminId) approves → user moves from fromAdminId to toAdminId
-    // For 'in': authUser (toAdminId) approves → user moves from toAdminId to fromAdminId
-    const newParentId = item.direction === 'out' ? item.toAdminId : item.fromAdminId;
-    await pool.execute('UPDATE users SET parentId = ? WHERE id = ?', [newParentId, item.userId]);
-    item.status = 'completed';
-    item.completedAt = new Date().toISOString();
-    broadcastSSE('users_updated', {});
-  }
+  // Either admin can approve → user's parentId changes to the other admin
+  const isSender = (item.fromAdminId === authUser.userId);
+  const newParentId = isSender ? item.toAdminId : item.fromAdminId;
+  await pool.execute('UPDATE users SET parentId = ? WHERE id = ?', [newParentId, item.userId]);
+  item.status = 'completed';
+  item.completedAt = new Date().toISOString();
+  broadcastSSE('users_updated', {});
   item.updatedAt = new Date().toISOString();
   await pool.execute('REPLACE INTO group_transfers (id, data) VALUES (?, ?)', [transferId, JSON.stringify(item)]);
   broadcastSSE('group_transfer_updated', { action: 'approved', id: transferId });
