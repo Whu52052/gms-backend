@@ -1,0 +1,55 @@
+# ===================================================================
+#  Yunwei Prometheus 监控配置
+#  采集目标: Node.js App Metrics + MySQL Exporter + Redis Exporter
+# ===================================================================
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+# 告警规则
+rule_files:
+  - 'alert-rules.yml'
+
+# 采集目标
+scrape_configs:
+  # === Yunwei Node.js App ===
+  - job_name: 'yunwei-app'
+    metrics_path: '/api/metrics'
+    static_configs:
+      - targets: ['yunwei-nginx:80']
+        labels:
+          service: 'yunwei'
+          env: 'production'
+
+  # === MySQL Exporter ===
+  - job_name: 'yunwei-mysql'
+    static_configs:
+      - targets: ['yunwei-mysql-exporter:9104']
+        labels:
+          service: 'mysql'
+          env: 'production'
+
+  # === Redis Exporter ===
+  - job_name: 'yunwei-redis'
+    static_configs:
+      - targets: ['yunwei-redis-exporter:9121']
+        labels:
+          service: 'redis'
+          env: 'production'
+
+  # === Nginx Exporter ===
+  - job_name: 'yunwei-nginx'
+    static_configs:
+      - targets: ['yunwei-nginx-exporter:9113']
+        labels:
+          service: 'nginx'
+          env: 'production'
+
+  # === Node Exporter (主机监控) ===
+  - job_name: 'yunwei-node'
+    static_configs:
+      - targets: ['yunwei-node-exporter:9100']
+        labels:
+          service: 'host'
+          env: 'production'

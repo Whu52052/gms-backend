@@ -1,6 +1,11 @@
+# ===================================================================
+#  Yunwei Complete Stack — i9 Workstation Production Edition
+#  包含: Nginx + PM2 App + MySQL + Redis + Prometheus + Grafana
+# ===================================================================
 version: '3.8'
+
 services:
-  # === MySQL 数据库 ===
+  # ========== MySQL 8.0 (高并发优化) ==========
   mysql:
     image: mysql:8.0
     container_name: yunwei-mysql
@@ -12,26 +17,66 @@ services:
       MYSQL_PASSWORD: ${DB_PASSWORD:-Wh111852}
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "127.0.0.1:3306:3306"
     command: >
-      --max_connections=500
-      --innodb_buffer_pool_size=512M
-      --innodb_log_file_size=256M
+      --max_connections=800
+      --innodb_buffer_pool_size=2G
+      --innodb_log_file_size=512M
+      --innodb_flush_log_at_trx_commit=2
+      --innodb_flush_method=O_DIRECT
+      --innodb_io_capacity=2000
+      --innodb_io_capacity_max=4000
+      --innodb_read_io_threads=8
+      --innodb_write_io_threads=8
+      --innodb_buffer_pool_instances=8
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci
+      --max_allowed_packet=256M
+      --thread_cache_size=64
+      --table_open_cache=4000
+      --sort_buffer_size=4M
+      --join_buffer_size=4M
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - yunwei-net
 
-  # === Redis 缓存 ===
+  # ========== MySQL Exporter (Prometheus 指标) ==========
+  mysql-exporter:
+    image: prom/mysqld-exporter:latest
+    container_name: yunwei-mysql-exporter
+    restart: always
+    environment:
+      DATA_SOURCE_NAME: "Wuzhenyu:${DB_PASSWORD:-Wh111852}@(mysql:3306)/gms"
+    depends_on:
+      - mysql
+    ports:
+      - "127.0.0.1:9104:9104"
+    networks:
+      - yunwei-net
+
+  # ========== Redis 7 (缓存 + Pub/Sub) ==========
   redis:
     image: redis:7-alpine
     container_name: yunwei-redis
     restart: always
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 4gb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --tcp-backlog 511
+      --timeout 300
+      --tcp-keepalive 300
+      --databases 4
     volumes:
       - redis_data:/data
     ports:
@@ -41,8 +86,26 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    sysctls:
+      - net.core.somaxconn=1024
+    networks:
+      - yunwei-net
 
-  # === Node.js 应用 ===
+  # ========== Redis Exporter ==========
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: yunwei-redis-exporter
+    restart: always
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    depends_on:
+      - redis
+    ports:
+      - "127.0.0.1:9121:9121"
+    networks:
+      - yunwei-net
+
+  # ========== Node.js App (PM2 集群) ==========
   app:
     build: .
     container_name: yunwei-app
@@ -60,9 +123,11 @@ services:
       FEISHU_APP_ID: cli_aaa42355f0389cfc
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-v2vU8YCrU0GHJdUsIa8nN1edaEGdkPm8}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_DIR: /var/log/yunwei
     volumes:
       - uploads_data:/app/uploads
-      - ./data:/app/data
+      - log_data:/var/log/yunwei
     depends_on:
       mysql:
         condition: service_healthy
@@ -73,16 +138,30 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    # 资源限制 (i9 宽松配置)
+    deploy:
+      resources:
+        limits:
+          cpus: '12'
+          memory: 16G
+        reservations:
+          cpus: '4'
+          memory: 4G
+    networks:
+      - yunwei-net
 
-  # === Nginx 反向代理 ===
+  # ========== Nginx 反向代理 ==========
   nginx:
     image: nginx:alpine
     container_name: yunwei-nginx
     restart: always
     ports:
       - "80:80"
+      - "443:443"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx-prod.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+      - nginx_logs:/var/log/nginx
     depends_on:
       - app
     healthcheck:
@@ -90,8 +169,77 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    networks:
+      - yunwei-net
 
+  # ========== Prometheus 监控 ==========
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: yunwei-prometheus
+    restart: always
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - yunwei-net
+
+  # ========== Grafana 可视化 ==========
+  grafana:
+    image: grafana/grafana:latest
+    container_name: yunwei-grafana
+    restart: always
+    environment:
+      GF_SERVER_ROOT_URL: http://localhost:3000
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-yunwei2026}
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana-dashboard.json:/etc/grafana/provisioning/dashboards/yunwei.json:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - yunwei-net
+
+  # ========== Node Exporter (主机监控) ==========
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: yunwei-node-exporter
+    restart: always
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.ignored-mount-points=^(sys|proc|dev|run)($$|/)'
+    ports:
+      - "127.0.0.1:9100:9100"
+    networks:
+      - yunwei-net
+
+# ==================== VOLUMES ====================
 volumes:
   mysql_data:
   redis_data:
   uploads_data:
+  log_data:
+  nginx_logs:
+  prometheus_data:
+  grafana_data:
+
+# ==================== NETWORKS ====================
+networks:
+  yunwei-net:
+    driver: bridge

@@ -1,0 +1,130 @@
+{
+  "title": "Yunwei 手套管理系统 — 运维监控",
+  "uid": "yunwei-production",
+  "timezone": "Asia/Shanghai",
+  "refresh": "10s",
+  "panels": [
+    {
+      "title": "在线用户",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 3 },
+      "targets": [{ "expr": "online_users_total", "legendFormat": "在线" }],
+      "fieldConfig": {
+        "defaults": { "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 400, "color": "yellow" }, { "value": 550, "color": "red" }] } }
+      }
+    },
+    {
+      "title": "HTTP QPS",
+      "type": "stat",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 3 },
+      "targets": [{ "expr": "rate(http_requests_total[1m])", "legendFormat": "QPS" }]
+    },
+    {
+      "title": "API P95 延迟",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 3 },
+      "targets": [{ "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))*1000", "legendFormat": "ms" }],
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 500, "color": "yellow" }, { "value": 1000, "color": "red" }] } }
+      }
+    },
+    {
+      "title": "错误率",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 3 },
+      "targets": [{ "expr": "rate(http_requests_total{status=~\"5..\"}[5m]) / rate(http_requests_total[5m]) * 100", "legendFormat": "%" }],
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "yellow" }, { "value": 5, "color": "red" }] } }
+      }
+    },
+    {
+      "title": "在线用户趋势",
+      "type": "graph",
+      "gridPos": { "x": 0, "y": 3, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "online_users_total", "legendFormat": "在线用户" },
+        { "expr": "sse_connections_active", "legendFormat": "SSE连接" },
+        { "expr": "ws_connections_active", "legendFormat": "WS连接" }
+      ]
+    },
+    {
+      "title": "HTTP 请求速率",
+      "type": "graph",
+      "gridPos": { "x": 12, "y": 3, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "rate(http_requests_total[1m])", "legendFormat": "总 QPS" },
+        { "expr": "rate(http_requests_total{status=~\"4..\"}[1m])", "legendFormat": "4xx" },
+        { "expr": "rate(http_requests_total{status=~\"5..\"}[1m])", "legendFormat": "5xx" }
+      ]
+    },
+    {
+      "title": "API 延迟分布",
+      "type": "heatmap",
+      "gridPos": { "x": 0, "y": 11, "w": 12, "h": 8 },
+      "targets": [{ "expr": "rate(http_request_duration_seconds_bucket[5m])" }]
+    },
+    {
+      "title": "MySQL 连接池",
+      "type": "graph",
+      "gridPos": { "x": 12, "y": 11, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "mysql_connection_pool_active", "legendFormat": "活跃" },
+        { "expr": "mysql_connection_pool_idle", "legendFormat": "空闲" },
+        { "expr": "mysql_connection_pool_wait_count", "legendFormat": "排队" }
+      ]
+    },
+    {
+      "title": "Redis 缓存命中率",
+      "type": "graph",
+      "gridPos": { "x": 18, "y": 11, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "rate(redis_cache_hits[1m])", "legendFormat": "命中" },
+        { "expr": "rate(redis_cache_misses[1m])", "legendFormat": "未命中" }
+      ]
+    },
+    {
+      "title": "飞书同步队列",
+      "type": "graph",
+      "gridPos": { "x": 12, "y": 15, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "feishu_queue_size", "legendFormat": "队列积压" },
+        { "expr": "feishu_dead_queue_size", "legendFormat": "死信" }
+      ]
+    },
+    {
+      "title": "内存使用",
+      "type": "gauge",
+      "gridPos": { "x": 18, "y": 15, "w": 6, "h": 4 },
+      "targets": [{ "expr": "node_memory_usage_percent", "legendFormat": "内存%" }],
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "max": 100, "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 70, "color": "yellow" }, { "value": 85, "color": "red" }] } }
+      }
+    },
+    {
+      "title": "系统负载",
+      "type": "graph",
+      "gridPos": { "x": 0, "y": 19, "w": 8, "h": 6 },
+      "targets": [
+        { "expr": "node_load1", "legendFormat": "1min" },
+        { "expr": "node_load5", "legendFormat": "5min" },
+        { "expr": "node_load15", "legendFormat": "15min" }
+      ]
+    },
+    {
+      "title": "磁盘使用",
+      "type": "graph",
+      "gridPos": { "x": 8, "y": 19, "w": 8, "h": 6 },
+      "targets": [
+        { "expr": "node_filesystem_avail_bytes / node_filesystem_size_bytes * 100", "legendFormat": "可用%" }
+      ]
+    },
+    {
+      "title": "CPU 使用率",
+      "type": "graph",
+      "gridPos": { "x": 16, "y": 19, "w": 8, "h": 6 },
+      "targets": [
+        { "expr": "100 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[1m])) * 100", "legendFormat": "CPU%" }
+      ]
+    }
+  ]
+}

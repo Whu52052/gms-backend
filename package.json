@@ -1,24 +1,35 @@
 {
   "name": "glove-management-system",
-  "version": "3.0.0",
-  "description": "手套/灵巧手/夹爪库存与机器管理系统 - 多人协作版",
+  "version": "4.0.0",
+  "description": "手套/灵巧手/夹爪库存与机器管理系统 - 企业版(500并发)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "cluster": "pm2 start ecosystem.config.js",
+    "stress": "node test_500users.js",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f app"
   },
   "keywords": [
     "inventory",
     "management",
     "glove",
     "dexterous-hand",
-    "gripper"
+    "gripper",
+    "enterprise",
+    "cluster"
   ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "license": "MIT",
   "dependencies": {
     "adm-zip": "^0.5.17",
     "mysql2": "^3.22.5",
     "redis": "^4.6.0",
+    "ws": "^8.16.0",
     "xlsx": "^0.18.5"
   }
 }
