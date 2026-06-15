@@ -152,7 +152,8 @@ function initDB() {
 
 function migrateDB() {
   const migrations = [
-    `ALTER TABLE sn_registry ADD COLUMN attachment TEXT`,
+    `ALTER TABLE sn_registry ADD COLUMN attachment MEDIUMTEXT`,
+    `ALTER TABLE sn_registry MODIFY COLUMN attachment MEDIUMTEXT`,
     `ALTER TABLE sn_registry ADD COLUMN trackingNumber VARCHAR(128)`,
     `ALTER TABLE sn_registry ADD COLUMN shippedAt VARCHAR(64)`,
     `ALTER TABLE sn_registry ADD COLUMN repairedAt VARCHAR(64)`,
@@ -1748,21 +1749,16 @@ async function handleDeleteSNRegistry(req, res, snCode) {
 
 // -- File Upload / Delete --
 function handleUpload(req, res, body) {
+  // Store attachments as base64 in DB (not filesystem — prevents data loss on server rebuild)
   const { filename, data } = body;
   if (!data || !filename) return sendJSON(res, { error: '缺少文件数据' }, 400);
   const matches = data.match(/^data:([^;]+);base64,(.+)$/);
   if (!matches) return sendJSON(res, { error: '无效的数据格式' }, 400);
-  const mimeType = matches[1];
   const base64Data = matches[2];
   const decodedBuf = Buffer.from(base64Data, 'base64');
   if (decodedBuf.length > 10 * 1024 * 1024) return sendJSON(res, { error: '文件大小超过限制(最大10MB)' }, 413);
-  const ext = mimeType === 'image/png' ? '.png' : mimeType === 'image/jpeg' ? '.jpg'
-    : mimeType === 'image/gif' ? '.gif' : mimeType === 'image/webp' ? '.webp'
-    : mimeType === 'application/pdf' ? '.pdf' : '.bin';
-  const safeName = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + ext;
-  const filePath = path.join(UPLOADS_DIR, safeName);
-  fs.writeFileSync(filePath, decodedBuf);
-  sendJSON(res, { path: '/uploads/' + safeName });
+  // Return the base64 data URL directly — frontend stores it in the attachment field
+  sendJSON(res, { path: data });
 }
 
 function handleDeleteUpload(req, res, body) {
