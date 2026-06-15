@@ -1,11 +1,16 @@
 /**
  * Glove Management System - Backend Server (CloudBase Edition)
  * Storage: MySQL (mysql2) + SSE for real-time sync
+ * Performance: Node.js cluster (multi-core) + gzip + memory cache
  */
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
+const cluster = require('cluster');
+const os = require('os');
 
 // ==================== FEISHU SYNC ====================
 const feishu = require('./feishu');
@@ -499,14 +504,24 @@ function parseBody(req) {
   });
 }
 
-function sendJSON(res, data, status = 200) {
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
+function sendJSON(res, data, status = 200, req) {
+  const body = Buffer.from(JSON.stringify(data), 'utf-8');
+  const accept = (req && req.headers && req.headers['accept-encoding']) || '';
+  const useGzip = accept.includes('gzip') && body.length > 1024;
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-  });
-  res.end(JSON.stringify(data));
+  };
+  if (useGzip) {
+    headers['Content-Encoding'] = 'gzip';
+    res.writeHead(status, headers);
+    res.end(zlib.gzipSync(body));
+  } else {
+    res.writeHead(status, headers);
+    res.end(body);
+  }
 }
 
 function requireAuth(req, res) {
@@ -533,9 +548,24 @@ function serveStatic(req, res) {
   const ext = path.extname(filePath);
   if (!MIME_TYPES[ext]) return false;
   try {
-    const content = fs.readFileSync(filePath);
-    res.writeHead(200, { 'Content-Type': MIME_TYPES[ext], 'Cache-Control': 'no-store, no-cache, must-revalidate' });
-    res.end(content);
+    // Use memory cache for static assets (1h TTL)
+    const cached = getStaticFile(filePath, MIME_TYPES[ext], filePath);
+    if (!cached) return false;
+    const accept = req.headers['accept-encoding'] || '';
+    const useGzip = accept.includes('gzip') && cached.gzipped && cached.gzipped.length < cached.data.length;
+    const headers = {
+      'Content-Type': cached.contentType,
+      'Cache-Control': 'public, max-age=3600',
+      'ETag': '"' + cached.ts.toString(36) + '"',
+    };
+    if (useGzip) {
+      headers['Content-Encoding'] = 'gzip';
+      res.writeHead(200, headers);
+      res.end(cached.gzipped);
+    } else {
+      res.writeHead(200, headers);
+      res.end(cached.data);
+    }
     return true;
   } catch { return false; }
 }
@@ -1806,7 +1836,7 @@ async function handleSync(req, res) {
     techSupport: tsRows[0].map(r => JSON.parse(r.data)),
   };
   });
-  sendJSON(res, cachedData);
+  sendJSON(res, cachedData, 200, req);
 }
 
 // ==================== SERVER ====================
@@ -2098,5 +2128,36 @@ setInterval(() => {
   console.log(`[HEALTH] Memory: ${Math.round(mem.heapUsed / 1048576)}MB | SSE: ${sseClients.size} | Uptime: ${Math.round(process.uptime() / 3600)}h`);
 }, 2 * 3600 * 1000);
 
-// Start the server
-startup();
+// ==================== STATIC FILE CACHE ====================
+const staticCache = new Map(); // path → { data, contentType, gzipped }
+
+function getStaticFile(filePath, contentType, cacheKey) {
+  const cached = staticCache.get(cacheKey);
+  if (cached && (Date.now() - cached.ts) < 3600000) return cached; // 1h cache
+  try {
+    const data = fs.readFileSync(filePath);
+    const gzipped = zlib.gzipSync(data);
+    const entry = { data, gzipped, contentType, ts: Date.now() };
+    staticCache.set(cacheKey, entry);
+    return entry;
+  } catch { return null; }
+}
+
+// ==================== CLUSTER ====================
+const CPU_COUNT = os.cpus().length;
+const WORKER_COUNT = Math.min(CPU_COUNT, 2); // 2 cores max for 2C2G server
+
+if (cluster.isMaster) {
+  console.log(`[CLUSTER] Master ${process.pid} starting ${WORKER_COUNT} workers...`);
+  for (let i = 0; i < WORKER_COUNT; i++) {
+    cluster.fork();
+  }
+  cluster.on('exit', (worker, code) => {
+    console.log(`[CLUSTER] Worker ${worker.process.pid} died (${code}), restarting...`);
+    setTimeout(() => cluster.fork(), 1000);
+  });
+} else {
+  // Worker process
+  startup();
+  console.log(`[CLUSTER] Worker ${process.pid} ready`);
+}
