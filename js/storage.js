@@ -664,14 +664,14 @@ const Storage = {
         this.saveMachines(m);
       }
     } catch(e) { console.log('Full sync machines:', e.message); }
-    try { const t = await API.getTransactions(); if (Array.isArray(t)) {
+    try { const t = await API.getTransactions(); if (Array.isArray(t) && t.length > 0) {
       try {
         const deletedIds = JSON.parse(localStorage.getItem('gms_deleted_tx_ids') || '[]');
         const activeDeleted = new Set(deletedIds.filter(e => e.expires > Date.now()).map(e => e.id));
         this.saveTransactions(activeDeleted.size > 0 ? t.filter(tx => !activeDeleted.has(tx.id)) : t);
       } catch { this.saveTransactions(t); }
     } } catch(e) { console.log('Full sync txs:', e.message); }
-    try { const a = await API.getAuditLog(); if (Array.isArray(a)) localStorage.setItem(this.KEYS.AUDIT_LOG, JSON.stringify(a)); } catch(e) { console.log('Full sync audit:', e.message); }
+    try { const a = await API.getAuditLog(); if (Array.isArray(a) && a.length > 0) localStorage.setItem(this.KEYS.AUDIT_LOG, JSON.stringify(a)); } catch(e) { console.log('Full sync audit:', e.message); }
     try { const s = await API.getSettings(); if (s && !s.error) this.saveSettings(s); } catch(e) {}
     try { const e = await API.getEquipmentConfig(); if (Array.isArray(e)) localStorage.setItem('gms_equipment_config', JSON.stringify(e)); } catch(e) {}
     try { const i = await API.getInventoryConfig(); if (Array.isArray(i)) localStorage.setItem('gms_inventory_config', JSON.stringify(i)); } catch(e) {}
