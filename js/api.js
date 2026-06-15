@@ -182,7 +182,7 @@ const API = {
             await Storage._syncFromServer();
             this._notifyUIUpdate();
           }
-        }, 500);
+        }, 3000);
       };
       const silentSyncCfg = () => {
         if (this._syncCfgTimer) clearTimeout(this._syncCfgTimer);

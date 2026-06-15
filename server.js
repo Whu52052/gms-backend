@@ -396,7 +396,8 @@ function _invalidateCache(event) {
   for (const [evt, key] of Object.entries(map)) {
     if (event === evt) _cache.delete(key);
   }
-  if (event !== 'connected') _cache.delete('sync');
+  // Note: sync cache uses its own TTL (30s), NOT invalidated on every SSE event
+  // to prevent thundering herd — 200 users × every broadcast = DB overload
 }
 
 async function _cached(key, fetcher, ttlOverride) {
