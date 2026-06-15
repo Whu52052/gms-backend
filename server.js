@@ -49,6 +49,11 @@ async function initPool() {
     keepAliveInitialDelay: 10000,
   });
 
+  // Handle pool errors — don't let them crash the server
+  pool.on('error', (err) => {
+    console.error('[DB] Pool error (non-fatal):', err.message);
+  });
+
   // Test connection
   const conn = await pool.getConnection();
   await conn.ping();
@@ -437,12 +442,17 @@ function validateTable(table) {
 }
 
 async function readJSONArray(table, limit) {
-  validateTable(table);
-  let sql = `SELECT data FROM ${table} ORDER BY id DESC`;
-  const effectiveLimit = limit ? parseInt(limit) : 500;
-  sql += ` LIMIT ${Math.min(effectiveLimit, 50000)}`;
-  const [rows] = await pool.execute(sql);
-  return rows.map(r => JSON.parse(r.data)).reverse();
+  try {
+    validateTable(table);
+    let sql = `SELECT data FROM ${table} ORDER BY id DESC`;
+    const effectiveLimit = limit ? parseInt(limit) : 500;
+    sql += ` LIMIT ${Math.min(effectiveLimit, 50000)}`;
+    const [rows] = await pool.execute(sql);
+    return rows.map(r => JSON.parse(r.data)).reverse();
+  } catch(e) {
+    console.error('[DB] readJSONArray error:', table, e.message);
+    return [];
+  }
 }
 
 async function readJSONById(table, id) {
@@ -2050,9 +2060,9 @@ process.on('uncaughtException', (err) => {
   gracefulShutdown('uncaughtException');
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[FATAL] Unhandled rejection:', reason);
-  try { fs.appendFileSync(path.join(DATA_DIR, 'crash.log'), `${new Date().toISOString()} Unhandled: ${reason}\n\n`); } catch {}
-  gracefulShutdown('unhandledRejection');
+  console.error('[ERROR] Unhandled rejection (non-fatal):', reason?.message || reason);
+  // Do NOT crash — unhandled rejections are often transient (e.g., pool connection reset)
+  // Log it for debugging but keep the server running
 });
 
 let shuttingDown = false;
