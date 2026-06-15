@@ -1327,7 +1327,7 @@ const App = {
         // 同步到本地缓存（服务端为权威，完全替换）
         Storage.replaceSNRegistry(registry);
 
-        const serverTxs = await API.getTransactions(10000);
+        const serverTxs = await API.getTransactions(500);
         transactions = Array.isArray(serverTxs) ? serverTxs : [];
         if (transactions.length > 0) Storage.saveTransactions(transactions);
       } catch(e) {
