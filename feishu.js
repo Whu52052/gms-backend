@@ -155,7 +155,7 @@ function mapToFeishuFields(item) {
     '完成时间': toTimestamp(item.completedAt),
     '等待时长': formatDuration(item.waitSeconds),
     '维修时长': formatDuration(item.repairSeconds),
-    '总时长': formatDuration(item.totalSeconds),
+    '总时长': toMinutes(item.totalSeconds),
     '维修结果': item.result || '',
   };
 }
@@ -170,6 +170,14 @@ function formatDuration(seconds) {
   const h = Math.floor(m / 60);
   const rm = m % 60;
   return rm > 0 ? h + '时' + rm + '分' : h + '小时';
+}
+
+// Plain number in minutes (for Feishu number field — sum/average friendly)
+function toMinutes(seconds) {
+  if (seconds == null || seconds === '') return null;
+  const s = parseInt(seconds);
+  if (isNaN(s)) return null;
+  return Math.round((s / 60) * 10) / 10; // 1 decimal place
 }
 
 // ==================== RECORD ID MAPPING ====================
