@@ -751,8 +751,8 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
   broadcastSSE('tech_support_updated', { action: 'created', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
-  // Sync to Feishu (background, zero impact on response time)
-  setImmediate(() => feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Submit sync error:', e.message)));
+  // Queue for Feishu batch sync (instant, zero impact on response)
+  feishu.syncToFeishu(item);
 }
 
 async function handleRespondTechSupport(req, res, authUser, id) {
@@ -779,7 +779,7 @@ async function handleRespondTechSupport(req, res, authUser, id) {
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
   // Sync to Feishu (background, zero impact on response time)
-  setImmediate(() => feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Respond sync error:', e.message)));
+  feishu.syncToFeishu(item);
 }
 
 async function handleCompleteTechSupport(req, res, authUser, id, body) {
@@ -808,7 +808,7 @@ async function handleCompleteTechSupport(req, res, authUser, id, body) {
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
   // Sync to Feishu (background, zero impact on response time)
-  setImmediate(() => feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Complete sync error:', e.message)));
+  feishu.syncToFeishu(item);
 }
 
 async function handleDeleteTechSupport(req, res, authUser, id) {
@@ -822,7 +822,7 @@ async function handleDeleteTechSupport(req, res, authUser, id) {
   broadcastSSE('tech_support_updated', { action: 'deleted', id });
   sendJSON(res, { success: true });
   // Sync delete to Feishu (background, zero impact on response time)
-  setImmediate(() => feishu.deleteFromFeishu(id).catch(e => console.error('[Feishu] Delete sync error:', e.message)));
+  feishu.deleteFromFeishu(id);
 }
 
 // Helper: Update the latest machine record's status by machineNumber

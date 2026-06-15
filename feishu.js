@@ -202,84 +202,80 @@ function cleanFields(fields) {
   return cleaned;
 }
 
-/**
- * Sync a tech_support record to Feishu (create or update)
- */
-async function syncToFeishu(item) {
-  try {
-    await ensureInit();
-    const existingRecordId = recordIdMap[item.id];
+// ==================== BATCH QUEUE ====================
+// Batch syncs every 3s to avoid hammering Feishu API (which is slow)
+const _queue = new Map(); // id → item or 'DELETE'
+let _flushTimer = null;
 
-    if (existingRecordId) {
-      // Update existing record
-      const fields = cleanFields(mapToFeishuFields(item));
-      const res = await feishuAuthRequest(
-        'PUT',
-        `/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.tableId}/records/${existingRecordId}`,
-        JSON.stringify({ fields })
-      );
+function scheduleFlush() {
+  if (_flushTimer) return;
+  _flushTimer = setTimeout(flushQueue, 3000);
+}
 
-      if (res.code === 0) {
-        console.log('[Feishu] ✅ Updated record:', item.id);
-      } else if (res.code === 1250101) {
-        // Record not found (maybe deleted in Feishu), create new
-        delete recordIdMap[item.id];
-        return await syncToFeishu(item);
+async function flushQueue() {
+  _flushTimer = null;
+  if (_queue.size === 0) return;
+  await ensureInit();
+
+  const items = new Map(_queue);
+  _queue.clear();
+
+  let ok = 0, fail = 0;
+  for (const [id, item] of items) {
+    try {
+      if (item === '_DELETE_') {
+        const rid = recordIdMap[id];
+        if (!rid) continue;
+        const res = await feishuAuthRequest('DELETE',
+          `/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.tableId}/records/${rid}`);
+        if (res.code === 0 || res.code === 1250101) { delete recordIdMap[id]; ok++; }
+        else { fail++; console.error('[Feishu] Batch delete error:', res.code); }
       } else {
-        console.error('[Feishu] Update error:', res.code, res.msg);
+        const fields = cleanFields(mapToFeishuFields(item));
+        const existingRecordId = recordIdMap[id];
+        if (existingRecordId) {
+          const res = await feishuAuthRequest('PUT',
+            `/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.tableId}/records/${existingRecordId}`,
+            JSON.stringify({ fields }));
+          if (res.code === 0) ok++;
+          else if (res.code === 1250101) { delete recordIdMap[id]; await _singleCreate(id, fields); ok++; }
+          else { fail++; console.error('[Feishu] Batch update error:', res.code, res.msg); }
+        } else {
+          await _singleCreate(id, fields);
+          ok++;
+        }
       }
-    } else {
-      // Create new record
-      const fields = cleanFields(mapToFeishuFields(item));
-      const res = await feishuAuthRequest(
-        'POST',
-        `/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.tableId}/records`,
-        JSON.stringify({ fields })
-      );
+    } catch (e) { fail++; console.error('[Feishu] Batch item error:', e.message); }
+  }
+  if (ok > 0 || fail > 0) console.log('[Feishu] Batch flushed:', ok, 'ok,', fail, 'fail');
+}
 
-      if (res.code === 0 && res.data && res.data.record) {
-        recordIdMap[item.id] = res.data.record.record_id;
-        console.log('[Feishu] ✅ Created record:', item.id, '→', res.data.record.record_id);
-      } else {
-        console.error('[Feishu] Create error:', res.code, res.msg, JSON.stringify(res).slice(0, 200));
-      }
-    }
-  } catch (err) {
-    console.error('[Feishu] Sync error:', err.message);
-    // Don't throw — Feishu sync should never break the main app
+async function _singleCreate(id, fields) {
+  const res = await feishuAuthRequest('POST',
+    `/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.tableId}/records`,
+    JSON.stringify({ fields }));
+  if (res.code === 0 && res.data?.record) {
+    recordIdMap[id] = res.data.record.record_id;
+    console.log('[Feishu] ✅ Created:', id);
+  } else {
+    console.error('[Feishu] Create error:', res.code, res.msg);
   }
 }
 
 /**
- * Delete a tech_support record from Feishu
+ * Queue a tech_support record to be synced to Feishu (returns immediately)
  */
-async function deleteFromFeishu(techSupportId) {
-  try {
-    await ensureInit();
-    const existingRecordId = recordIdMap[techSupportId];
-    if (!existingRecordId) {
-      console.log('[Feishu] No Feishu record ID for:', techSupportId, '- skipping delete');
-      return;
-    }
+function syncToFeishu(item) {
+  _queue.set(item.id, item);
+  scheduleFlush();
+}
 
-    const res = await feishuAuthRequest(
-      'DELETE',
-      `/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.tableId}/records/${existingRecordId}`
-    );
-
-    if (res.code === 0) {
-      delete recordIdMap[techSupportId];
-      console.log('[Feishu] 🗑️ Deleted record:', techSupportId);
-    } else if (res.code === 1250101) {
-      // Already deleted
-      delete recordIdMap[techSupportId];
-      console.log('[Feishu] Record already deleted:', techSupportId);
-    } else {
-      console.error('[Feishu] Delete error:', res.code, res.msg);
-    }
-  } catch (err) {
-    console.error('[Feishu] Delete error:', err.message);
-  }
+/**
+ * Queue a tech_support record for deletion from Feishu (returns immediately)
+ */
+function deleteFromFeishu(techSupportId) {
+  _queue.set(techSupportId, '_DELETE_');
+  scheduleFlush();
 }
 
 /**
