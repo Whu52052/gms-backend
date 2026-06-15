@@ -155,6 +155,7 @@ function mapToFeishuFields(item) {
     '完成时间': toTimestamp(item.completedAt),
     '等待时长': formatDuration(item.waitSeconds),
     '维修时长': formatDuration(item.repairSeconds),
+    '总时长': formatDuration(item.totalSeconds),
     '维修结果': item.result || '',
   };
 }
