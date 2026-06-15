@@ -91,6 +91,11 @@ const API = {
           this._saveLoginHistory(data.user);
           this._listenSSE();
           this._setupBeforeUnload();
+          // 🔴 微信级实时: 启动 WebSocket 双向通信
+          if (typeof Realtime !== 'undefined') {
+            Realtime.init(data.token);
+            Realtime.requestNotificationPermission();
+          }
           return { success: true, user: data.user };
         }
         return { success: false, message: data.error };

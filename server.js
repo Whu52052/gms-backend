@@ -15,6 +15,9 @@ const os = require('os');
 // ==================== FEISHU SYNC ====================
 const feishu = require('./feishu');
 
+// ==================== REALTIME ENGINE ====================
+const realtime = require('./realtime');
+
 // ==================== REDIS CLIENT ====================
 const redis = require('redis');
 const REDIS_URL = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || '6379'}`;
@@ -458,40 +461,17 @@ async function invalidateUserTokens(userId) {
   saveTokens();
 }
 
-// ==================== SSE CLIENTS ====================
-const sseClients = new Set();
-let sseHeartbeatInterval = null;
+// ==================== REALTIME (SSE + WebSocket 双通道) ====================
+// realtime 引擎统一管理 SSE 和 WebSocket 连接
+// SSE 客户端通过 realtime.addSSEClient/res 添加
+// broadcastSSE 保留为便捷函数, 实际走 realtime 引擎
+const sseClients = realtime.getSSEClients();
 
 function broadcastSSE(event, data) {
-  const payload = JSON.stringify({ event, data });
-  if (redisPub) {
-    // Cross-worker: publish to Redis, all workers forward to their own clients
-    redisPub.publish('sse:all', payload).catch(() => {});
-  }
-  // Local broadcast (always working even without Redis)
-  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  sseClients.forEach(res => { try { res.write(msg); } catch { sseClients.delete(res); } });
-  // Invalidate cache on data mutations
+  // 通过 realtime 引擎同时投递到 WS + SSE (含 Redis 跨 Worker)
+  realtime.deliver(event, data, { force: true });
+  // 兼容旧逻辑: 缓存失效
   _invalidateCache(event);
-}
-
-// Subscribe to Redis Pub/Sub for SSE (receive broadcasts from other workers)
-async function _initSSEPubSub() {
-  if (!redisSub) return;
-  await redisSub.subscribe('sse:all', (raw) => {
-    try {
-      const { event, data } = JSON.parse(raw);
-      const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-      sseClients.forEach(res => { try { res.write(msg); } catch { sseClients.delete(res); } });
-    } catch {}
-  });
-  // Heartbeat: keep SSE connections alive (prevent proxy/nginx timeouts)
-  sseHeartbeatInterval = setInterval(() => {
-    if (sseClients.size === 0) return;
-    const hb = ': heartbeat\n\n';
-    sseClients.forEach(res => { try { res.write(hb); } catch { sseClients.delete(res); } });
-  }, 30000);
-  console.log(`[Worker ${process.env.pm_id || '?'}] SSE Pub/Sub + heartbeat ready`);
 }
 
 // ==================== IN-MEMORY CACHE + REQUEST COALESCING ====================
@@ -912,8 +892,11 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
   broadcastSSE('tech_support_updated', { action: 'created', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
-  // Real-time Feishu sync (non-blocking)
-  setImmediate(() => feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Sync err:', e.message)));
+  // 🔴 微信级实时通知: 运维系统立即看到新请求
+  setImmediate(() => {
+    realtime.notifyNewTechSupport(item);
+    feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Sync err:', e.message));
+  });
 }
 
 async function handleRespondTechSupport(req, res, authUser, id) {
@@ -939,8 +922,11 @@ async function handleRespondTechSupport(req, res, authUser, id) {
   broadcastSSE('tech_support_updated', { action: 'responded', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
-  // Sync to Feishu (background, zero impact on response time)
-  setImmediate(() => feishu.syncToFeishu(item).catch(e => console.error("[Feishu] Sync err:", e.message)));
+  // 🔴 微信级实时通知: 运营提交人立即看到"已响应"
+  setImmediate(() => {
+    realtime.notifyTechResponded(item);
+    feishu.syncToFeishu(item).catch(e => console.error("[Feishu] Sync err:", e.message));
+  });
 }
 
 async function handleCompleteTechSupport(req, res, authUser, id, body) {
@@ -969,8 +955,11 @@ async function handleCompleteTechSupport(req, res, authUser, id, body) {
   broadcastSSE('tech_support_updated', { action: 'completed', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
-  // Sync to Feishu (background, zero impact on response time)
-  setImmediate(() => feishu.syncToFeishu(item).catch(e => console.error("[Feishu] Sync err:", e.message)));
+  // 🔴 微信级实时通知: 运营提交人立即看到"维修完成"
+  setImmediate(() => {
+    realtime.notifyTechCompleted(item);
+    feishu.syncToFeishu(item).catch(e => console.error("[Feishu] Sync err:", e.message));
+  });
 }
 
 async function handleDeleteTechSupport(req, res, authUser, id) {
@@ -2055,15 +2044,9 @@ const server = http.createServer(async (req, res) => {
         'Connection': 'keep-alive',
         'Access-Control-Allow-Origin': '*',
       });
-      res.write('event: connected\ndata: {}\n\n');
-      sseClients.add(res);
-
-      // Keepalive: send heartbeat every 25s to prevent gateway timeout
-      const keepalive = setInterval(() => {
-        try { res.write(':heartbeat\n\n'); } catch { clearInterval(keepalive); sseClients.delete(res); }
-      }, 25000);
-
-      req.on('close', () => { clearInterval(keepalive); sseClients.delete(res); });
+      res.write('event: connected\ndata: {"status":"ok"}\n\n');
+      realtime.addSSEClient(res);
+      req.on('close', () => realtime.removeSSEClient(res));
       return;
     }
 
@@ -2241,8 +2224,8 @@ async function startup() {
     await seedDefaults();
     console.log('[DB] Database initialized successfully');
 
-    // Init SSE Pub/Sub cross-worker broadcast
-    await _initSSEPubSub();
+    // Init realtime engine (WebSocket + SSE 双通道)
+    realtime.init(server, { isConnected: () => redisClient && redisClient.isReady, subscribe: async (ch, fn) => { if (redisSub) await redisSub.subscribe(ch, fn); }, SSE_CHANNEL: 'sse:all' });
 
     // Feishu sync initialized lazily on first tech_support operation
   } catch (e) {
@@ -2282,9 +2265,9 @@ async function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[SHUTDOWN] Received ${signal}, shutting down gracefully...`);
-  if (sseHeartbeatInterval) clearInterval(sseHeartbeatInterval);
-  sseClients.forEach(res => { try { res.end(); } catch {} });
-  sseClients.clear();
+  const allSSE = realtime.getSSEClients();
+  allSSE.forEach(res => { try { res.end(); } catch {} });
+  allSSE.clear();
   try { await pool.end(); console.log('[SHUTDOWN] MySQL pool closed.'); } catch {}
   try { if (redisClient) { await redisClient.quit(); console.log('[SHUTDOWN] Redis closed.'); } } catch {}
   process.exit(0);
