@@ -2184,11 +2184,16 @@ const staticCache = new Map(); // path → { data, contentType, gzipped }
 
 function getStaticFile(filePath, contentType, cacheKey) {
   const cached = staticCache.get(cacheKey);
-  if (cached && (Date.now() - cached.ts) < 3600000) return cached; // 1h cache
+  // Check file mtime to auto-invalidate cache when file is updated (e.g. git pull)
+  try {
+    const mtime = fs.statSync(filePath).mtimeMs;
+    if (cached && cached.fileMtime === mtime && (Date.now() - cached.ts) < 3600000) return cached; // 1h cache, mtime-checked
+  } catch { if (cached) staticCache.delete(cacheKey); return null; }
   try {
     const data = fs.readFileSync(filePath);
     const gzipped = zlib.gzipSync(data);
-    const entry = { data, gzipped, contentType, ts: Date.now() };
+    const fileMtime = fs.statSync(filePath).mtimeMs;
+    const entry = { data, gzipped, contentType, fileMtime, ts: Date.now() };
     staticCache.set(cacheKey, entry);
     return entry;
   } catch { return null; }
