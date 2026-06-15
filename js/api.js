@@ -544,6 +544,12 @@ const API = {
     return data || { success: false, message: '请求失败' };
   },
 
+  async resetPassword(userId, newPassword) {
+    if (!this.online) return { success: false, message: '离线模式不支持重置密码' };
+    const data = await this._fetch('POST', '/api/users/' + userId + '/reset-password', { newPassword });
+    return data || { success: false, message: '请求失败' };
+  },
+
   async getUsers() {
     if (!this.online) return [];
     const data = await this._fetch('GET', '/api/users');

@@ -918,6 +918,7 @@ const OpsApp = {
                 + '<td style="font-size:0.8rem;color:var(--text-secondary);">' + (u.createdAt ? new Date(u.createdAt).toLocaleDateString('zh-CN') : '-') + '</td>'
                 + '<td class="um-actions">'
                 + (isSuper && u.role !== 'superadmin' ? '<button class="btn btn-xs btn-outline" onclick="OpsApp.doPromoteUser(\'' + u.id + '\', \'' + u.username + '\', \'' + u.role + '\')">' + (u.role === 'admin' ? '降级为用户' : '晋升为管理员') + '</button>' : '')
+                + (!isSelf && u.role !== 'superadmin' && (isSuper || u.role === 'user') ? '<button class="btn btn-xs btn-outline" onclick="OpsApp.showResetPasswordForm(\'' + u.id + '\', \'' + (u.displayName || u.username) + '\')" title="重置密码" style="color:var(--color-warning,#f59e0b);">🔑 密码</button>' : '')
                 + (!isSelf && u.role !== 'superadmin' ? '<button class="btn btn-xs btn-danger" onclick="OpsApp.doDeleteUser(\'' + u.id + '\', \'' + u.username + '\')">删除</button>' : '')
                 + '</td>'
                 + '</tr>';
@@ -983,6 +984,46 @@ const OpsApp = {
       this.renderUserManagement();
     } else {
       this.notify(result?.error || result?.message || '删除失败', 'error');
+    }
+  },
+
+  // ==================== RESET USER PASSWORD ====================
+  showResetPasswordForm(userId, displayName) {
+    const user = API.currentUser;
+    const html = `
+      <div class="form-group">
+        <label>目标用户</label>
+        <input type="text" value="${displayName}" disabled style="width:100%;padding:8px;background:var(--bg-secondary,#f8f9fb);border:1px solid var(--border-color);border-radius:8px;">
+      </div>
+      <div class="form-group">
+        <label>新密码 <span class="required">*</span></label>
+        <input type="password" id="reset-pwd-new" placeholder="输入新密码（至少4个字符）" required minlength="4">
+      </div>
+      <div class="form-group">
+        <label>确认新密码 <span class="required">*</span></label>
+        <input type="password" id="reset-pwd-confirm" placeholder="再次输入新密码" required minlength="4">
+      </div>
+      <p style="font-size:0.78rem;color:var(--text-tertiary);">💡 重置后该用户需使用新密码重新登录</p>
+    `;
+    this.showModal('🔑 重置密码 — ' + displayName, html, async () => {
+      const newPw = document.getElementById('reset-pwd-new')?.value;
+      const confirmPw = document.getElementById('reset-pwd-confirm')?.value;
+      if (!newPw || !confirmPw) { this.notify('请填写新密码和确认密码', 'warning'); return false; }
+      if (newPw !== confirmPw) { this.notify('两次输入的新密码不一致', 'warning'); return false; }
+      if (newPw.length < 4) { this.notify('新密码至少4个字符', 'warning'); return false; }
+      return await this.doResetPassword(userId, displayName, newPw);
+    });
+  },
+
+  async doResetPassword(userId, displayName, newPassword) {
+    const result = await API.resetPassword(userId, newPassword);
+    if (result && result.success) {
+      this.notify(displayName + ' 的密码已重置');
+      this.renderUserManagement();
+      return true;
+    } else {
+      this.notify(result?.error || result?.message || '重置失败', 'error');
+      return false;
     }
   },
 

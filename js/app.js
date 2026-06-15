@@ -4955,8 +4955,14 @@ const App = {
     };
     const canEdit = (u) => {
       if (u.id === currentUser.id) return true; // everyone can edit self
-      if (isSuperAdmin) return true; // superadmin can edit anyone
-      if (isAdmin && u.role === 'user') return true; // admin can edit normal users
+      if (isSuperAdmin) {
+        if (u.system !== currentUser.system) return false; // different system
+        if (u.role === 'superadmin' && u.id !== currentUser.id) return false; // can't edit other superadmin
+        return true; // superadmin can edit admins and users in same system
+      }
+      if (isAdmin && u.role === 'user') {
+        return u.parentId === currentUser.id || u.createdBy === currentUser.id;
+      }
       return false;
     };
 

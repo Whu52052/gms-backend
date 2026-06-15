@@ -662,6 +662,17 @@ async function handleUpdateUser(req, res, user, userId, body) {
   if (!isSelf && !isAdmin && !isSuper) return sendJSON(res, { error: '无权限修改该账户' }, 403);
   if (!isSelf && isAdmin && targetUser.role === 'admin') return sendJSON(res, { error: '管理员无法修改其他管理员' }, 403);
   if (!isSelf && isAdmin && targetUser.role === 'superadmin') return sendJSON(res, { error: '无权限修改超级管理员' }, 403);
+  // Admin can only modify their own group members (subordinates)
+  if (!isSelf && isAdmin && targetUser.role === 'user') {
+    if (targetUser.parentId !== user.userId && targetUser.createdBy !== user.userId) {
+      return sendJSON(res, { error: '只能修改自己组员的账户' }, 403);
+    }
+  }
+  // Superadmin: same-system only, cannot modify other superadmins
+  if (!isSelf && isSuper) {
+    if (targetUser.role === 'superadmin') return sendJSON(res, { error: '无法修改其他超级管理员' }, 403);
+    if (targetUser.system !== user.system) return sendJSON(res, { error: '只能修改本系统内的用户' }, 403);
+  }
 
   const [dup] = await pool.execute('SELECT id FROM users WHERE username = ? AND id != ?', [username.trim(), userId]);
   if (dup.length > 0) return sendJSON(res, { error: '用户名已存在' }, 400);
@@ -1128,6 +1139,45 @@ async function handleChangePassword(req, res, user, body) {
   if (rows[0].passwordHash !== hashPassword(oldPassword)) return sendJSON(res, { error: '旧密码错误' }, 403);
   await pool.execute('UPDATE users SET passwordHash = ? WHERE id = ?', [hashPassword(newPassword), user.userId]);
   sendJSON(res, { success: true });
+}
+
+// Reset another user's password (superadmin → admin, admin → group members)
+async function handleResetPassword(req, res, user, userId, body) {
+  const { newPassword } = body;
+  if (!newPassword || newPassword.length < 4) return sendJSON(res, { error: '新密码至少4个字符' }, 400);
+
+  // Only admin and superadmin can reset others' passwords
+  if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限' }, 403);
+
+  // Cannot reset own password through this endpoint
+  if (user.userId === userId) return sendJSON(res, { error: '请使用修改密码功能修改自己的密码' }, 400);
+
+  const [target] = await pool.execute('SELECT * FROM users WHERE id = ?', [userId]);
+  if (target.length === 0) return sendJSON(res, { error: '用户不存在' }, 404);
+  const targetUser = target[0];
+
+  // Superadmin: can reset admin/user passwords, same-system only, cannot reset other superadmins
+  if (user.role === 'superadmin') {
+    if (targetUser.role === 'superadmin') return sendJSON(res, { error: '无法重置其他超级管理员的密码' }, 403);
+    if (targetUser.system !== user.system) return sendJSON(res, { error: '只能重置本系统内用户的密码' }, 403);
+  }
+
+  // Admin: can only reset their own group members' passwords (not other admins)
+  if (user.role === 'admin') {
+    if (targetUser.role === 'admin' || targetUser.role === 'superadmin') return sendJSON(res, { error: '无法重置管理员或超级管理员的密码' }, 403);
+    if (targetUser.parentId !== user.userId && targetUser.createdBy !== user.userId) {
+      return sendJSON(res, { error: '只能重置自己组员的密码' }, 403);
+    }
+  }
+
+  await pool.execute('UPDATE users SET passwordHash = ? WHERE id = ?', [hashPassword(newPassword.trim()), userId]);
+
+  // Invalidate target user's tokens (force re-login)
+  Object.keys(tokens).forEach(k => { if (tokens[k].userId === userId) delete tokens[k]; });
+  saveTokens();
+
+  broadcastSSE('users_updated', {});
+  sendJSON(res, { success: true, message: '密码已重置' });
 }
 
 // -- Inventory --
@@ -1977,6 +2027,10 @@ const server = http.createServer(async (req, res) => {
     // Promote/demote user
     const promoteMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/promote$/);
     if (promoteMatch && req.method === 'POST') return handlePromoteUser(req, res, authUser, promoteMatch[1]);
+
+    // Reset user password (admin/superadmin action)
+    const resetPwdMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/reset-password$/);
+    if (resetPwdMatch && req.method === 'POST') return handleResetPassword(req, res, authUser, resetPwdMatch[1], body);
 
     // Change own password
     if (url.pathname === '/api/change-password' && req.method === 'POST') return handleChangePassword(req, res, authUser, body);
