@@ -1566,22 +1566,27 @@ const App = {
   _onSNInput(inputEl) {
     const sn = inputEl.value.trim();
     const preview = inputEl.nextElementSibling;
-    if (!preview || !preview.classList.contains('sn-attach-preview')) return;
-    if (!sn) { preview.innerHTML = ''; return; }
-    // Look up attachment from registry or transactions
-    let attachment = '';
-    const regEntry = Storage.getSNByCode(sn);
-    if (regEntry && regEntry.attachment) attachment = regEntry.attachment;
-    if (!attachment) {
-      const txs = Storage.getTransactions();
-      const snTx = txs.find(t => t.snCode === sn && t.attachment);
-      if (snTx) attachment = snTx.attachment;
+    if (preview && preview.classList.contains('sn-attach-preview')) {
+      if (!sn) { preview.innerHTML = ''; }
+      else {
+        // Look up attachment from registry or transactions
+        let attachment = '';
+        const regEntry = Storage.getSNByCode(sn);
+        if (regEntry && regEntry.attachment) attachment = regEntry.attachment;
+        if (!attachment) {
+          const txs = Storage.getTransactions();
+          const snTx = txs.find(t => t.snCode === sn && t.attachment);
+          if (snTx) attachment = snTx.attachment;
+        }
+        if (attachment) {
+          preview.innerHTML = '<a href="' + attachment + '" target="_blank" title="查看附件"><img src="' + attachment + '" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid var(--border-color);" onerror="this.outerHTML=\'📎\'"></a>';
+        } else {
+          preview.innerHTML = '';
+        }
+      }
     }
-    if (attachment) {
-      preview.innerHTML = `<a href="${attachment}" target="_blank" title="查看附件"><img src="${attachment}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid var(--border-color);" onerror="this.outerHTML='📎'"></a>`;
-    } else {
-      preview.innerHTML = '';
-    }
+    // 自定义自动补全下拉：支持任意位置子串匹配
+    this._showSNAutocomplete(inputEl);
   },
 
   _compressImage(file) {
@@ -5982,9 +5987,170 @@ const App = {
     const deletedSns = new Set(JSON.parse(localStorage.getItem('gms_deleted_sns') || '[]'));
     const sns = registry
       .filter(r => r.snCode && !deletedSns.has(r.snCode))
-      .map(r => r.snCode)
-      .slice(0, 50);
+      .map(r => r.snCode);
     return sns.map(s => `<option value="${s}">`).join('');
+  },
+
+  // 自定义 SN 自动补全下拉（支持任意位置匹配，替代浏览器 datalist 的前缀限制）
+  _suggestionsVisible: false,
+  _suggestionDropdown: null,
+
+  _showSNAutocomplete(inputEl) {
+    const q = inputEl.value.trim().toLowerCase();
+    // 移除旧下拉
+    this._hideSNAutocomplete();
+
+    if (!q || q.length < 1) return;
+
+    // 从 SN 注册表获取所有 SN 码（排除已删除）
+    const registry = Storage.getSNRegistry();
+    const deletedSns = new Set(JSON.parse(localStorage.getItem('gms_deleted_sns') || '[]'));
+    const allSNs = registry
+      .filter(r => r.snCode && !deletedSns.has(r.snCode))
+      .map(r => r.snCode);
+
+    // 子串匹配（大小写不敏感），优先显示开头匹配的
+    const startsWith = [];
+    const contains = [];
+    allSNs.forEach(sn => {
+      const lower = sn.toLowerCase();
+      if (lower === q) return; // 完全相同就跳过
+      if (lower.startsWith(q)) {
+        startsWith.push(sn);
+      } else if (lower.includes(q)) {
+        contains.push(sn);
+      }
+    });
+
+    const matches = [...startsWith, ...contains].slice(0, 15);
+
+    if (matches.length === 0) return;
+
+    // 创建下拉
+    const dropdown = document.createElement('div');
+    dropdown.className = 'sn-autocomplete-dropdown';
+    dropdown.style.cssText = `
+      position:absolute; z-index:9999; max-height:240px; overflow-y:auto;
+      background:var(--bg-primary,#fff); border:1px solid var(--border-color,#e5e7eb);
+      border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.15);
+      width:${inputEl.offsetWidth}px; margin-top:2px;
+      font-size:0.85rem;
+    `;
+
+    matches.forEach((sn, i) => {
+      const item = document.createElement('div');
+      item.className = 'sn-autocomplete-item';
+      // 高亮匹配部分
+      const idx = sn.toLowerCase().indexOf(q);
+      const before = sn.substring(0, idx);
+      const match = sn.substring(idx, idx + q.length);
+      const after = sn.substring(idx + q.length);
+      item.innerHTML = before + '<strong style="color:var(--color-primary,#6366f1);">' + match + '</strong>' + after;
+      item.style.cssText = `
+        padding:8px 12px; cursor:pointer; border-bottom:1px solid var(--border-light,#f3f4f6);
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      `;
+      item.dataset.sn = sn;
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // 防止 blur 先触发
+        inputEl.value = sn;
+        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        this._hideSNAutocomplete();
+        inputEl.focus();
+      });
+      // hover 效果
+      item.addEventListener('mouseenter', () => {
+        item.style.background = 'var(--bg-secondary,#f3f4f6)';
+        dropdown.querySelectorAll('.sn-autocomplete-item').forEach(el => {
+          if (el !== item) el.style.background = '';
+        });
+      });
+      item.addEventListener('mouseleave', () => {
+        item.style.background = '';
+      });
+      dropdown.appendChild(item);
+    });
+
+    // 定位到 input 下方
+    const rect = inputEl.getBoundingClientRect();
+    dropdown.style.position = 'fixed';
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.top = (rect.bottom + 2) + 'px';
+    dropdown.style.width = rect.width + 'px';
+
+    document.body.appendChild(dropdown);
+    this._suggestionDropdown = dropdown;
+    this._suggestionsVisible = true;
+
+    // 点击其他地方关闭
+    const closeHandler = (e) => {
+      if (!dropdown.contains(e.target) && e.target !== inputEl) {
+        this._hideSNAutocomplete();
+        document.removeEventListener('click', closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 50);
+
+    // 输入框失焦时延迟关闭（让 mousedown 先执行）
+    const blurHandler = () => {
+      setTimeout(() => {
+        if (this._suggestionDropdown === dropdown) {
+          this._hideSNAutocomplete();
+        }
+      }, 150);
+    };
+    inputEl.addEventListener('blur', blurHandler, { once: true });
+    dropdown._blurHandler = blurHandler;
+
+    // 键盘导航
+    const keyHandler = (e) => {
+      if (!this._suggestionsVisible) {
+        inputEl.removeEventListener('keydown', keyHandler);
+        return;
+      }
+      const items = dropdown.querySelectorAll('.sn-autocomplete-item');
+      if (items.length === 0) return;
+      let activeIdx = -1;
+      items.forEach((el, i) => { if (el.style.background) activeIdx = i; });
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        activeIdx = (activeIdx + 1) % items.length;
+        items.forEach((el, i) => {
+          el.style.background = i === activeIdx ? 'var(--bg-secondary,#f3f4f6)' : '';
+        });
+        items[activeIdx].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIdx = activeIdx <= 0 ? items.length - 1 : activeIdx - 1;
+        items.forEach((el, i) => {
+          el.style.background = i === activeIdx ? 'var(--bg-secondary,#f3f4f6)' : '';
+        });
+        items[activeIdx].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        if (activeIdx >= 0) {
+          e.preventDefault();
+          inputEl.value = items[activeIdx].dataset.sn;
+          inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+          this._hideSNAutocomplete();
+        }
+      } else if (e.key === 'Escape') {
+        this._hideSNAutocomplete();
+      }
+    };
+    inputEl.addEventListener('keydown', keyHandler);
+    dropdown._keyHandler = keyHandler;
+  },
+
+  _hideSNAutocomplete() {
+    if (this._suggestionDropdown) {
+      if (this._suggestionDropdown._keyHandler) {
+        // 清理键盘监听（通过比较引用）
+      }
+      this._suggestionDropdown.remove();
+      this._suggestionDropdown = null;
+    }
+    this._suggestionsVisible = false;
   },
 
   _readAttachment(fileEl) {
