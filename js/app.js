@@ -1747,7 +1747,7 @@ const App = {
 
   _registerSN(snCode, equipmentType, handType, status, machineNumber, damageReason) {
     if (!snCode) return;
-    const entry = { snCode, equipmentType, handType, status: status || 'available', machineNumber: machineNumber || '', damageReason: damageReason || '' };
+    const entry = { snCode, equipmentType, handType, status: status || 'available', machineNumber: machineNumber || '', damageReason: damageReason || '', updatedBy: this._currentUser() };
     Storage.upsertSNRegistry(entry);
     if (API.online) { API.upsertSNRegistry(entry).catch(() => {}); }
   },
@@ -1755,7 +1755,7 @@ const App = {
   // 等待服务端确认的SN注册（用于机器上下线等关键操作）
   async _registerSNChecked(snCode, equipmentType, handType, status, machineNumber, damageReason) {
     if (!snCode) return true;
-    const entry = { snCode, equipmentType, handType, status: status || 'available', machineNumber: machineNumber || '', damageReason: damageReason || '' };
+    const entry = { snCode, equipmentType, handType, status: status || 'available', machineNumber: machineNumber || '', damageReason: damageReason || '', updatedBy: this._currentUser() };
     Storage.upsertSNRegistry(entry);
     if (API.online) {
       try {
@@ -2802,22 +2802,37 @@ const App = {
   _exportAllSNExcel() {
     const registry = Storage.getSNRegistry();
     const txs = Storage.getTransactions();
-    // Build updater map: find transaction with updatedBy for each SN
+    // Build updater map: first from registry (most reliable), then from transactions
     const updaterMap = {};
-    txs.forEach(t => {
-      if (t.snCode && t.updatedBy && !updaterMap[t.snCode]) updaterMap[t.snCode] = t.updatedBy;
-    });
-    // Also check registry entries for updatedBy
     registry.forEach(r => {
       if (r.snCode && r.updatedBy && !updaterMap[r.snCode]) updaterMap[r.snCode] = r.updatedBy;
     });
+    txs.forEach(t => {
+      if (t.snCode && t.updatedBy && !updaterMap[t.snCode]) updaterMap[t.snCode] = t.updatedBy;
+    });
+    // Fuzzy fallback: if exact SN not found, try matching without hand-prefix (L/R/QL/QR)
+    const fuzzyMatch = (sn) => {
+      if (updaterMap[sn]) return updaterMap[sn];
+      // Try stripping L/R/QL/QR prefix
+      let bareSn = sn.replace(/^[LR]/, '').replace(/^Q[LR]/, '');
+      if (bareSn !== sn && updaterMap[bareSn]) return updaterMap[bareSn];
+      // Try adding common prefixes
+      for (const prefix of ['L', 'R', 'QL', 'QR']) {
+        if (updaterMap[prefix + sn]) return updaterMap[prefix + sn];
+      }
+      // Try substring match
+      for (const [key, val] of Object.entries(updaterMap)) {
+        if (key.includes(sn) || sn.includes(key)) return val;
+      }
+      return '';
+    };
     const eqLabels = { glove: '手套', dexterous_hand: '灵巧手', gripper: '夹爪' };
     const rows = registry.filter(r => r.status !== '_deleted').map(r => {
       let eqLabel = eqLabels[r.equipmentType] || r.equipmentType || '-';
       const handLabel = r.handType === 'left' ? '左手' : r.handType === 'right' ? '右手' : '';
       eqLabel = handLabel ? handLabel + eqLabel : eqLabel;
       const statusLabel = r.status === 'available' ? '可用' : r.status === 'in_use' ? '使用中' : r.status === 'damaged' ? '损坏' : r.status === 'in_repair' ? '售后维修中' : (r.status || '-');
-      return [this._formatTime(r.updatedAt), eqLabel, r.snCode, statusLabel, r.machineNumber || '', updaterMap[r.snCode] || ''];
+      return [this._formatTime(r.updatedAt), eqLabel, r.snCode, statusLabel, r.machineNumber || '', r.updatedBy || fuzzyMatch(r.snCode)];
     });
     const header = ['时间', '设备类型', 'SN码', '状态', '机器编号', '更新人'];
     const BOM = '﻿';
