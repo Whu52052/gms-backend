@@ -3533,15 +3533,7 @@ const App = {
   },
 
   _renderMachineSNPairs(machineNumber) {
-    // Show pairs if machine is online, waiting for repair, or being repaired
-    const machines = Storage.getMachines();
-    const machineRecs = machines.filter(m => m.machineNumber === machineNumber)
-      .sort((a, b) => new Date(b.updatedAt || b.id).getTime() - new Date(a.updatedAt || a.id).getTime());
-    if (machineRecs.length === 0) return '';
-    const latestStatus = machineRecs[0].status;
-    const showSNStatuses = ['online', 'waiting_repair', 'repairing'];
-    if (!showSNStatuses.includes(latestStatus)) return '';
-
+    // Show SN pairs for any machine that has them (not just online)
     const transactions = Storage.getTransactions();
     const snRelatedTypes = ['glove', 'dexterous_hand', 'left_glove', 'right_glove', 'left_dexterous_hand', 'right_dexterous_hand'];
     const machineTxs = transactions.filter(t =>
@@ -3555,15 +3547,12 @@ const App = {
       if (!pairMap[t.pairId]) pairMap[t.pairId] = [];
       pairMap[t.pairId].push(t);
     });
-    // Only show active pairs (out), skip returned (in)
-    Object.keys(pairMap).forEach(pid => {
-      if (pairMap[pid][0].direction === 'in') delete pairMap[pid];
-    });
 
-    // Only show the LATEST (most recent) active pair
-    const activePairs = Object.entries(pairMap)
-      .sort((a, b) => new Date(b[1][0].timestamp).getTime() - new Date(a[1][0].timestamp).getTime());
-    const latestPair = activePairs.length > 0 ? [activePairs[0]] : [];
+    // Show all pairs (both active 'out' and historical 'in')
+    // Show the LATEST 3 pairs, most recent first
+    const allPairs = Object.entries(pairMap)
+      .sort((a, b) => new Date(b[1][0].timestamp || 0).getTime() - new Date(a[1][0].timestamp || 0).getTime());
+    const displayPairs = allPairs.slice(0, 3);
 
     const getHand = (t) => {
       if (t.handType === 'left') return '左手';
@@ -3573,32 +3562,36 @@ const App = {
       return '-';
     };
 
+    if (displayPairs.length === 0) return '';
+
     let html = '<h4 class="detail-section-title">🏷️ SN码配对</h4><div class="sn-pair-list">';
-    latestPair.forEach(([pairId, txs]) => {
+    displayPairs.forEach(([pairId, txs]) => {
       const leftTx = txs.find(t => getHand(t) === '左手');
       const rightTx = txs.find(t => getHand(t) === '右手');
       const leftSn = leftTx ? leftTx.snCode : '-';
       const rightSn = rightTx ? rightTx.snCode : '-';
+      const isActive = txs[0].direction === 'out';
       // Build clickable SN code with attachment preview
       const snDisplay = (sn) => {
         if (!sn || sn === '-') return sn;
         const reg = Storage.getSNByCode(sn);
         if (reg && reg.attachment) {
-          return `<a href="#" onclick="event.preventDefault();App._showSNAttachment('${sn}')" style="color:var(--color-primary);text-decoration:underline;cursor:pointer;" title="点击查看附件">${sn} 📎</a>`;
+          return '<a href="#" onclick="event.preventDefault();App._showSNAttachment(\'' + sn + '\')" style="color:var(--color-primary);text-decoration:underline;cursor:pointer;" title="点击查看附件">' + sn + ' 📎</a>';
         }
         return sn;
       };
-      html += `
-        <div class="sn-pair-card" style="margin-bottom:8px;">
-          <div class="sn-pair-header">
-            <span class="sn-pair-id">🔗 配对 ${pairId.slice(-8)}</span>
-            <span class="sn-pair-time">${this._formatTime(txs[0].timestamp)}</span>
-          </div>
-          <div class="sn-pair-body">
-            <div class="sn-pair-col"><div class="sn-pair-label">左手 SN码</div><div class="sn-pair-value">${snDisplay(leftSn)}</div></div>
-            <div class="sn-pair-col"><div class="sn-pair-label">右手 SN码</div><div class="sn-pair-value">${snDisplay(rightSn)}</div></div>
-          </div>
-        </div>`;
+      html +=
+        '<div class="sn-pair-card" style="margin-bottom:8px;' + (isActive ? '' : 'opacity:0.65;') + '">' +
+          '<div class="sn-pair-header">' +
+            '<span class="sn-pair-id">🔗 配对 ' + pairId.slice(-8) + '</span>' +
+            '<span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;' + (isActive ? 'background:#dcfce7;color:#166534;' : 'background:#f3f4f6;color:#6b7280;') + '">' + (isActive ? '🟢 当前' : '📦 历史') + '</span>' +
+            '<span class="sn-pair-time">' + this._formatTime(txs[0].timestamp) + '</span>' +
+          '</div>' +
+          '<div class="sn-pair-body">' +
+            '<div class="sn-pair-col"><div class="sn-pair-label">左手 SN码</div><div class="sn-pair-value">' + snDisplay(leftSn) + '</div></div>' +
+            '<div class="sn-pair-col"><div class="sn-pair-label">右手 SN码</div><div class="sn-pair-value">' + snDisplay(rightSn) + '</div></div>' +
+          '</div>' +
+        '</div>';
     });
     html += '</div>';
     return html;
