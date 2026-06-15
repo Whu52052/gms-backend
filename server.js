@@ -2022,8 +2022,7 @@ async function startup() {
     await seedDefaults();
     console.log('[DB] Database initialized successfully');
 
-    // Initialize Feishu sync (delayed, zero impact on startup)
-    setTimeout(() => feishu.initFeishuSync().catch(e => console.error('[Feishu] Init failed (non-fatal):', e.message)), 10000);
+    // Feishu sync initialized lazily on first tech_support operation
   } catch (e) {
     console.error('[FATAL] Database initialization failed:', e.message);
     process.exit(1);

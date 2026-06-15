@@ -180,6 +180,14 @@ const recordIdMap = {}; // tech_support_id → feishu_record_id
 
 // ==================== SYNC FUNCTIONS ====================
 
+let _initialized = false;
+async function ensureInit() {
+  if (!_initialized) {
+    _initialized = true;
+    await initFeishuSync();
+  }
+}
+
 /**
  * Remove null/undefined values from fields object
  * Feishu silently rejects null values for Date/Number fields
@@ -199,6 +207,7 @@ function cleanFields(fields) {
  */
 async function syncToFeishu(item) {
   try {
+    await ensureInit();
     const existingRecordId = recordIdMap[item.id];
 
     if (existingRecordId) {
@@ -246,6 +255,7 @@ async function syncToFeishu(item) {
  */
 async function deleteFromFeishu(techSupportId) {
   try {
+    await ensureInit();
     const existingRecordId = recordIdMap[techSupportId];
     if (!existingRecordId) {
       console.log('[Feishu] No Feishu record ID for:', techSupportId, '- skipping delete');
