@@ -2490,12 +2490,10 @@ const App = {
           const handLabel = consumed.handType === 'left' ? '左手' : '右手';
           const availableSns = this._getAvailableSNs(consumed.inventoryType, consumed.handType);
           const inputId = `machine-sn-inp-${consumed.inventoryType}`;
-          // SN 码缓存到 data 属性，供自定义自动补全过滤
-          const snListJson = JSON.stringify(availableSns).replace(/"/g, '&quot;');
           fieldsHtml += `
             <div style="margin-bottom:8px;" id="machine-sn-row-${consumed.inventoryType}">
               <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;">${handLabel}${label} SN码 <span style="color:var(--color-success);" id="sn-count-${consumed.inventoryType}">(${availableSns.length}个可用)</span></span>
-              <input type="text" id="${inputId}" class="machine-sn-input" data-inv-type="${consumed.inventoryType}" data-sn-list="${snListJson}" placeholder="🔍 搜索或输入SN码..." oninput="App._onMachineSNInput(this)" onfocus="App._onMachineSNInput(this)" autocomplete="off" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;">
+              <input type="text" id="${inputId}" class="machine-sn-input" data-inv-type="${consumed.inventoryType}" data-hand-type="${consumed.handType || ''}" placeholder="🔍 搜索或输入SN码..." oninput="App._onMachineSNInput(this)" onfocus="App._onMachineSNInput(this)" autocomplete="off" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;">
               <input type="hidden" id="${inputId}-value" class="machine-sn-value" data-inv-type="${consumed.inventoryType}">
             </div>`;
         }
@@ -2509,20 +2507,14 @@ const App = {
   // 机器上线 SN 码自定义自动补全（支持任意位置子串匹配）
   _onMachineSNInput(inputEl) {
     const q = inputEl.value.trim().toLowerCase();
-    // 移除旧下拉
     this._hideSNAutocomplete();
 
-    // 从 data-sn-list 读取该输入框对应的可用 SN 列表
-    let snList = [];
-    try {
-      const json = inputEl.getAttribute('data-sn-list') || '[]';
-      snList = JSON.parse(json.replace(/&quot;/g, '"'));
-    } catch { snList = []; }
+    // 根据 inventoryType 和 handType 动态获取可用 SN 列表
+    const invType = inputEl.getAttribute('data-inv-type') || '';
+    const handType = inputEl.getAttribute('data-hand-type') || '';
+    const snList = this._getAvailableSNs(invType, handType || null);
 
-    if (!q || q.length < 1) {
-      if (this._suggestionDropdown) this._hideSNAutocomplete();
-      return;
-    }
+    if (!q || q.length < 1) return;
 
     // 子串匹配，优先开头匹配
     const startsWith = [];
@@ -2535,11 +2527,7 @@ const App = {
     });
 
     const matches = [...startsWith, ...contains].slice(0, 15);
-
-    if (matches.length === 0) {
-      // 无匹配时也隐藏下拉
-      return;
-    }
+    if (matches.length === 0) return;
 
     // 创建下拉
     const dropdown = document.createElement('div');
@@ -2549,38 +2537,25 @@ const App = {
     matches.forEach((sn) => {
       const item = document.createElement('div');
       const idx = sn.toLowerCase().indexOf(q);
-      const before = sn.substring(0, idx);
-      const match = sn.substring(idx, idx + q.length);
-      const after = sn.substring(idx + q.length);
-      item.innerHTML = before + '<strong style="color:var(--color-primary,#6366f1);">' + match + '</strong>' + after;
+      item.innerHTML = sn.substring(0, idx) + '<strong style="color:var(--color-primary,#6366f1);">' + sn.substring(idx, idx + q.length) + '</strong>' + sn.substring(idx + q.length);
       item.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light,#f3f4f6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
       item.addEventListener('mousedown', (e) => {
         e.preventDefault();
         inputEl.value = sn;
-        // 同时更新 hidden input
-        const hiddenInput = document.getElementById(inputEl.id + '-value');
-        if (hiddenInput) hiddenInput.value = sn;
-        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
         this._hideSNAutocomplete();
         inputEl.focus();
       });
-      item.addEventListener('mouseenter', () => {
-        item.style.background = 'var(--bg-secondary,#f3f4f6)';
-        dropdown.querySelectorAll('.sn-autocomplete-item, div').forEach(el => {
-          if (el !== item) el.style.background = el.style.background === 'var(--bg-secondary,#f3f4f6)' ? '' : el.style.background;
-        });
-      });
+      item.addEventListener('mouseenter', () => { item.style.background = 'var(--bg-secondary,#f3f4f6)'; });
+      item.addEventListener('mouseleave', () => { item.style.background = ''; });
       dropdown.appendChild(item);
     });
 
-    // 添加 "✏️ 手动输入" 选项
+    // "✏️ 手动输入" 选项
     const customItem = document.createElement('div');
     customItem.style.cssText = 'padding:8px 12px;cursor:pointer;border-top:2px solid var(--border-color,#e5e7eb);color:var(--text-secondary,#6b7280);font-style:italic;';
     customItem.textContent = '✏️ 手动输入新SN码: ' + q;
     customItem.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      inputEl.value = q;
-      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
       this._hideSNAutocomplete();
       inputEl.focus();
     });
@@ -2590,7 +2565,6 @@ const App = {
     dropdown.style.left = rect.left + 'px';
     dropdown.style.top = (rect.bottom + 2) + 'px';
     dropdown.style.width = rect.width + 'px';
-
     document.body.appendChild(dropdown);
     this._suggestionDropdown = dropdown;
     this._suggestionsVisible = true;
@@ -2605,24 +2579,17 @@ const App = {
     setTimeout(() => document.addEventListener('click', closeHandler), 50);
 
     // 失焦关闭
-    const blurHandler = () => {
-      setTimeout(() => {
-        if (this._suggestionDropdown === dropdown) this._hideSNAutocomplete();
-      }, 150);
-    };
-    inputEl.addEventListener('blur', blurHandler, { once: true });
+    inputEl.addEventListener('blur', () => {
+      setTimeout(() => { if (this._suggestionDropdown === dropdown) this._hideSNAutocomplete(); }, 150);
+    }, { once: true });
 
     // 键盘导航
-    const keyHandler = (e) => {
-      if (!this._suggestionsVisible || this._suggestionDropdown !== dropdown) {
-        inputEl.removeEventListener('keydown', keyHandler);
-        return;
-      }
+    inputEl.addEventListener('keydown', function handler(e) {
+      if (!this._suggestionDropdown) { inputEl.removeEventListener('keydown', handler); return; }
       const items = dropdown.querySelectorAll('div');
       if (items.length === 0) return;
       let activeIdx = -1;
-      items.forEach((el, i) => { if (el.style.background === 'var(--bg-secondary,#f3f4f6)') activeIdx = i; });
-
+      items.forEach((el, i) => { if (el.style.background && el.style.background !== '') activeIdx = i; });
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         activeIdx = (activeIdx + 1) % items.length;
@@ -2638,8 +2605,7 @@ const App = {
       } else if (e.key === 'Escape') {
         this._hideSNAutocomplete();
       }
-    };
-    inputEl.addEventListener('keydown', keyHandler);
+    }.bind(this));
   },
 
   showBulkMachineImport() {
