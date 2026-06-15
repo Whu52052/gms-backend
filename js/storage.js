@@ -233,14 +233,16 @@ const Storage = {
 
   getOnlineMachineCount() {
     const machines = this.getMachines();
-    // For each unique machine number, find the most recent record (use array index as tiebreaker)
+    // For each unique machine number, find the most recent record by timestamp
     const latestByMachine = {};
-    for (let i = 0; i < machines.length; i++) {
-      const m = machines[i];
+    for (const m of machines) {
       const existing = latestByMachine[m.machineNumber];
-      if (!existing || (existing.__idx !== undefined ? i > existing.__idx : true)) {
-        latestByMachine[m.machineNumber] = { ...m, __idx: i };
-      }
+      if (!existing) { latestByMachine[m.machineNumber] = m; continue; }
+      // Compare by updatedAt first, then id (timestamp-based) as tiebreaker
+      const mTime = m.updatedAt ? new Date(m.updatedAt).getTime() : 0;
+      const eTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+      if (mTime > eTime) { latestByMachine[m.machineNumber] = m; }
+      else if (mTime === eTime && m.id > existing.id) { latestByMachine[m.machineNumber] = m; }
     }
     // Count only machines whose latest record is 'online'
     return Object.values(latestByMachine).filter(m => m.status === 'online').length;
