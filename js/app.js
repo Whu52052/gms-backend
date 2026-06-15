@@ -2133,15 +2133,11 @@ const App = {
       const existingOnline = status === 'offline' ? machines.find(m => m.machineNumber === machineNumber && m.status === 'online') : null;
       const effectiveDeviceType = (status === 'offline' && existingOnline) ? existingOnline.deviceType : deviceType;
 
-      // Collect SN codes from the form (select + custom input)
+      // Collect SN codes from the form (custom autocomplete inputs)
       const snMap = {};
-      document.querySelectorAll('.machine-sn-select').forEach(sel => {
-        if (sel.value && sel.value !== '__custom__' && sel.value !== '') {
-          snMap[sel.dataset.invType] = sel.value.trim();
-        }
-      });
       document.querySelectorAll('.machine-sn-input').forEach(input => {
-        if (input.value.trim()) snMap[input.dataset.invType] = input.value.trim();
+        const val = input.value.trim();
+        if (val) snMap[input.dataset.invType] = val;
       });
 
       const pairId = Object.keys(snMap).length > 0 ? Storage._generatePairId() : null;
@@ -2493,17 +2489,14 @@ const App = {
           const label = cfg.name || consumed.inventoryType;
           const handLabel = consumed.handType === 'left' ? '左手' : '右手';
           const availableSns = this._getAvailableSNs(consumed.inventoryType, consumed.handType);
-          const selectId = `machine-sn-sel-${consumed.inventoryType}`;
           const inputId = `machine-sn-inp-${consumed.inventoryType}`;
+          // SN 码缓存到 data 属性，供自定义自动补全过滤
+          const snListJson = JSON.stringify(availableSns).replace(/"/g, '&quot;');
           fieldsHtml += `
-            <div style="margin-bottom:8px;">
-              <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;">${handLabel}${label} SN码 <span style="color:var(--color-success);">(${availableSns.length}个可用)</span></span>
-              <select id="${selectId}" class="machine-sn-select" data-inv-type="${consumed.inventoryType}" data-target="${inputId}" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;">
-                <option value="">-- 选择SN码 --</option>
-                ${availableSns.map(s => `<option value="${s}">${s}</option>`).join('')}
-                <option value="__custom__">✏️ 输入新SN码</option>
-              </select>
-              <input type="text" id="${inputId}" class="machine-sn-input" data-inv-type="${consumed.inventoryType}" placeholder="输入新SN码" style="display:none;width:100%;padding:8px;margin-top:4px;border:1px solid var(--border-color);border-radius:6px;" autocomplete="off">
+            <div style="margin-bottom:8px;" id="machine-sn-row-${consumed.inventoryType}">
+              <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;">${handLabel}${label} SN码 <span style="color:var(--color-success);" id="sn-count-${consumed.inventoryType}">(${availableSns.length}个可用)</span></span>
+              <input type="text" id="${inputId}" class="machine-sn-input" data-inv-type="${consumed.inventoryType}" data-sn-list="${snListJson}" placeholder="🔍 搜索或输入SN码..." oninput="App._onMachineSNInput(this)" onfocus="App._onMachineSNInput(this)" autocomplete="off" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;">
+              <input type="hidden" id="${inputId}-value" class="machine-sn-value" data-inv-type="${consumed.inventoryType}">
             </div>`;
         }
       });
@@ -2511,14 +2504,142 @@ const App = {
 
     snGroup.style.display = hasPairs ? '' : 'none';
     snFields.innerHTML = fieldsHtml;
-    // Bind select change handlers (online mode)
-    snFields.querySelectorAll('.machine-sn-select').forEach(sel => {
-      sel.addEventListener('change', function() {
-        const inp = document.getElementById(this.dataset.target);
-        if (this.value === '__custom__') { this.style.display = 'none'; if (inp) inp.style.display = ''; }
-        else { if (inp) { inp.style.display = 'none'; inp.value = ''; } }
-      });
+  },
+
+  // 机器上线 SN 码自定义自动补全（支持任意位置子串匹配）
+  _onMachineSNInput(inputEl) {
+    const q = inputEl.value.trim().toLowerCase();
+    // 移除旧下拉
+    this._hideSNAutocomplete();
+
+    // 从 data-sn-list 读取该输入框对应的可用 SN 列表
+    let snList = [];
+    try {
+      const json = inputEl.getAttribute('data-sn-list') || '[]';
+      snList = JSON.parse(json.replace(/&quot;/g, '"'));
+    } catch { snList = []; }
+
+    if (!q || q.length < 1) {
+      if (this._suggestionDropdown) this._hideSNAutocomplete();
+      return;
+    }
+
+    // 子串匹配，优先开头匹配
+    const startsWith = [];
+    const contains = [];
+    snList.forEach(sn => {
+      const lower = sn.toLowerCase();
+      if (lower === q) return;
+      if (lower.startsWith(q)) startsWith.push(sn);
+      else if (lower.includes(q)) contains.push(sn);
     });
+
+    const matches = [...startsWith, ...contains].slice(0, 15);
+
+    if (matches.length === 0) {
+      // 无匹配时也隐藏下拉
+      return;
+    }
+
+    // 创建下拉
+    const dropdown = document.createElement('div');
+    dropdown.className = 'sn-autocomplete-dropdown';
+    dropdown.style.cssText = 'position:fixed;z-index:9999;max-height:260px;overflow-y:auto;background:var(--bg-primary,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.15);font-size:0.85rem;';
+
+    matches.forEach((sn) => {
+      const item = document.createElement('div');
+      const idx = sn.toLowerCase().indexOf(q);
+      const before = sn.substring(0, idx);
+      const match = sn.substring(idx, idx + q.length);
+      const after = sn.substring(idx + q.length);
+      item.innerHTML = before + '<strong style="color:var(--color-primary,#6366f1);">' + match + '</strong>' + after;
+      item.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light,#f3f4f6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        inputEl.value = sn;
+        // 同时更新 hidden input
+        const hiddenInput = document.getElementById(inputEl.id + '-value');
+        if (hiddenInput) hiddenInput.value = sn;
+        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        this._hideSNAutocomplete();
+        inputEl.focus();
+      });
+      item.addEventListener('mouseenter', () => {
+        item.style.background = 'var(--bg-secondary,#f3f4f6)';
+        dropdown.querySelectorAll('.sn-autocomplete-item, div').forEach(el => {
+          if (el !== item) el.style.background = el.style.background === 'var(--bg-secondary,#f3f4f6)' ? '' : el.style.background;
+        });
+      });
+      dropdown.appendChild(item);
+    });
+
+    // 添加 "✏️ 手动输入" 选项
+    const customItem = document.createElement('div');
+    customItem.style.cssText = 'padding:8px 12px;cursor:pointer;border-top:2px solid var(--border-color,#e5e7eb);color:var(--text-secondary,#6b7280);font-style:italic;';
+    customItem.textContent = '✏️ 手动输入新SN码: ' + q;
+    customItem.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      inputEl.value = q;
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+      this._hideSNAutocomplete();
+      inputEl.focus();
+    });
+    dropdown.appendChild(customItem);
+
+    const rect = inputEl.getBoundingClientRect();
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.top = (rect.bottom + 2) + 'px';
+    dropdown.style.width = rect.width + 'px';
+
+    document.body.appendChild(dropdown);
+    this._suggestionDropdown = dropdown;
+    this._suggestionsVisible = true;
+
+    // 点击外部关闭
+    const closeHandler = (e) => {
+      if (!dropdown.contains(e.target) && e.target !== inputEl) {
+        this._hideSNAutocomplete();
+        document.removeEventListener('click', closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 50);
+
+    // 失焦关闭
+    const blurHandler = () => {
+      setTimeout(() => {
+        if (this._suggestionDropdown === dropdown) this._hideSNAutocomplete();
+      }, 150);
+    };
+    inputEl.addEventListener('blur', blurHandler, { once: true });
+
+    // 键盘导航
+    const keyHandler = (e) => {
+      if (!this._suggestionsVisible || this._suggestionDropdown !== dropdown) {
+        inputEl.removeEventListener('keydown', keyHandler);
+        return;
+      }
+      const items = dropdown.querySelectorAll('div');
+      if (items.length === 0) return;
+      let activeIdx = -1;
+      items.forEach((el, i) => { if (el.style.background === 'var(--bg-secondary,#f3f4f6)') activeIdx = i; });
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        activeIdx = (activeIdx + 1) % items.length;
+        items.forEach((el, i) => { el.style.background = i === activeIdx ? 'var(--bg-secondary,#f3f4f6)' : ''; });
+        items[activeIdx].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIdx = activeIdx <= 0 ? items.length - 1 : activeIdx - 1;
+        items.forEach((el, i) => { el.style.background = i === activeIdx ? 'var(--bg-secondary,#f3f4f6)' : ''; });
+        items[activeIdx].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        if (activeIdx >= 0) { e.preventDefault(); items[activeIdx].click(); }
+      } else if (e.key === 'Escape') {
+        this._hideSNAutocomplete();
+      }
+    };
+    inputEl.addEventListener('keydown', keyHandler);
   },
 
   showBulkMachineImport() {
