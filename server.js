@@ -843,13 +843,14 @@ async function handleCompleteTechSupport(req, res, authUser, id, body) {
   if (item.status === 'completed' || item.status === 'closed') {
     return sendJSON(res, { error: '该请求已完成' }, 400);
   }
+  if (item.status !== 'responded') {
+    return sendJSON(res, { error: '请先响应技术支持请求，再进行维修完成' }, 400);
+  }
   const now = new Date().toISOString();
   item.status = 'completed';
   item.completedAt = now;
   item.result = (body && body.result) || '';
-  if (item.respondedAt) {
-    item.repairSeconds = Math.round((new Date(now) - new Date(item.respondedAt)) / 1000);
-  }
+  item.repairSeconds = Math.round((new Date(now) - new Date(item.respondedAt)) / 1000);
   item.totalSeconds = Math.round((new Date(now) - new Date(item.submittedAt)) / 1000);
   await pool.execute('REPLACE INTO tech_support (id, data) VALUES (?, ?)', [id, JSON.stringify(item)]);
   // Restore machine status to online

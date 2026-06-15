@@ -3878,7 +3878,7 @@ const App = {
       </div>
       <div class="ts-action-bar">
         ${item.status==='pending'?`<button class="btn btn-primary" onclick="App.doRespondTechSupport('${item.id}')">响应请求</button>`:''}
-        ${(item.status==='pending'||item.status==='responded')?`<button class="btn btn-success" onclick="App.doCompleteTechSupport('${item.id}')">维修完成</button>`:''}
+        ${item.status==='responded'?`<button class="btn btn-success" onclick="App.doCompleteTechSupport('${item.id}')">维修完成</button>`:''}
         <button class="btn btn-outline" onclick="App.renderTechSupport()">返回列表</button>
         ${(API.currentUser.system==='maintenance'&&(API.currentUser.role==='admin'||API.currentUser.role==='superadmin'))?`<button class="btn btn-danger" onclick="App.doDeleteTechSupport('${item.id}')" style="margin-left:auto;">删除记录</button>`:''}
       </div>
