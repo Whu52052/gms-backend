@@ -2802,20 +2802,31 @@ const App = {
   _exportAllSNExcel() {
     const registry = Storage.getSNRegistry();
     const txs = Storage.getTransactions();
+    // Build updater map: find transaction with updatedBy for each SN
     const updaterMap = {};
-    txs.forEach(t => { if (t.snCode && t.updatedBy && !updaterMap[t.snCode]) updaterMap[t.snCode] = t.updatedBy; });
-    const rows = registry.filter(r => r.status !== '_deleted').map(r => {
-      const handLabel = r.handType === 'left' ? '左手' : r.handType === 'right' ? '右手' : '-';
-      return [this._formatTime(r.updatedAt), handLabel, r.snCode, updaterMap[r.snCode] || ''];
+    txs.forEach(t => {
+      if (t.snCode && t.updatedBy && !updaterMap[t.snCode]) updaterMap[t.snCode] = t.updatedBy;
     });
-    const header = ['时间', '左右手', 'SN码', '更新人'];
+    // Also check registry entries for updatedBy
+    registry.forEach(r => {
+      if (r.snCode && r.updatedBy && !updaterMap[r.snCode]) updaterMap[r.snCode] = r.updatedBy;
+    });
+    const eqLabels = { glove: '手套', dexterous_hand: '灵巧手', gripper: '夹爪' };
+    const rows = registry.filter(r => r.status !== '_deleted').map(r => {
+      let eqLabel = eqLabels[r.equipmentType] || r.equipmentType || '-';
+      const handLabel = r.handType === 'left' ? '左手' : r.handType === 'right' ? '右手' : '';
+      eqLabel = handLabel ? handLabel + eqLabel : eqLabel;
+      const statusLabel = r.status === 'available' ? '可用' : r.status === 'in_use' ? '使用中' : r.status === 'damaged' ? '损坏' : r.status === 'in_repair' ? '售后维修中' : (r.status || '-');
+      return [this._formatTime(r.updatedAt), eqLabel, r.snCode, statusLabel, r.machineNumber || '', updaterMap[r.snCode] || ''];
+    });
+    const header = ['时间', '设备类型', 'SN码', '状态', '机器编号', '更新人'];
     const BOM = '﻿';
     const csv = BOM + [header, ...rows].map(row => row.map(c => '"' + String(c || '').replace(/"/g, '""') + '"').join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `全部库存库存-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = '全部库存库存-' + new Date().toISOString().slice(0, 10) + '.csv';
     a.click();
     URL.revokeObjectURL(url);
     this.notify('Excel文件已导出');
