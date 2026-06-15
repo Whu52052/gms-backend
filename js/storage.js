@@ -204,8 +204,23 @@ const Storage = {
     machines.push(newMachine);
     this.saveMachines(machines);
     this._addAuditLog('machine_add', `添加${machine.deviceType ? this._deviceTypeLabel(machine.deviceType) : ''}机器 ${machine.machineNumber}`, machine.updatedBy);
-    if (API.online) { API.addMachine(newMachine).catch(() => {}); }
+    if (API.online) { this._syncMachineToServer(newMachine); }
     return machines;
+  },
+
+  // Retry API.addMachine up to 2 times on failure (fix silent data loss)
+  async _syncMachineToServer(machine, attempt) {
+    attempt = attempt || 1;
+    try {
+      await API.addMachine(machine);
+    } catch (e) {
+      console.log('Sync machine to server failed (attempt ' + attempt + '):', e.message);
+      if (attempt < 2) {
+        setTimeout(() => this._syncMachineToServer(machine, attempt + 1), 2000);
+      } else {
+        console.log('Sync machine to server FAILED after 2 attempts — will merge on next sync');
+      }
+    }
   },
 
   updateMachineStatus(machineId, status, reason, updatedBy) {
@@ -624,7 +639,31 @@ const Storage = {
         }
       }
     } catch(e) { console.log('Full sync inv:', e.message); }
-    try { const m = await API.getMachines(); if (Array.isArray(m)) this.saveMachines(m); } catch(e) { console.log('Full sync machines:', e.message); }
+    try {
+      const m = await API.getMachines();
+      if (Array.isArray(m) && m.length > 0) {
+        // Merge server + local: keep latest record per machineNumber
+        const localMachines = this.getMachines();
+        const merged = new Map();
+        const collect = (list) => {
+          for (const item of list) {
+            if (!item || !item.machineNumber) continue;
+            const existing = merged.get(item.machineNumber);
+            if (!existing) { merged.set(item.machineNumber, item); continue; }
+            const mTime = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
+            const eTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+            if (mTime > eTime || (mTime === eTime && (item.id || '') > (existing.id || ''))) {
+              merged.set(item.machineNumber, item);
+            }
+          }
+        };
+        collect(m);
+        collect(localMachines);
+        this.saveMachines(Array.from(merged.values()));
+      } else if (Array.isArray(m)) {
+        this.saveMachines(m);
+      }
+    } catch(e) { console.log('Full sync machines:', e.message); }
     try { const t = await API.getTransactions(); if (Array.isArray(t)) {
       try {
         const deletedIds = JSON.parse(localStorage.getItem('gms_deleted_tx_ids') || '[]');
@@ -672,7 +711,26 @@ const Storage = {
       }
     } catch(e) { console.log('_applySync inv:', e.message); }
     try {
-      if (Array.isArray(data.machines) && data.machines.length > 0) this.saveMachines(data.machines);
+      if (Array.isArray(data.machines) && data.machines.length > 0) {
+        // Merge server + local: keep latest record per machineNumber (by updatedAt)
+        const localMachines = this.getMachines();
+        const merged = new Map();
+        const collect = (list) => {
+          for (const m of list) {
+            if (!m || !m.machineNumber) continue;
+            const existing = merged.get(m.machineNumber);
+            if (!existing) { merged.set(m.machineNumber, m); continue; }
+            const mTime = m.updatedAt ? new Date(m.updatedAt).getTime() : 0;
+            const eTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+            if (mTime > eTime || (mTime === eTime && (m.id || '') > (existing.id || ''))) {
+              merged.set(m.machineNumber, m);
+            }
+          }
+        };
+        collect(data.machines);
+        collect(localMachines);
+        this.saveMachines(Array.from(merged.values()));
+      }
     } catch(e) { console.log('_applySync machines:', e.message); }
     try {
       if (Array.isArray(data.transactions) && data.transactions.length > 0) {
