@@ -1322,6 +1322,8 @@ input:checked + .slider::before { transform: translateX(20px); }
 }
 .status-dot.online { background: #22c55e; animation: pulse 2s infinite; }
 .status-dot.offline { background: #9ca3af; }
+.status-dot.repairing { background: #f59e0b; animation: pulse 2s infinite; }
+.status-dot.waiting-repair { background: #ef4444; animation: flash-dot 0.8s ease-in-out infinite; }
 
 .detail-stats {
   display: grid;

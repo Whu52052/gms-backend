@@ -3056,6 +3056,9 @@ const App = {
     const sorted = machines.sort((a, b) => new Date(a.updatedAt || a.id) - new Date(b.updatedAt || b.id));
     const latest = sorted[sorted.length - 1];
     const isOnline = latest.status === 'online';
+    const isWaitingRepair = latest.status === 'waiting_repair';
+    const isRepairing = latest.status === 'repairing';
+    const isActive = isOnline || isWaitingRepair || isRepairing; // machine has SN codes attached
     const deviceType = latest.deviceType || 'glove';
 
     const eqConfig = Storage.getEquipmentConfig();
@@ -3083,8 +3086,8 @@ const App = {
         }
       }
     }
-    // If currently online, add current session
-    if (isOnline && currentSessionStart) {
+    // If currently online or in repair state, add current session
+    if (isActive && currentSessionStart) {
       totalOnlineMs += Date.now() - currentSessionStart.getTime();
     }
 
@@ -3098,7 +3101,7 @@ const App = {
 
     // Current session duration
     let currentSessionDuration = '-';
-    if (isOnline) {
+    if (isActive) {
       const lastOnline = [...sorted].reverse().find(m => m.status === 'online');
       if (lastOnline && lastOnline.onlineTime) {
         currentSessionDuration = formatDuration(Date.now() - new Date(lastOnline.onlineTime).getTime());
@@ -3149,9 +3152,9 @@ const App = {
             <h2>机器 #${machineNumber}</h2>
             <div class="detail-hero-type">${typeLabel[deviceType] || '未知类型'}</div>
             <div class="detail-hero-status">
-              <span class="status-dot ${isOnline ? 'online' : 'offline'}"></span>
-              ${isOnline ? '在线' : '离线'}
-              ${isOnline ? ` · 当前已运行 ${currentSessionDuration}` : ''}
+              <span class="status-dot ${isOnline ? 'online' : (isWaitingRepair || isRepairing) ? 'repairing' : 'offline'}"></span>
+              ${isOnline ? '在线' : isWaitingRepair ? '等待维修' : isRepairing ? '维修中' : '离线'}
+              ${isActive ? ` · 当前已运行 ${currentSessionDuration}` : ''}
             </div>
           </div>
         </div>
@@ -3530,11 +3533,14 @@ const App = {
   },
 
   _renderMachineSNPairs(machineNumber) {
-    // Only show pairs if machine is currently online
+    // Show pairs if machine is online, waiting for repair, or being repaired
     const machines = Storage.getMachines();
     const machineRecs = machines.filter(m => m.machineNumber === machineNumber)
       .sort((a, b) => new Date(b.updatedAt || b.id).getTime() - new Date(a.updatedAt || a.id).getTime());
-    if (machineRecs.length === 0 || machineRecs[0].status !== 'online') return '';
+    if (machineRecs.length === 0) return '';
+    const latestStatus = machineRecs[0].status;
+    const showSNStatuses = ['online', 'waiting_repair', 'repairing'];
+    if (!showSNStatuses.includes(latestStatus)) return '';
 
     const transactions = Storage.getTransactions();
     const snRelatedTypes = ['glove', 'dexterous_hand', 'left_glove', 'right_glove', 'left_dexterous_hand', 'right_dexterous_hand'];
