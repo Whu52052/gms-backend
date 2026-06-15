@@ -8,6 +8,9 @@
 
 const https = require('https');
 
+// Keep-alive agent — reuse HTTPS connections for Feishu API (dramatically reduces latency)
+const keepAliveAgent = new https.Agent({ keepAlive: true, maxSockets: 5, keepAliveMsecs: 60000 });
+
 // ==================== CONFIG ====================
 const FEISHU_CONFIG = {
   appId: 'cli_aaa42355f0389cfc',
@@ -59,12 +62,8 @@ function feishuRequest(method, path, body) {
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
       },
+      agent: keepAliveAgent,
     };
-
-    // Add Authorization if not auth endpoint
-    if (!path.includes('/auth/')) {
-      // Token will be added in the caller
-    }
 
     const req = https.request(options, (res) => {
       let data = '';
@@ -91,8 +90,6 @@ function feishuRequest(method, path, body) {
  */
 async function feishuAuthRequest(method, path, body) {
   const token = await getAccessToken();
-  const fullPath = path.includes('?') ? path + '&' : path;
-
   return new Promise((resolve, reject) => {
     const options = {
       hostname: FEISHU_CONFIG.baseUrl,
@@ -102,6 +99,7 @@ async function feishuAuthRequest(method, path, body) {
         'Content-Type': 'application/json; charset=utf-8',
         'Authorization': 'Bearer ' + token,
       },
+      agent: keepAliveAgent,
     };
 
     const req = https.request(options, (res) => {
