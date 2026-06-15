@@ -639,58 +639,17 @@ const Storage = {
 
   // ========== Server Sync ==========
   async _syncFromServer() {
-    if (!API.online) return;
-    // Sync each data type independently — one failure doesn't block others
-    try { const allInv = await API.getAllInventory();
-      if (Array.isArray(allInv)) {
-        // Incremental sync: only update types the server actually returned
-        // Do NOT zero-out other types — avoids UI flicker from reset-then-fill
-        allInv.forEach(item => {
-          if (item.type && item.quantity !== undefined) {
-            localStorage.setItem(this._inventoryKey(item.type), JSON.stringify({ quantity: item.quantity, updatedAt: item.updatedAt, updatedBy: item.updatedBy || '' }));
-          }
-        });
+    if (!API.online || !API.token) return;
+    // ONE bulk request instead of 8 separate API calls — dramatically faster
+    try {
+      const res = await fetch(API.baseURL + '/api/sync', {
+        headers: { 'Authorization': 'Bearer ' + API.token }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        this._applySync(data);
       }
-    } catch(e) { console.log('Sync inv:', e.message); }
-    try { const machines = await API.getMachines();
-      if (Array.isArray(machines) && machines.length > 0) this.saveMachines(machines);
-    } catch(e) { console.log('Sync machines:', e.message); }
-    try { const txs = await API.getTransactions();
-      if (Array.isArray(txs) && txs.length > 0) {
-        // Filter out locally-deleted transactions to prevent SSE race
-        try {
-          const deletedIds = JSON.parse(localStorage.getItem('gms_deleted_tx_ids') || '[]');
-          const activeDeleted = new Set(deletedIds.filter(e => e.expires > Date.now()).map(e => e.id));
-          if (activeDeleted.size > 0) {
-            this.saveTransactions(txs.filter(t => !activeDeleted.has(t.id)));
-          } else {
-            this.saveTransactions(txs);
-          }
-        } catch { this.saveTransactions(txs); }
-      }
-    } catch(e) { console.log('Sync txs:', e.message); }
-    try { const audit = await API.getAuditLog();
-      if (Array.isArray(audit) && audit.length > 0) {
-        const localAudit = this.getAuditLog();
-        const localIds = new Set(localAudit.map(a => a.id));
-        const newEntries = audit.filter(a => !localIds.has(a.id));
-        if (newEntries.length > 0) {
-          localStorage.setItem(this.KEYS.AUDIT_LOG, JSON.stringify([...newEntries, ...localAudit]));
-        }
-      }
-    } catch(e) { console.log('Sync audit:', e.message); }
-    try { const settings = await API.getSettings();
-      if (settings && !settings.error) this.saveSettings(settings);
-    } catch(e) { console.log('Sync settings:', e.message); }
-    try { const eqConfig = await API.getEquipmentConfig();
-      if (Array.isArray(eqConfig)) localStorage.setItem('gms_equipment_config', JSON.stringify(eqConfig));
-    } catch(e) { console.log('Sync eq:', e.message); }
-    try { const invConfig = await API.getInventoryConfig();
-      if (Array.isArray(invConfig)) localStorage.setItem('gms_inventory_config', JSON.stringify(invConfig));
-    } catch(e) { console.log('Sync invCfg:', e.message); }
-    try { const snReg = await API.getSNRegistry();
-      if (Array.isArray(snReg)) this.replaceSNRegistry(snReg);
-    } catch(e) { console.log('Sync snReg:', e.message); }
+    } catch(e) { console.log('Sync error:', e.message); }
   },
 
   // Bulk apply sync data (used by polling fallback — one response, all tables)
