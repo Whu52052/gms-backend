@@ -3,24 +3,28 @@ FROM node:20-alpine
 # dumb-init for proper SIGTERM → graceful shutdown
 RUN apk add --no-cache dumb-init
 
+# PM2 for cluster process management
+RUN npm install -g pm2
+
 WORKDIR /app
 
-# Install dependencies (mysql2 is pure JS, no native build tools needed)
+# Install dependencies
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 # Copy application
-COPY server.js ./
+COPY server.js feishu.js ./
 COPY index.html operations.html ./
 COPY css/ ./css/
 COPY js/ ./js/
+COPY ecosystem.config.js ./
 
-# Uploads directory (may be mounted via CFS for persistence)
-RUN mkdir -p /app/uploads
+# Create data and uploads directories
+RUN mkdir -p /app/uploads /app/data
 
 EXPOSE 8765
 ENV PORT=8765
 ENV TZ=Asia/Shanghai
 
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "server.js"]
+CMD ["pm2-runtime", "start", "ecosystem.config.js"]

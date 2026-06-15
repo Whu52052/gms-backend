@@ -1,16 +1,53 @@
 /**
- * Glove Management System - Backend Server (CloudBase Edition)
- * Storage: MySQL (mysql2) + SSE for real-time sync
- * Performance: Node.js cluster (multi-core) + gzip + memory cache
+ * Glove Management System - Backend Server (Cluster + Redis Edition)
+ * Storage: MySQL (mysql2) + Redis (session/cache/pubsub) + SSE for real-time sync
+ * Performance: Node.js cluster (multi-core) + Redis Pub/Sub + gzip + memory cache
+ * Target: 500 concurrent users
  */
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
+const cluster = require('cluster');
+const os = require('os');
 
 // ==================== FEISHU SYNC ====================
 const feishu = require('./feishu');
+
+// ==================== REDIS CLIENT ====================
+const redis = require('redis');
+const REDIS_URL = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || '6379'}`;
+let redisClient, redisSub, redisPub;
+
+async function initRedis() {
+  try {
+    redisClient = redis.createClient({ url: REDIS_URL });
+    redisSub = redisClient.duplicate();
+    redisPub = redisClient.duplicate();
+    await Promise.all([redisClient.connect(), redisSub.connect(), redisPub.connect()]);
+    console.log(`[Worker ${process.env.pm_id || '?'}] Redis connected: ${REDIS_URL}`);
+    return true;
+  } catch (e) {
+    console.warn(`[Worker ${process.env.pm_id || '?'}] Redis not available (running without): ${e.message}`);
+    redisClient = null; redisSub = null; redisPub = null;
+    return false;
+  }
+}
+
+// ==================== REDIS-ASSISTED CACHE ====================
+async function _redisGet(key) {
+  if (!redisClient) return null;
+  try { const v = await redisClient.get(key); return v ? JSON.parse(v) : null; } catch { return null; }
+}
+async function _redisSet(key, value, ttlSeconds = 30) {
+  if (!redisClient) return;
+  try { await redisClient.setEx(key, ttlSeconds, JSON.stringify(value)); } catch {}
+}
+async function _redisDel(key) {
+  if (!redisClient) return;
+  try { await redisClient.unlink(key); } catch {}
+}
 
 // ==================== CONFIG ====================
 const PORT = process.env.PORT || 8765;
@@ -45,10 +82,12 @@ async function initPool() {
     database: DB_NAME,
     charset: 'utf8mb4',
     waitForConnections: true,
-    connectionLimit: 100,
-    queueLimit: 0,
+    connectionLimit: 80,      // per worker; with 4+ workers, total ~320+ connections
+    queueLimit: 200,           // queue pending requests instead of erroring
     enableKeepAlive: true,
     keepAliveInitialDelay: 10000,
+    connectTimeout: 10000,
+    idleTimeout: 60000,
   });
 
   // Handle pool errors — don't let them crash the server
@@ -345,42 +384,114 @@ function hashPassword(pw) {
   return crypto.createHash('sha256').update(pw + 'gms-salt').digest('hex');
 }
 
-const tokens = {};
+// ==================== TOKEN / SESSION (Redis-backed) ====================
+const tokens = {};     // in-memory fallback when Redis not available
 const tokensPath = path.join(DATA_DIR, 'tokens.json');
 
 function saveTokens() {
   try { fs.writeFileSync(tokensPath, JSON.stringify(tokens)); } catch {}
 }
 
-// Restore tokens on restart
+// Restore tokens on restart (fallback only)
 try {
   if (fs.existsSync(tokensPath)) {
     Object.assign(tokens, JSON.parse(fs.readFileSync(tokensPath, 'utf8')));
   }
 } catch {}
 
-function createToken(user) {
+async function createToken(user) {
   const token = crypto.randomBytes(32).toString('hex');
-  tokens[token] = { userId: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, system: user.system || 'maintenance', expires: Date.now() + TOKEN_EXPIRY, lastActive: Date.now() };
+  const tokenData = {
+    userId: user.id, username: user.username,
+    displayName: user.displayName || user.username,
+    role: user.role, system: user.system || 'maintenance',
+    expires: Date.now() + TOKEN_EXPIRY, lastActive: Date.now(),
+  };
+  // Redis primary + memory fallback
+  if (redisClient) {
+    await _redisSet(`tk:${token}`, tokenData, TOKEN_EXPIRY / 1000);
+    await redisClient.sAdd(`u:tk:${user.id}`, token);
+  }
+  tokens[token] = tokenData;
   saveTokens();
   return token;
 }
 
-function validateToken(token) {
-  const t = tokens[token];
-  if (!t || t.expires < Date.now()) { if (t) { delete tokens[token]; saveTokens(); } return null; }
+async function validateToken(token) {
+  // Try Redis first
+  let t = null;
+  if (redisClient) {
+    try {
+      const raw = await redisClient.get(`tk:${token}`);
+      if (raw) {
+        t = JSON.parse(raw);
+        // Refresh TTL (sliding window)
+        t.expires = Date.now() + TOKEN_EXPIRY;
+        t.lastActive = Date.now();
+        await redisClient.setEx(`tk:${token}`, TOKEN_EXPIRY / 1000, JSON.stringify(t));
+        return t;
+      }
+    } catch {}
+  }
+  // Memory fallback
+  t = tokens[token];
+  if (!t || t.expires < Date.now()) {
+    if (t) { delete tokens[token]; saveTokens(); }
+    return null;
+  }
   t.expires = Date.now() + TOKEN_EXPIRY;
   t.lastActive = Date.now();
   return t;
 }
 
+async function invalidateUserTokens(userId) {
+  if (redisClient) {
+    try {
+      const members = await redisClient.sMembers(`u:tk:${userId}`);
+      if (members.length > 0) {
+        await redisClient.del(members.map(k => `tk:${k.replace('tk:', '')}`));
+        await redisClient.del(`u:tk:${userId}`);
+      }
+    } catch {}
+  }
+  Object.keys(tokens).forEach(k => { if (tokens[k].userId === userId) delete tokens[k]; });
+  saveTokens();
+}
+
 // ==================== SSE CLIENTS ====================
 const sseClients = new Set();
+let sseHeartbeatInterval = null;
+
 function broadcastSSE(event, data) {
+  const payload = JSON.stringify({ event, data });
+  if (redisPub) {
+    // Cross-worker: publish to Redis, all workers forward to their own clients
+    redisPub.publish('sse:all', payload).catch(() => {});
+  }
+  // Local broadcast (always working even without Redis)
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   sseClients.forEach(res => { try { res.write(msg); } catch { sseClients.delete(res); } });
   // Invalidate cache on data mutations
   _invalidateCache(event);
+}
+
+// Subscribe to Redis Pub/Sub for SSE (receive broadcasts from other workers)
+async function _initSSEPubSub() {
+  if (!redisSub) return;
+  await redisSub.subscribe('sse:all', (raw) => {
+    try {
+      const { event, data } = JSON.parse(raw);
+      const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+      sseClients.forEach(res => { try { res.write(msg); } catch { sseClients.delete(res); } });
+    } catch {}
+  });
+  // Heartbeat: keep SSE connections alive (prevent proxy/nginx timeouts)
+  sseHeartbeatInterval = setInterval(() => {
+    if (sseClients.size === 0) return;
+    const hb = ': heartbeat\n\n';
+    sseClients.forEach(res => { try { res.write(hb); } catch { sseClients.delete(res); } });
+  }, 30000);
+  console.log(`[Worker ${process.env.pm_id || '?'}] SSE Pub/Sub + heartbeat ready`);
 }
 
 // ==================== IN-MEMORY CACHE + REQUEST COALESCING ====================
@@ -521,10 +632,10 @@ function sendJSON(res, data, status = 200, req) {
   }
 }
 
-function requireAuth(req, res) {
+async function requireAuth(req, res) {
   const auth = req.headers['authorization'];
   if (!auth || !auth.startsWith('Bearer ')) { sendJSON(res, { error: '未登录' }, 401); return null; }
-  const user = validateToken(auth.slice(7));
+  const user = await validateToken(auth.slice(7));
   if (!user) { sendJSON(res, { error: '登录已过期' }, 401); return null; }
   return user;
 }
@@ -578,21 +689,21 @@ async function handleLogin(req, res, body) {
     return sendJSON(res, { error: '用户名或密码错误' }, 401);
   }
   const user = rows[0];
-  // Clean expired/stale tokens
+  // Clean expired/stale tokens and invalidate user's existing tokens
+  await invalidateUserTokens(user.id);
   const STALE_THRESHOLD = 3 * 60 * 1000;
   Object.keys(tokens).forEach(k => {
     const t = tokens[k];
     if (t.expires < Date.now() || (Date.now() - (t.lastActive || 0)) > STALE_THRESHOLD) delete tokens[k];
   });
-  const existingToken = Object.keys(tokens).find(k => tokens[k].userId === user.id);
-  if (existingToken) delete tokens[existingToken];
-  const token = createToken(user);
+  saveTokens();
+  const token = await createToken(user);
   sendJSON(res, { token, user: { id: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, system: user.system || 'maintenance' } });
 }
 
 async function handleForceLogout(req, res, user, targetUserId) {
   if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限' }, 403);
-  Object.keys(tokens).forEach(k => { if (tokens[k].userId === targetUserId) delete tokens[k]; });
+  await invalidateUserTokens(targetUserId);
   saveTokens();
   broadcastSSE('users_updated', {});
   sendJSON(res, { success: true });
@@ -641,7 +752,7 @@ async function handleDeleteUser(req, res, user, userId) {
   if (user.role === 'admin' && target[0].role === 'admin') return sendJSON(res, { error: '管理员无法删除其他管理员' }, 403);
   if (user.userId === userId) return sendJSON(res, { error: '无法删除自己' }, 400);
   await pool.execute('DELETE FROM users WHERE id = ?', [userId]);
-  Object.keys(tokens).forEach(k => { if (tokens[k].userId === userId) delete tokens[k]; });
+  await invalidateUserTokens(userId);
   saveTokens();
   broadcastSSE('users_updated', {});
   sendJSON(res, { success: true });
@@ -1115,15 +1226,21 @@ async function handleGetGroupMembers(req, res, authUser) {
   sendJSON(res, Object.values(groups));
 }
 
-function handleLogout(req, res, user) {
+async function handleLogout(req, res, user) {
   const auth = req.headers['authorization'];
-  if (auth && auth.startsWith('Bearer ')) { delete tokens[auth.slice(7)]; saveTokens(); }
+  if (auth && auth.startsWith('Bearer ')) {
+    const token = auth.slice(7);
+    if (redisClient) { try { await redisClient.del(`tk:${token}`); } catch {} }
+    delete tokens[token];
+    saveTokens();
+  }
   broadcastSSE('users_updated', {});
   sendJSON(res, { success: true });
 }
 
-function handleBeaconLogout(req, res, body) {
-  if (body && body.token && tokens[body.token]) {
+async function handleBeaconLogout(req, res, body) {
+  if (body && body.token) {
+    if (redisClient) { try { await redisClient.del(`tk:${body.token}`); } catch {} }
     delete tokens[body.token];
     saveTokens();
     broadcastSSE('users_updated', {});
@@ -1174,7 +1291,7 @@ async function handleResetPassword(req, res, user, userId, body) {
   await pool.execute('UPDATE users SET passwordHash = ? WHERE id = ?', [hashPassword(newPassword.trim()), userId]);
 
   // Invalidate target user's tokens (force re-login)
-  Object.keys(tokens).forEach(k => { if (tokens[k].userId === userId) delete tokens[k]; });
+  await invalidateUserTokens(userId);
   saveTokens();
 
   broadcastSSE('users_updated', {});
@@ -1960,7 +2077,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/beacon-logout' && req.method === 'POST') return handleBeaconLogout(req, res, body);
 
     // Auth required for all other API routes
-    const authUser = requireAuth(req, res);
+    const authUser = await requireAuth(req, res);
     if (!authUser) return;
 
     // Inventory
@@ -2114,12 +2231,18 @@ const server = http.createServer(async (req, res) => {
 // ==================== STARTUP ====================
 async function startup() {
   try {
+    // Init Redis first (non-fatal if unavailable)
+    await initRedis();
+
     await initPool();
     await initDB();
     await migrateDB();
     await migrateFromJSON();
     await seedDefaults();
     console.log('[DB] Database initialized successfully');
+
+    // Init SSE Pub/Sub cross-worker broadcast
+    await _initSSEPubSub();
 
     // Feishu sync initialized lazily on first tech_support operation
   } catch (e) {
@@ -2128,8 +2251,9 @@ async function startup() {
   }
 
   server.listen(PORT, '0.0.0.0', () => {
-    const nets = require('os').networkInterfaces();
-    console.log('\n🧤 手套管理系统服务器已启动 (MySQL/CloudBase)');
+    const nets = os.networkInterfaces();
+    const workerId = process.env.pm_id || 'standalone';
+    console.log(`\n🧤 手套管理系统服务器已启动 [Worker ${workerId}] (MySQL+Redis/Cluster)`);
     console.log(`   本地访问: http://localhost:${PORT}`);
     for (const [, addrs] of Object.entries(nets)) {
       for (const addr of addrs) {
@@ -2158,9 +2282,11 @@ async function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[SHUTDOWN] Received ${signal}, shutting down gracefully...`);
+  if (sseHeartbeatInterval) clearInterval(sseHeartbeatInterval);
   sseClients.forEach(res => { try { res.end(); } catch {} });
   sseClients.clear();
   try { await pool.end(); console.log('[SHUTDOWN] MySQL pool closed.'); } catch {}
+  try { if (redisClient) { await redisClient.quit(); console.log('[SHUTDOWN] Redis closed.'); } } catch {}
   process.exit(0);
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
