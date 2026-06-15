@@ -3548,11 +3548,10 @@ const App = {
       pairMap[t.pairId].push(t);
     });
 
-    // Show all pairs (both active 'out' and historical 'in')
-    // Show the LATEST 3 pairs, most recent first
+    // Show only the LATEST pair (most recent by timestamp)
     const allPairs = Object.entries(pairMap)
       .sort((a, b) => new Date(b[1][0].timestamp || 0).getTime() - new Date(a[1][0].timestamp || 0).getTime());
-    const displayPairs = allPairs.slice(0, 3);
+    const displayPairs = allPairs.slice(0, 1);
 
     const getHand = (t) => {
       if (t.handType === 'left') return '左手';
