@@ -161,14 +161,15 @@ function mapToFeishuFields(item) {
 }
 
 function formatDuration(seconds) {
-  if (seconds == null || seconds === '') return null;  // Return null for empty, not ''
+  if (seconds == null || seconds === '') return null;
   const s = parseInt(seconds);
   if (isNaN(s)) return null;
-  if (s < 60) return s + '秒';
-  if (s < 3600) return Math.floor(s / 60) + '分' + (s % 60) + '秒';
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return h + '时' + m + '分';
+  if (s < 60) return '<1分钟';
+  const m = Math.round(s / 60);
+  if (m < 60) return m + '分钟';
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm > 0 ? h + '时' + rm + '分' : h + '小时';
 }
 
 // ==================== RECORD ID MAPPING ====================

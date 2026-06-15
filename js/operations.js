@@ -990,10 +990,12 @@ const OpsApp = {
   _fmtDuration(seconds) {
     if (seconds == null) return '-';
     const s = Math.round(seconds);
-    if (s < 60) return s + '秒';
-    const m = Math.floor(s / 60);
-    const remain = s % 60;
-    return remain > 0 ? m + '分' + remain + '秒' : m + '分';
+    if (s < 60) return '<1分钟';
+    const m = Math.round(s / 60);
+    if (m < 60) return m + '分钟';
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return rm > 0 ? h + '时' + rm + '分' : h + '小时';
   },
 
   // ==================== POPUP MODAL HELPER ====================
