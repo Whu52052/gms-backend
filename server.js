@@ -1373,20 +1373,30 @@ async function handleExportXLSX(req, res, user) {
   invConfigs.forEach(c => { cfgMap[c.id] = c; if (c.hasLeftRight) { cfgMap[c.id + '_left'] = { name: c.name + '左手' }; cfgMap[c.id + '_right'] = { name: c.name + '右手' }; } });
 
   const rows = transactions.map(t => {
-    let equipLabel = t.equipmentType;
+    // 设备类型 + 左右手合并到一个列
+    let equipLabel = '';
+    const handLabel = t.handType === 'left' ? '左手' : t.handType === 'right' ? '右手' : '';
     const cfg = cfgMap[t.equipmentType];
-    if (cfg) { equipLabel = cfg.name; }
-    else if (t.equipmentType === 'glove') { equipLabel = t.handType === 'left' ? '左手手套' : '右手手套'; }
-    else if (t.equipmentType === 'dexterous_hand') { equipLabel = t.handType === 'left' ? '左手灵巧手' : '右手灵巧手'; }
+    if (cfg) {
+      // 如果有 handType，在设备名前面加上左右手
+      equipLabel = handLabel ? handLabel + cfg.name : cfg.name;
+    } else if (t.equipmentType === 'glove') {
+      equipLabel = handLabel ? handLabel + '手套' : '手套';
+    } else if (t.equipmentType === 'dexterous_hand') {
+      equipLabel = handLabel ? handLabel + '灵巧手' : '灵巧手';
+    } else {
+      equipLabel = handLabel ? handLabel + t.equipmentType : t.equipmentType;
+    }
+    // 更新人：兼容多种字段名
+    const updater = t.updatedBy || t.user || t.updatedby || '';
     return {
       '时间': t.timestamp ? new Date(t.timestamp).toLocaleString('zh-CN') : '',
       '设备类型': equipLabel,
-      '左右手': t.handType === 'left' ? '左手' : t.handType === 'right' ? '右手' : '-',
-      '出入库': t.direction === 'in' ? '入库' : '出库',
+      '出入库': t.direction === 'in' ? '入库' : t.direction === 'out' ? '出库' : (t.direction || ''),
       '数量': t.quantity || 0,
       'SN码': t.snCode || '',
       '机器编号': t.machineNumber || '',
-      '更新人': t.updatedBy || '',
+      '更新人': updater,
       '备注': t.note || '',
     };
   });

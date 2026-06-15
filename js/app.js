@@ -5056,22 +5056,29 @@ const App = {
       return false;
     };
 
+    const onCount = users.filter(u => u.online).length;
+    const offCount = users.filter(u => !u.online).length;
     const html = `
       <div class="page-header">
         <h2>👥 用户管理</h2>
-        <div class="header-actions">
+        <div class="header-actions" style="display:flex;gap:8px;align-items:center;">
+          <select id="um-status-filter" onchange="App._filterUserTable()" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;font-size:0.8rem;">
+            <option value="all">全部 (${users.length})</option>
+            <option value="online">🟢 在线 (${onCount})</option>
+            <option value="offline">⚫ 离线 (${offCount})</option>
+          </select>
           <button class="btn btn-primary" onclick="App.showAddUserForm()">+ 添加用户</button>
         </div>
       </div>
       <div class="table-container">
-        <table class="data-table">
+        <table class="data-table" id="um-user-table">
           <thead><tr><th>在线</th><th>用户名</th><th>角色</th><th>权限</th><th>所属系统</th><th>创建时间</th><th>操作</th></tr></thead>
           <tbody>${users.length === 0 ? '<tr><td colspan="7" class="empty-text">暂无用户</td></tr>' :
             users.map(u => {
               const perms = u.permissions || {};
               const canDelSN = perms.canDeleteSN;
               return `
-              <tr>
+              <tr data-user-status="${u.online ? 'online' : 'offline'}">
                 <td><span class="online-dot ${u.online ? 'online' : 'offline'}" title="${u.online ? '在线' : '离线'}"></span></td>
                 <td><strong>${u.displayName || u.username}</strong>${currentUser && u.id === currentUser.id ? ' <span class="badge badge-info">当前</span>' : ''}</td>
                 <td><span class="badge ${roleBadge(u.role)}">${roleLabel(u.role)}</span></td>
@@ -5089,6 +5096,17 @@ const App = {
       </div>
     `;
     document.getElementById('main-content').innerHTML = html;
+  },
+
+  _filterUserTable() {
+    const sel = document.getElementById('um-status-filter');
+    if (!sel) return;
+    const val = sel.value;
+    const rows = document.querySelectorAll('#um-user-table tbody tr');
+    rows.forEach(row => {
+      if (val === 'all') { row.style.display = ''; }
+      else { row.style.display = row.getAttribute('data-user-status') === val ? '' : 'none'; }
+    });
   },
 
   showAddUserForm() {

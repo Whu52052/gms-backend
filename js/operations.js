@@ -883,14 +883,23 @@ const OpsApp = {
     } catch {}
 
     const isSuper = user.role === 'superadmin';
+    const onlineCount = users.filter(u => u.online).length;
+    const offlineCount = users.filter(u => !u.online).length;
 
     const html = `
       <div class="page-header">
         <h2>👥 账户管理</h2>
-        <button class="btn btn-primary btn-sm" onclick="OpsApp.showAddUserForm()">+ 创建账户</button>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <select id="um-status-filter" onchange="OpsApp._filterUserTable()" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;font-size:0.8rem;">
+            <option value="all">全部 (${users.length})</option>
+            <option value="online">🟢 在线 (${onlineCount})</option>
+            <option value="offline">⚫ 离线 (${offlineCount})</option>
+          </select>
+          <button class="btn btn-primary btn-sm" onclick="OpsApp.showAddUserForm()">+ 创建账户</button>
+        </div>
       </div>
       <div class="ops-card">
-        <table class="um-table">
+        <table class="um-table" id="um-user-table">
           <thead>
             <tr>
               <th>用户名</th>
@@ -909,7 +918,7 @@ const OpsApp = {
               const isSelf = u.id === user.id;
               const dname = u.displayName || u.username;
               const sysName = sysMap[u.system] || u.system || '运维';
-              return '<tr>'
+              return '<tr data-user-status="' + (u.online ? 'online' : 'offline') + '">'
                 + '<td><strong>' + dname + '</strong>' + (isSelf ? ' <span style="color:var(--text-tertiary);font-size:0.75rem;">(我)</span>' : '') + '</td>'
                 + '<td style="font-size:0.8rem;color:var(--text-secondary);">' + (u.username || '-') + '</td>'
                 + '<td><span class="um-sys-badge um-sys-' + (u.system || 'maintenance') + '">' + sysName + '</span></td>'
@@ -928,6 +937,17 @@ const OpsApp = {
       </div>
     `;
     document.getElementById('main-content').innerHTML = html;
+  },
+
+  _filterUserTable() {
+    const sel = document.getElementById('um-status-filter');
+    if (!sel) return;
+    const val = sel.value;
+    const rows = document.querySelectorAll('#um-user-table tbody tr');
+    rows.forEach(row => {
+      if (val === 'all') { row.style.display = ''; }
+      else { row.style.display = row.getAttribute('data-user-status') === val ? '' : 'none'; }
+    });
   },
 
   showAddUserForm() {
