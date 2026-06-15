@@ -4,13 +4,10 @@
  * Performance: Node.js cluster (multi-core) + gzip + memory cache
  */
 const http = require('http');
-const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
-const cluster = require('cluster');
-const os = require('os');
 
 // ==================== FEISHU SYNC ====================
 const feishu = require('./feishu');
@@ -2143,21 +2140,5 @@ function getStaticFile(filePath, contentType, cacheKey) {
   } catch { return null; }
 }
 
-// ==================== CLUSTER ====================
-const CPU_COUNT = os.cpus().length;
-const WORKER_COUNT = Math.min(CPU_COUNT, 2); // 2 cores max for 2C2G server
-
-if (cluster.isMaster) {
-  console.log(`[CLUSTER] Master ${process.pid} starting ${WORKER_COUNT} workers...`);
-  for (let i = 0; i < WORKER_COUNT; i++) {
-    cluster.fork();
-  }
-  cluster.on('exit', (worker, code) => {
-    console.log(`[CLUSTER] Worker ${worker.process.pid} died (${code}), restarting...`);
-    setTimeout(() => cluster.fork(), 1000);
-  });
-} else {
-  // Worker process
-  startup();
-  console.log(`[CLUSTER] Worker ${process.pid} ready`);
-}
+// Start the server (single process — SSE broadcasting requires shared memory)
+startup();
