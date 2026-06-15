@@ -662,8 +662,8 @@ const App = {
       </div>
       <div class="form-group">
         <label>SN码 (选填)</label>
-        <input type="text" id="quick-sn" placeholder="输入SN码" list="sn-datalist-quick" autocomplete="off" oninput="App._onSNInput(this)"><span class="sn-attach-preview"></span>
-        <datalist id="sn-datalist-quick">${this._snDatalist()}</datalist>
+        <input type="text" id="quick-sn" placeholder="输入SN码"autocomplete="off" oninput="App._onSNInput(this)"><span class="sn-attach-preview"></span>
+        <!-- SN 自动补全改用自定义下拉 -->
       </div>
       <div class="form-group">
         <label>附件/图片</label>
@@ -791,8 +791,8 @@ const App = {
       </div>
       <div class="form-group">
         <label>SN码 (选填)</label>
-        <input type="text" id="glove-sn" placeholder="输入SN码" list="sn-datalist" autocomplete="off" oninput="App._onSNInput(this)"><span class="sn-attach-preview" id="glove-sn-preview"></span>
-        <datalist id="sn-datalist">${this._snDatalist()}</datalist>
+        <input type="text" id="glove-sn" placeholder="输入SN码" autocomplete="off" oninput="App._onSNInput(this)"><span class="sn-attach-preview" id="glove-sn-preview"></span>
+        <!-- SN 自动补全改用自定义下拉 -->
       </div>
       <div class="form-group">
         <label>附件/图片</label>
@@ -972,8 +972,8 @@ const App = {
       </div>
       <div class="form-group">
         <label>SN码 (选填)</label>
-        <input type="text" id="dex-sn" placeholder="输入灵巧手SN码" list="sn-datalist-dex" autocomplete="off" oninput="App._onSNInput(this)"><span class="sn-attach-preview"></span>
-        <datalist id="sn-datalist-dex">${this._snDatalist()}</datalist>
+        <input type="text" id="dex-sn" placeholder="输入灵巧手SN码" autocomplete="off" oninput="App._onSNInput(this)"><span class="sn-attach-preview"></span>
+        <!-- SN 自动补全改用自定义下拉 -->
       </div>
       <div class="form-group">
         <label>附件/图片</label>
@@ -1265,8 +1265,8 @@ const App = {
       </div>
       <div class="form-group">
         <label>SN码 (选填)</label>
-        <input type="text" id="dyn-sn" placeholder="输入SN码" list="sn-datalist-dyn" autocomplete="off" oninput="App._onSNInput(this)"><span class="sn-attach-preview"></span>
-        <datalist id="sn-datalist-dyn">${this._snDatalist()}</datalist>
+        <input type="text" id="dyn-sn" placeholder="输入SN码" autocomplete="off" oninput="App._onSNInput(this)"><span class="sn-attach-preview"></span>
+        <!-- SN 自动补全改用自定义下拉 -->
       </div>
       <div class="form-group">
         <label>附件/图片</label>
