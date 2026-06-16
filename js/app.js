@@ -1,4 +1,4 @@
-
+﻿
 /**
  * Main Application Logic
  * 手套/灵巧手/夹爪库存与机器管理系统
@@ -1736,52 +1736,6 @@ const App = {
 
 
   // ==================== AFTER-SALES MANAGEMENT ====================
-  async _transferOutSN(snCode) {
-    const regEntry = Storage.getSNByCode(snCode);
-    if (!regEntry) { this.notify('SN码未注册，请先录入SN注册表', 'error'); return; }
-    const html = `
-      <div>SN: <code>${snCode}</code> | ${regEntry.equipmentType||''} ${regEntry.handType==='left'?'左手':regEntry.handType==='right'?'右手':''}</div>
-      <div class="form-group" style="margin-top:10px;">
-        <label>调出地点 <span class="required">*</span></label>
-        <input type="text" id="tf-single-location" class="form-input" placeholder="例如：广州工厂、上海仓库、北京展会">
-      </div>
-      <div class="form-group">
-        <label>备注</label>
-        <input type="text" id="tf-single-note" class="form-input" placeholder="可选备注">
-      </div>`;
-    this.showModal('📤 调出手套', html, async () => {
-      const location = document.getElementById('tf-single-location')?.value?.trim();
-      if (!location) { this.notify('请输入调出地点', 'warning'); return false; }
-      const note = document.getElementById('tf-single-note')?.value?.trim() || '';
-      const user = API.currentUser?.username || '系统';
-
-      const doTransfer = async () => {
-        const result = await API.transferGloves({ location, reason: note, snCodes: [snCode], notes: note });
-        if (result && result.okCount > 0) {
-          let invType = regEntry.equipmentType;
-          if (regEntry.equipmentType === 'glove') invType = regEntry.handType === 'left' ? 'left_glove' : 'right_glove';
-          else if (regEntry.equipmentType === 'dexterous_hand') invType = regEntry.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
-          else invType = regEntry.equipmentType || 'left_glove';
-          await API.adjustInventory(invType, -1, user, snCode);
-          return true;
-        }
-        // API失败→直接改SN状态走 upsertSNRegistry API
-        await API.upsertSNRegistry({ snCode, equipmentType: regEntry.equipmentType, handType: regEntry.handType, status: 'transferred', updatedBy: user, updatedAt: new Date().toISOString() });
-        let invType = regEntry.equipmentType;
-        if (regEntry.equipmentType === 'glove') invType = regEntry.handType === 'left' ? 'left_glove' : 'right_glove';
-        else if (regEntry.equipmentType === 'dexterous_hand') invType = regEntry.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
-        else invType = regEntry.equipmentType || 'left_glove';
-        await API.adjustInventory(invType, -1, user, snCode);
-        return false;
-      };
-
-      const ok = await doTransfer();
-      this.notify(`✅ ${snCode} 已调出到 ${location}${!ok ? '(本地)' : ''}`);
-      this.renderSNCodes();
-      this.renderDashboard();
-      return true;
-    });
-  },
 
   _markAsDamaged(snCode) {
     const regEntry = Storage.getSNByCode(snCode);
