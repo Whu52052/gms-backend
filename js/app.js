@@ -1742,10 +1742,10 @@ const App = {
     var reg = Storage.getSNByCode(snCode);
     if (!reg) { self.notify("SN码未注册", "error"); return; }
 
-    var inv = reg.equipmentType;
-    if (inv === "glove") inv = reg.handType === "left" ? "left_glove" : "right_glove";
-    else if (inv === "dexterous_hand") inv = reg.handType === "left" ? "left_dexterous_hand" : "right_dexterous_hand";
-    else if (!inv) inv = "left_glove";
+    var invType = reg.equipmentType;
+    if (invType === "glove") invType = reg.handType === "left" ? "left_glove" : "right_glove";
+    else if (invType === "dexterous_hand") invType = reg.handType === "left" ? "left_dexterous_hand" : "right_dexterous_hand";
+    else if (!invType) invType = "left_glove";
 
     var bodyHtml = '<div style="padding:6px 0;">'
       + '<div style="margin-bottom:14px;padding:10px;background:var(--bg-secondary);border-radius:8px;">'
@@ -1766,21 +1766,20 @@ const App = {
       var loc = (document.getElementById("tf-loc")?.value || "").trim();
       if (!loc) { self.notify("请输入调出地点", "warning"); return false; }
       var user = self._currentUser();
-      var entry = {
-        snCode: snCode, equipmentType: reg.equipmentType, handType: reg.handType,
-        status: "transferred", updatedBy: user, updatedAt: new Date().toISOString()
-      };
-      // 1. 改 SN 状态
-      await API.upsertSNRegistry(entry);
-      // 2. 扣库存
-      await API.adjustInventory(inv, -1, user, snCode);
+
+      // 跟 _markAsDamaged 一样：先改本地 + 再改服务端
+      // 1. 改 SN 状态（本地+服务端）
+      self._registerSN(snCode, reg.equipmentType, reg.handType, "transferred", "", loc);
+      // 2. 扣库存（本地+服务端）
+      Storage.adjustInventory(invType, -1, user, snCode);
       // 3. 加流水
-      await API.addTransaction({
+      Storage.addTransaction({
         equipmentType: reg.equipmentType, handType: reg.handType,
         direction: "out", quantity: 1, snCode: snCode,
         updatedBy: user, note: "调出到 " + loc
       });
-      self.notify("✅ " + snCode + " → " + loc);
+
+      self.notify("✅ " + snCode + " 已调出到 " + loc);
       await Storage._syncFromServer();
       self.renderSNCodes();
       self.renderDashboard();
