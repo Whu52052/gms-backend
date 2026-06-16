@@ -190,6 +190,10 @@ function initDB() {
       createdBy VARCHAR(64),
       createdAt VARCHAR(64)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS transfers (
+      id VARCHAR(64) PRIMARY KEY,
+      data MEDIUMTEXT
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ];
   return Promise.all(statements.map(sql => pool.execute(sql)));
 }
@@ -527,7 +531,7 @@ const ALLOWED_TABLES = new Set([
   'machines', 'transactions', 'audit_log',
   'equipment_config', 'inventory_config',
   'ops_orders', 'ops_customers', 'ops_production',
-  'tech_support', 'group_transfers',
+  'tech_support', 'group_transfers', 'transfers',
 ]);
 
 function validateTable(table) {
@@ -671,7 +675,7 @@ async function handleLogin(req, res, body) {
   const user = rows[0];
   // Clean expired/stale tokens and invalidate user's existing tokens
   await invalidateUserTokens(user.id);
-  const STALE_THRESHOLD = 3 * 60 * 1000;
+  const STALE_THRESHOLD = 30 * 60 * 1000; // 30分钟无操作才清理
   Object.keys(tokens).forEach(k => {
     const t = tokens[k];
     if (t.expires < Date.now() || (Date.now() - (t.lastActive || 0)) > STALE_THRESHOLD) delete tokens[k];
@@ -989,6 +993,134 @@ async function handleDeleteTechSupport(req, res, authUser, id) {
   sendJSON(res, { success: true });
   // Sync delete to Feishu (background, zero impact on response time)
   setImmediate(() => feishu.deleteFromFeishu(id).catch(e => console.error("[Feishu] Delete err:", e.message)));
+}
+
+// ==================== GLOVE TRANSFER-OUT (手套调出) ====================
+// 手套调出到外部场地（不在公司），可从外部调回
+
+async function handleTransferGloves(req, res, authUser, body) {
+  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '仅管理员可执行调出操作' }, 403);
+  const { location, reason, snCodes, notes } = body;
+  if (!location || !snCodes || !Array.isArray(snCodes) || snCodes.length === 0) {
+    return sendJSON(res, { error: '请填写调出地点并选择至少一个SN码' }, 400);
+  }
+
+  const results = [];
+  const now = new Date().toISOString();
+  const transferId = 'tf-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+  for (const snCode of snCodes) {
+    const [rows] = await pool.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
+    if (rows.length === 0) { results.push({ snCode, ok: false, error: 'SN码不存在' }); continue; }
+    const sn = rows[0];
+    if (sn.status === 'transferred') { results.push({ snCode, ok: false, error: '已调出，请先调回' }); continue; }
+
+    await pool.execute(
+      'UPDATE sn_registry SET status = ?, updatedAt = ? WHERE snCode = ?',
+      ['transferred', now, snCode]
+    );
+    results.push({ snCode, ok: true });
+  }
+
+  // Save transfer record
+  const record = {
+    id: transferId,
+    type: 'transfer_out',
+    location,
+    reason: reason || '',
+    snCodes: results.filter(r => r.ok).map(r => r.snCode),
+    operatorId: authUser.userId,
+    operatorName: authUser.displayName || authUser.username,
+    notes: notes || '',
+    createdAt: now,
+  };
+  try { await saveJSON('transfers', transferId, record); } catch {}
+
+  broadcastSSE('transfers_updated', { action: 'created', id: transferId });
+  broadcastSSE('sn_registry_updated', {});
+  const okCount = results.filter(r => r.ok).length;
+  sendJSON(res, { success: true, transferId, okCount, failCount: results.length - okCount, results });
+}
+
+async function handleRecallGloves(req, res, authUser, body) {
+  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '仅管理员可执行调回操作' }, 403);
+  const { snCodes } = body;
+  if (!snCodes || !Array.isArray(snCodes) || snCodes.length === 0) {
+    return sendJSON(res, { error: '请选择要调回的SN码' }, 400);
+  }
+
+  const results = [];
+  const now = new Date().toISOString();
+  const recallId = 'rc-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+  for (const snCode of snCodes) {
+    const [rows] = await pool.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
+    if (rows.length === 0) { results.push({ snCode, ok: false, error: 'SN码不存在' }); continue; }
+    const sn = rows[0];
+    if (sn.status !== 'transferred') { results.push({ snCode, ok: false, error: '该手套未被调出' }); continue; }
+
+    await pool.execute(
+      'UPDATE sn_registry SET status = ?, updatedAt = ? WHERE snCode = ?',
+      ['available', now, snCode]
+    );
+    results.push({ snCode, ok: true });
+  }
+
+  const record = {
+    id: recallId,
+    type: 'transfer_recall',
+    snCodes: results.filter(r => r.ok).map(r => r.snCode),
+    operatorId: authUser.userId,
+    operatorName: authUser.displayName || authUser.username,
+    createdAt: now,
+  };
+  try { await saveJSON('transfers', recallId, record); } catch {}
+
+  broadcastSSE('transfers_updated', { action: 'recalled', id: recallId });
+  broadcastSSE('sn_registry_updated', {});
+  sendJSON(res, { success: true, recallId, okCount: results.filter(r => r.ok).length, results });
+}
+
+async function handleGetTransfers(req, res, authUser) {
+  const [rows] = await pool.execute('SELECT data FROM transfers ORDER BY id DESC LIMIT 500');
+  sendJSON(res, rows.map(r => JSON.parse(r.data)));
+}
+
+async function handleGetTransferStats(req, res, authUser) {
+  // 仪表盘统计：调出中/已调回
+  const [rows] = await pool.execute('SELECT data FROM transfers ORDER BY id DESC');
+  const all = rows.map(r => JSON.parse(r.data));
+  const [snRows] = await pool.execute("SELECT status, COUNT(*) as cnt FROM sn_registry GROUP BY status");
+  const snStats = {};
+  snRows.forEach(r => { snStats[r.status] = r.cnt; });
+
+  const transferredOut = snStats.transferred || 0;
+  const totalTransfers = all.filter(t => t.type === 'transfer_out').length;
+
+  // 计算仍在外部的手套（最后一条记录是调出且未调回）
+  const latestBySN = {};
+  for (const t of all) {
+    for (const sn of (t.snCodes || [])) {
+      if (!latestBySN[sn]) latestBySN[sn] = t.type;
+    }
+  }
+  const stillOut = Object.values(latestBySN).filter(v => v === 'transfer_out').length;
+
+  // 按地点统计
+  const byLocation = {};
+  all.filter(t => t.type === 'transfer_out').forEach(t => {
+    const loc = t.location || '未知';
+    if (!byLocation[loc]) byLocation[loc] = 0;
+    byLocation[loc] += (t.snCodes || []).length;
+  });
+
+  sendJSON(res, {
+    currentlyOut: stillOut,
+    transferredOut,
+    totalTransfers,
+    byLocation,
+    recentTransfers: all.filter(t => t.type === 'transfer_out').slice(0, 5),
+  });
 }
 
 // Helper: Update the latest machine record's status by machineNumber
@@ -2211,6 +2343,12 @@ const server = http.createServer(async (req, res) => {
 
     // Full import (ZIP with images)
     if (url.pathname === '/api/import/full' && req.method === 'POST') return handleImportFull(req, res, authUser, body);
+
+    // Glove transfer-out / recall (手套调出/调回)
+    if (url.pathname === '/api/transfers' && req.method === 'POST') return handleTransferGloves(req, res, authUser, body);
+    if (url.pathname === '/api/transfers/recall' && req.method === 'POST') return handleRecallGloves(req, res, authUser, body);
+    if (url.pathname === '/api/transfers' && req.method === 'GET') return handleGetTransfers(req, res, authUser);
+    if (url.pathname === '/api/transfers/stats' && req.method === 'GET') return handleGetTransferStats(req, res, authUser);
 
     // Clear all data (admin only)
     if (url.pathname === '/api/clear-all-data' && req.method === 'POST') return handleClearAllData(req, res, authUser);

@@ -161,7 +161,7 @@ const API = {
       const data = JSON.parse(localStorage.getItem('gms_login_history'));
       if (!data) return null;
       const elapsed = Date.now() - data.loginAt;
-      if (elapsed > 2 * 60 * 60 * 1000) { localStorage.removeItem('gms_login_history'); return null; }
+      if (elapsed > 24 * 60 * 60 * 1000) { localStorage.removeItem('gms_login_history'); return null; }
       if (data.deviceId !== this._getDeviceId()) { localStorage.removeItem('gms_login_history'); return null; }
       return data;
     } catch { return null; }
@@ -568,6 +568,20 @@ const API = {
     const data = await this._fetch('GET', url);
     return Array.isArray(data) ? data : [];
   },
+  // ====== 手套调出/调回 ======
+  async transferGloves(payload) {
+    return this._fetch('/api/transfers', 'POST', payload);
+  },
+  async recallGloves(payload) {
+    return this._fetch('/api/transfers/recall', 'POST', payload);
+  },
+  async getTransfers() {
+    return this._fetch('/api/transfers');
+  },
+  async getTransferStats() {
+    return this._fetch('/api/transfers/stats');
+  },
+
   async getRandomPopupMessage(category) {
     if (!this.online) return { text: '操作成功！' };
     const data = await this._fetch('GET', '/api/popup-messages/random?category=' + (category || 'submit'));

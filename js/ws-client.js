@@ -391,6 +391,18 @@ const Realtime = {
   },
 };
 
+// ==================== TAB VISIBILITY — 回到页签自动刷新 ====================
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && Realtime._token) {
+    // 用户回到页签：重连实时通道 + 刷新数据
+    if (!Realtime.isConnected()) {
+      Realtime.init(Realtime._token);
+    }
+    // 触发应用层刷新（由 app.js / operations.js 监听）
+    window.dispatchEvent(new CustomEvent('yunwei:tab-visible'));
+  }
+});
+
 // 导出给全局
 window.Realtime = Realtime;
 window.WSClient = WSClient;
