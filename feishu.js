@@ -16,7 +16,7 @@ const FEISHU_CONFIG = {
   tableId: 'tbl2e7qw33F7tatz',
   baseUrl: 'open.feishu.cn',
   // 飞书群机器人 Webhook（运维通知群）
-  groupWebhook: process.env.FEISHU_WEBHOOK || '',
+  groupWebhook: process.env.FEISHU_WEBHOOK || 'https://open.feishu.cn/open-apis/bot/v2/hook/4f0d2714-f45d-4735-97b9-84fc39120d65',
 };
 
 // ==================== TOKEN CACHE ====================
