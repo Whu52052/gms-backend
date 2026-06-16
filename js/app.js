@@ -355,7 +355,6 @@ const App = {
       case 'after-sales': this.renderAfterSales(); break;
       case 'inventory-config': this.renderInventoryConfig(); break;
       case 'tech-support': this.renderTechSupport(); break;
-      case 'transfers': this.renderTransfers(); break;
       case 'popup-messages': this.renderPopupMessages(); break;
       default:
         // Dynamic inventory type (from inventory config)
@@ -544,7 +543,7 @@ const App = {
         const snReg = Storage.getSNRegistry ? Storage.getSNRegistry() : [];
         const transferredCount = snReg.filter(s => s.status === 'transferred').length;
         cardsHtml += `
-        <div class="stat-card warning clickable" onclick="App.switchTab('transfers')" title="点击查看调出手套详情">
+        <div class="stat-card warning clickable" onclick="App._showTransferModal()" title="点击查看调出手套详情">
           <div class="stat-icon">📤</div>
           <div class="stat-value">${transferredCount}</div>
           <div class="stat-label">调出手套</div>
@@ -4047,176 +4046,65 @@ const App = {
     }
   },
 
-  // ==================== 手套调出 (Transfer Out) ====================
-  async renderTransfers() {
-    if (!this._isPrivileged()) {
-      document.getElementById('main-content').innerHTML = '<p class="empty-text">仅管理员可操作手套调出</p>';
-      return;
-    }
-    let transfers = [], stats = null, snRegistry = [];
-    try {
-      stats = await API.getTransferStats();
-      transfers = await API.getTransfers() || [];
-      snRegistry = await API.getSNRegistry() || [];
-    } catch {}
-
-    const transferredSNs = snRegistry.filter(s => s.status === 'transferred');
-    const hc = s => s ? s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : '';
-
-    document.getElementById('main-content').innerHTML = `
-      <div class="page-header">
-        <h2>📤 手套调出管理</h2>
-        <div style="display:flex;gap:8px;">
-          <button class="btn btn-primary btn-sm" onclick="App._showTransferOutForm()">📤 调出手套</button>
-          <button class="btn btn-success btn-sm" onclick="App._showRecallForm()">📥 调回手套</button>
-        </div>
-      </div>
-
-      <!-- 仪表盘 -->
-      <div style="display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
-        <div class="stat-card warning" style="flex:1;min-width:140px;">
-          <div class="stat-icon">📤</div>
-          <div class="stat-value">${stats?.currentlyOut || transferredSNs.length}</div>
-          <div class="stat-label">当前调出中</div>
-        </div>
-        <div class="stat-card primary" style="flex:1;min-width:140px;">
-          <div class="stat-icon">📋</div>
-          <div class="stat-value">${stats?.totalTransfers || transfers.length}</div>
-          <div class="stat-label">调出总次数</div>
-        </div>
-        <div class="stat-card accent" style="flex:1;min-width:140px;">
-          <div class="stat-icon">📊</div>
-          <div class="stat-value">${transferredSNs.length}</div>
-          <div class="stat-label">SN码在外</div>
-        </div>
-      </div>
-
-      <!-- 调出中的SN码列表 -->
-      <div class="ops-card" style="margin-bottom:14px;">
-        <h3>📍 当前调出中的手套 (${transferredSNs.length} 个SN)</h3>
-        ${transferredSNs.length === 0 ? '<p class="empty-text">暂无调出手套</p>' : `
-        <div style="overflow-x:auto;">
-        <table class="um-table">
-          <thead><tr><th>SN码</th><th>设备类型</th><th>左右手</th><th>调出时间</th><th>操作</th></tr></thead>
-          <tbody>${transferredSNs.slice(0,100).map(s => `
-            <tr>
-              <td><strong>${hc(s.snCode)}</strong></td>
-              <td>${hc(s.equipmentType) || '-'}</td>
-              <td>${s.handType === 'left' ? '左手' : s.handType === 'right' ? '右手' : '-'}</td>
-              <td style="font-size:0.8rem;">${s.updatedAt ? new Date(s.updatedAt).toLocaleString('zh-CN') : '-'}</td>
-              <td><button class="btn btn-xs btn-success" onclick="App._recallSingle('${hc(s.snCode)}')">📥 调回</button></td>
-            </tr>`).join('')}</tbody>
-        </table></div>`}
-      </div>
-
-      <!-- 最近调出记录 -->
-      <div class="ops-card">
-        <h3>📜 最近调出记录</h3>
-        ${transfers.filter(t => t.type === 'transfer_out').slice(0, 20).map(t => `
-          <div class="transfer-card" style="margin-bottom:6px;">
-            <div class="transfer-header">
-              <strong>📤 ${hc(t.location)}</strong>
-              <span style="font-size:0.75rem;color:var(--text-secondary);">${t.createdAt ? new Date(t.createdAt).toLocaleString('zh-CN') : '-'}</span>
-              <span style="font-size:0.75rem;color:var(--text-secondary);">操作人: ${hc(t.operatorName)}</span>
-            </div>
-            <div style="font-size:0.78rem;color:var(--text-secondary);margin-top:4px;">
-              ${t.snCodes?.length || 0} 个SN码: ${(t.snCodes || []).map(hc).join(', ')}
-              ${t.reason ? ` · 原因: ${hc(t.reason)}` : ''}
-            </div>
-          </div>
-        `).join('') || '<p class="empty-text">暂无调出记录</p>'}
-      </div>
-    `;
-  },
-
-  // 调出表单
-  _showTransferOutForm() {
-    const snRegistry = Storage.getSNRegistry ? Storage.getSNRegistry() : [];
-    const availableSNs = snRegistry.filter(s => s.status === 'available' || s.status === 'in_use');
-    const sortedSNs = availableSNs.sort((a,b) => (a.snCode||'').localeCompare(b.snCode||''));
-    const snOptions = sortedSNs.map(s => `<option value="${s.snCode.replace(/"/g,'&quot;')}">${s.snCode} | ${s.equipmentType||'-'} | ${s.handType==='left'?'左手':s.handType==='right'?'右手':'-'}</option>`).join('');
-
-    const html = `
-      <div class="form-group">
-        <label>调出地点 <span class="required">*</span></label>
-        <input type="text" id="tf-location" class="form-input" placeholder="例如：广州工厂、上海仓库、北京展会...">
-      </div>
-      <div class="form-group">
-        <label>调出原因</label>
-        <textarea id="tf-reason" class="form-textarea" rows="2" placeholder="可选：说明调出原因"></textarea>
-      </div>
-      <div class="form-group">
-        <label>选择SN码 <span class="required">*</span>（可Ctrl+多选 · 共${sortedSNs.length}个可选）</label>
-        <select id="tf-sncodes" class="form-select" multiple size="12" style="width:100%;">
-          ${snOptions}
-        </select>
-      </div>
-      <div class="form-group">
-        <label>备注</label>
-        <input type="text" id="tf-notes" class="form-input" placeholder="可选备注">
-      </div>
-    `;
-    this.showModal('📤 调出手套', html, async () => {
-      const location = document.getElementById('tf-location')?.value?.trim();
-      const reason = document.getElementById('tf-reason')?.value?.trim();
-      const notes = document.getElementById('tf-notes')?.value?.trim();
-      const sel = document.getElementById('tf-sncodes');
-      const snCodes = Array.from(sel?.selectedOptions || []).map(o => o.value.split(' ')[0]);
-
-      if (!location) { this.notify('请输入调出地点', 'warning'); return false; }
-      if (snCodes.length === 0) { this.notify('请至少选择一个SN码', 'warning'); return false; }
-
-      const result = await API.transferGloves({ location, reason, snCodes, notes });
-      if (result?.success) {
-        this.notify(`已调出 ${result.okCount} 个手套到 ${location}`);
-        await Storage._syncFromServer();
-        this.renderTransfers();
-        return true;
-      }
-      this.notify(result?.error || '调出失败', 'error');
-      return false;
-    });
-  },
-
-  // 调回表单
-  _showRecallForm() {
-    const snRegistry = Storage.getSNRegistry ? Storage.getSNRegistry() : [];
+  // ==================== 手套调出弹窗 (点击仪表盘卡片) ====================
+  async _showTransferModal() {
+    let snRegistry = [];
+    try { snRegistry = await API.getSNRegistry() || []; } catch {}
     const transferred = snRegistry.filter(s => s.status === 'transferred');
-    const snOptions = transferred.map(s => `<option value="${s.snCode.replace(/"/g,'&quot;')}">${s.snCode} | ${s.equipmentType||'-'} | ${s.handType==='left'?'左手':s.handType==='right'?'右手':'-'}</option>`).join('');
+    const hc = s => s ? String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : '';
 
-    if (transferred.length === 0) { this.notify('没有需要调回的手套', 'info'); return; }
+    const snRows = transferred.length === 0
+      ? '<p class="empty-text">✅ 当前无调出手套</p>'
+      : `<table class="um-table"><thead><tr><th><input type="checkbox" id="tf-check-all" onchange="App._toggleAllTransferChecks(this)"></th><th>SN码</th><th>设备类型</th><th>左右手</th><th>调出时间</th></tr></thead><tbody>`
+      + transferred.map(s => `
+          <tr>
+            <td><input type="checkbox" class="tf-sn-check" value="${hc(s.snCode)}"></td>
+            <td><strong>${hc(s.snCode)}</strong></td>
+            <td>${hc(s.equipmentType) || '-'}</td>
+            <td>${s.handType === 'left' ? '左手' : s.handType === 'right' ? '右手' : '-'}</td>
+            <td style="font-size:0.8rem;">${s.updatedAt ? new Date(s.updatedAt).toLocaleString('zh-CN') : '-'}</td>
+          </tr>`).join('')
+      + '</tbody></table>';
 
     const html = `
-      <div class="form-group">
-        <label>选择要调回的SN码 <span class="required">*</span>（可Ctrl+多选 · 共${transferred.length}个在外）</label>
-        <select id="rc-sncodes" class="form-select" multiple size="10" style="width:100%;">${snOptions}</select>
-      </div>
-    `;
-    this.showModal('📥 调回手套', html, async () => {
-      const sel = document.getElementById('rc-sncodes');
-      const snCodes = Array.from(sel?.selectedOptions || []).map(o => o.value.split(' ')[0]);
-      if (snCodes.length === 0) { this.notify('请至少选择一个SN码', 'warning'); return false; }
+      <div style="padding:4px 0;">
+        <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:90px;background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;">
+            <div style="font-size:1.6rem;font-weight:700;color:var(--color-warning);">${transferred.length}</div>
+            <div style="font-size:0.7rem;color:var(--text-secondary);">当前调出</div>
+          </div>
+        </div>
+        <h4 style="margin:0 0 8px;">📍 调出手套列表</h4>
+        ${snRows}
+        <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn btn-success btn-sm" id="tf-recall-btn" onclick="App._recallSelectedTransfers()" ${transferred.length === 0 ? 'disabled' : ''}>📥 调回选中</button>
+        </div>
+      </div>`;
 
-      const result = await API.recallGloves({ snCodes });
-      if (result?.success) {
-        this.notify(`已调回 ${result.okCount} 个手套`);
-        await Storage._syncFromServer();
-        this.renderTransfers();
-        return true;
-      }
-      this.notify(result?.error || '调回失败', 'error');
-      return false;
+    this.showModal('📤 调出手套 — ' + transferred.length + ' 个在外', html, () => {
+      // onSave — 留空，调回用独立按钮
     });
+    // 隐藏 modal 的确认按钮，用我们自己的按钮
+    const saveBtn = document.getElementById('modal-save');
+    if (saveBtn) saveBtn.style.display = 'none';
   },
 
-  // 单个调回
-  async _recallSingle(snCode) {
-    if (!confirm(`确认将 ${snCode} 调回公司？`)) return;
-    const result = await API.recallGloves({ snCodes: [snCode] });
+  _toggleAllTransferChecks(el) {
+    document.querySelectorAll('.tf-sn-check').forEach(cb => { cb.checked = el.checked; });
+  },
+
+  async _recallSelectedTransfers() {
+    const checks = document.querySelectorAll('.tf-sn-check:checked');
+    const snCodes = Array.from(checks).map(cb => cb.value);
+    if (snCodes.length === 0) { this.notify('请勾选要调回的SN码', 'warning'); return; }
+    if (!confirm(`确认调回 ${snCodes.length} 个手套？`)) return;
+
+    const result = await API.recallGloves({ snCodes });
     if (result?.success) {
-      this.notify(`${snCode} 已调回`);
+      this.notify(`已调回 ${result.okCount} 个手套`);
       await Storage._syncFromServer();
-      this.renderTransfers();
+      this.closeModal();
+      this.renderDashboard();  // 刷新仪表盘
     } else {
       this.notify(result?.error || '调回失败', 'error');
     }
