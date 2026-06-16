@@ -442,6 +442,8 @@ const App = {
     const todayTx = transactions.filter(t => new Date(t.timestamp).getTime() >= todayStart);
     const settings = Storage.getSettings();
     const cards = settings.dashboardCards || ['totalGloves', 'totalDexterous', 'left_glove', 'right_glove', 'left_dexterous_hand', 'right_dexterous_hand', 'gripper', 'onlineMachines', 'todayTransactions', 'transferredGloves'];
+    // 确保调出手套卡片始终显示（即使已有旧设置）
+    if (!cards.includes('transferredGloves')) cards.push('transferredGloves');
 
     // Build invConfig lookup for labels/icons
     const invConfig = Storage.getInventoryConfig();
