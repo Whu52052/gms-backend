@@ -2462,10 +2462,14 @@ const App = {
     const sel = document.getElementById('machine-offline-type');
     const damageGroup = document.getElementById('machine-damage-reason-group');
     const transferGroup = document.getElementById('machine-transfer-location-group');
+    console.log('[调出DEBUG] offlineTypeChange called, sel:', sel?.value, 'damageGroup:', !!damageGroup, 'transferGroup:', !!transferGroup);
     if (!sel) return;
     const val = sel.value;
     if (damageGroup) damageGroup.style.display = val === 'damaged' ? '' : 'none';
-    if (transferGroup) transferGroup.style.display = val === 'transfer' ? '' : 'none';
+    if (transferGroup) {
+      transferGroup.style.display = val === 'transfer' ? '' : 'none';
+      console.log('[调出DEBUG] transferGroup display set to:', transferGroup.style.display);
+    }
   },
 
   _onMachineSnDamageChange(el) {

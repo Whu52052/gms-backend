@@ -2464,10 +2464,10 @@ const staticCache = new Map(); // path → { data, contentType, gzipped }
 
 function getStaticFile(filePath, contentType, cacheKey) {
   const cached = staticCache.get(cacheKey);
-  // Check file mtime to auto-invalidate cache when file is updated (e.g. git pull)
+  // Check file mtime — always reload if changed (no TTL, instant update after git pull)
   try {
     const mtime = fs.statSync(filePath).mtimeMs;
-    if (cached && cached.fileMtime === mtime && (Date.now() - cached.ts) < 3600000) return cached; // 1h cache, mtime-checked
+    if (cached && cached.fileMtime === mtime) return cached; // mtime 未变 → 用缓存
   } catch { if (cached) staticCache.delete(cacheKey); return null; }
   try {
     const data = fs.readFileSync(filePath);
