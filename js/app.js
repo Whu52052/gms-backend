@@ -1737,6 +1737,57 @@ const App = {
 
   // ==================== AFTER-SALES MANAGEMENT ====================
 
+  async _transferOutSN(snCode) {
+    var self = this;
+    var reg = Storage.getSNByCode(snCode);
+    if (!reg) { self.notify("SN码未注册", "error"); return; }
+
+    var inv = reg.equipmentType;
+    if (inv === "glove") inv = reg.handType === "left" ? "left_glove" : "right_glove";
+    else if (inv === "dexterous_hand") inv = reg.handType === "left" ? "left_dexterous_hand" : "right_dexterous_hand";
+    else if (!inv) inv = "left_glove";
+
+    var bodyHtml = '<div style="padding:6px 0;">'
+      + '<div style="margin-bottom:14px;padding:10px;background:var(--bg-secondary);border-radius:8px;">'
+      + '<code style="font-weight:700;font-size:1rem;">' + snCode + '</code>'
+      + '<span style="font-size:0.8rem;color:var(--text-secondary);margin-left:8px;">'
+      + (reg.equipmentType||"") + " " + (reg.handType==="left"?"左手":reg.handType==="right"?"右手":"")
+      + '</span></div>'
+      + '<div class="form-group">'
+      + '<label>调出地点 <span class="required">*</span></label>'
+      + '<input type="text" id="tf-loc" class="form-input" placeholder="广州工厂 / 上海仓库 / 北京展会">'
+      + '</div>'
+      + '<div class="form-group">'
+      + '<label>备注</label>'
+      + '<input type="text" id="tf-note" class="form-input" placeholder="可选">'
+      + '</div></div>';
+
+    self.showModal("📤 调出 — " + snCode, bodyHtml, async function() {
+      var loc = (document.getElementById("tf-loc")?.value || "").trim();
+      if (!loc) { self.notify("请输入调出地点", "warning"); return false; }
+      var user = self._currentUser();
+      var entry = {
+        snCode: snCode, equipmentType: reg.equipmentType, handType: reg.handType,
+        status: "transferred", updatedBy: user, updatedAt: new Date().toISOString()
+      };
+      // 1. 改 SN 状态
+      await API.upsertSNRegistry(entry);
+      // 2. 扣库存
+      await API.adjustInventory(inv, -1, user, snCode);
+      // 3. 加流水
+      await API.addTransaction({
+        equipmentType: reg.equipmentType, handType: reg.handType,
+        direction: "out", quantity: 1, snCode: snCode,
+        updatedBy: user, note: "调出到 " + loc
+      });
+      self.notify("✅ " + snCode + " → " + loc);
+      await Storage._syncFromServer();
+      self.renderSNCodes();
+      self.renderDashboard();
+      return true;
+    });
+  },
+
   _markAsDamaged(snCode) {
     const regEntry = Storage.getSNByCode(snCode);
     if (!regEntry || regEntry.status !== 'available') { this.notify('该SN码不是空闲状态，无法标记损坏', 'error'); return; }
