@@ -1500,7 +1500,7 @@ const App = {
           <div class="sn-card-footer">
             <span class="badge ${sn.statusClass || (sn.status === '可用' ? 'badge-in' : 'badge-out')}">${sn.status}${sn.machine ? ' · ' + sn.machine : ''}</span>
             <span class="sn-card-time">${self._formatTime(sn.latest.timestamp)}</span>
-            ${sn.status === '可用' ? `<button class="btn btn-xs btn-warning" onclick="event.stopPropagation();App._markAsDamaged('${sn.snCode}')" title="标记为损坏" style="margin-left:4px;">⚠</button>` : ''}
+            ${sn.status === '可用' ? `<button class="btn btn-xs btn-warning" onclick="event.stopPropagation();App._markAsDamaged('${sn.snCode}')" title="标记为损坏" style="margin-left:4px;">⚠</button><button class="btn btn-xs btn-outline" onclick="event.stopPropagation();App._transferOutSN('${sn.snCode}')" title="调出到外部场地" style="margin-left:2px;">📤</button>` : ''}
             ${self._isPrivileged() ? `<button class="btn btn-xs btn-danger sn-delete-btn" data-sn="${sn.snCode.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}" title="删除此SN码" style="margin-left:auto;">🗑</button>` : ''}
           </div>
         </div>
@@ -1736,6 +1736,32 @@ const App = {
 
 
   // ==================== AFTER-SALES MANAGEMENT ====================
+  async _transferOutSN(snCode) {
+    const html = `
+      <div class="form-group">
+        <label>调出地点 <span class="required">*</span></label>
+        <input type="text" id="tf-single-location" class="form-input" placeholder="例如：广州工厂、上海仓库、北京展会">
+      </div>
+      <div class="form-group">
+        <label>备注</label>
+        <input type="text" id="tf-single-note" class="form-input" placeholder="可选备注">
+      </div>`;
+    this.showModal('📤 调出 ' + snCode, html, async () => {
+      const location = document.getElementById('tf-single-location')?.value?.trim();
+      if (!location) { this.notify('请输入调出地点', 'warning'); return false; }
+      const note = document.getElementById('tf-single-note')?.value?.trim() || '';
+      const result = await API.transferGloves({ location, reason: '', snCodes: [snCode], notes: note });
+      if (result?.success) {
+        this.notify(`✅ ${snCode} 已调出到 ${location}`);
+        await Storage._syncFromServer();
+        this.renderSNCodes(); // 刷新SN码列表
+        return true;
+      }
+      this.notify(result?.error || '调出失败', 'error');
+      return false;
+    });
+  },
+
   _markAsDamaged(snCode) {
     const regEntry = Storage.getSNByCode(snCode);
     if (!regEntry || regEntry.status !== 'available') { this.notify('该SN码不是空闲状态，无法标记损坏', 'error'); return; }
