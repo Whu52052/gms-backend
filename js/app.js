@@ -2100,6 +2100,10 @@ const App = {
         <label>损坏原因</label>
         <input type="text" id="machine-damage-reason" placeholder="描述损坏情况">
       </div>
+      <div class="form-group" id="machine-transfer-location-group" style="display:none;">
+        <label>调出地点 <span class="required">*</span></label>
+        <input type="text" id="machine-transfer-location" placeholder="例如：广州工厂、上海仓库">
+      </div>
       <div class="form-group" id="machine-sn-group" style="display:none;">
         <label>SN码选择 <span style="font-weight:normal;color:var(--text-tertiary);">(SN码是每个手套/灵巧手的唯一标识)</span></label>
         <div id="machine-sn-fields"></div>
@@ -2119,18 +2123,35 @@ const App = {
       const user = document.getElementById('machine-user').value.trim();
       if (!machineNumber || !user) { this.notify('请填写必填字段', 'error'); return false; }
 
-      // Read per-SN damage selections and per-SN damage reasons for offline mode
-      const snDamageMap = {};
+      // Read per-SN damage/transfer selections and reasons for offline mode
+      const snDamageMap = {};     // sn → true (damaged)
+      const snTransferMap = {};   // sn → location string (transfer)
       const snReasonMap = {};
       if (status === 'offline') {
         document.querySelectorAll('.machine-sn-damage').forEach(el => {
           snDamageMap[el.dataset.sn] = el.value === 'damaged';
+          snTransferMap[el.dataset.sn] = el.value === 'transfer';
         });
         document.querySelectorAll('.machine-sn-reason').forEach(el => {
           if (snDamageMap[el.dataset.sn]) {
             snReasonMap[el.dataset.sn] = el.value.trim() || '损坏';
+          } else if (snTransferMap[el.dataset.sn]) {
+            snTransferMap[el.dataset.sn] = el.value.trim() || '未指定地点';
           }
         });
+      }
+
+      // Handle transferred SNs via transfer API
+      if (status === 'offline') {
+        const transferredSNs = Object.entries(snTransferMap)
+          .filter(([sn, isTransfer]) => isTransfer)
+          .map(([sn]) => sn);
+        if (transferredSNs.length > 0) {
+          const loc = Object.values(snTransferMap).find(v => v && v !== true && v !== 'true') || '未指定地点';
+          try {
+            await API.transferGloves({ location: loc, reason, snCodes: transferredSNs, notes: '' });
+          } catch {}
+        }
       }
 
       const machines = Storage.getMachines();
@@ -2413,15 +2434,25 @@ const App = {
   },
 
   _onOfflineTypeChange() {
-    // 已废弃：下线类型改为逐SN选择，保留方法避免报错
+    const sel = document.getElementById('machine-offline-type');
+    const damageGroup = document.getElementById('machine-damage-reason-group');
+    const transferGroup = document.getElementById('machine-transfer-location-group');
+    if (!sel) return;
+    const val = sel.value;
+    if (damageGroup) damageGroup.style.display = val === 'damaged' ? '' : 'none';
+    if (transferGroup) transferGroup.style.display = val === 'transfer' ? '' : 'none';
   },
 
   _onMachineSnDamageChange(el) {
     const sn = el.dataset.sn;
     const reasonInput = document.querySelector(`.machine-sn-reason[data-sn="${sn}"]`);
     if (reasonInput) {
-      reasonInput.style.display = el.value === 'damaged' ? '' : 'none';
-      if (el.value !== 'damaged') reasonInput.value = '';
+      const isDamaged = el.value === 'damaged';
+      const isTransfer = el.value === 'transfer';
+      reasonInput.style.display = (isDamaged || isTransfer) ? '' : 'none';
+      if (isDamaged) reasonInput.placeholder = '描述损坏情况';
+      else if (isTransfer) reasonInput.placeholder = '调出地点（如：广州工厂、上海仓库）';
+      if (!isDamaged && !isTransfer) reasonInput.value = '';
     }
   },
 
