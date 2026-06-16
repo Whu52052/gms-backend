@@ -2090,7 +2090,7 @@ const App = {
       </div>
       <div class="form-group" id="machine-offline-type-group" style="display:none;">
         <label>下线类型</label>
-        <select id="machine-offline-type" onchange="App._onOfflineTypeChange()">
+        <select id="machine-offline-type" onchange="var d=document.getElementById('machine-damage-reason-group');var t=document.getElementById('machine-transfer-location-group');var v=this.value;if(d)d.style.display=v==='damaged'?'':'none';if(t)t.style.display=v==='transfer'?'':'none';">
           <option value="normal">正常归还</option>
           <option value="damaged">手套损坏</option>
           <option value="transfer">调用/转移</option>
@@ -2447,7 +2447,7 @@ const App = {
     // 下线时显示全局下线类型选择
     if (offlineTypeGroup) offlineTypeGroup.style.display = isOffline ? '' : 'none';
     if (damageReasonGroup) damageReasonGroup.style.display = 'none';
-    if (transferLocationGroup) transferLocationGroup.style.display = 'none';
+    // transferLocationGroup 由 select 的 onchange 内联控制，唔好遮
 
     if (isOffline) {
       const existingOnline = machines.find(m => m.machineNumber === number && m.status === 'online');
@@ -2459,17 +2459,7 @@ const App = {
   },
 
   _onOfflineTypeChange() {
-    const sel = document.getElementById('machine-offline-type');
-    const damageGroup = document.getElementById('machine-damage-reason-group');
-    const transferGroup = document.getElementById('machine-transfer-location-group');
-    console.log('[调出DEBUG] offlineTypeChange called, sel:', sel?.value, 'damageGroup:', !!damageGroup, 'transferGroup:', !!transferGroup);
-    if (!sel) return;
-    const val = sel.value;
-    if (damageGroup) damageGroup.style.display = val === 'damaged' ? '' : 'none';
-    if (transferGroup) {
-      transferGroup.style.display = val === 'transfer' ? '' : 'none';
-      console.log('[调出DEBUG] transferGroup display set to:', transferGroup.style.display);
-    }
+    // 已被内联 onchange 取代，保留空方法避免报错
   },
 
   _onMachineSnDamageChange(el) {
