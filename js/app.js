@@ -1756,19 +1756,19 @@ const App = {
       const note = document.getElementById('tf-single-note')?.value?.trim() || '';
       const user = API.currentUser?.username || '系统';
 
-      // 1. 调 API（更新 SN 状态为 transferred）
+      // 调 API（更新 SN 状态为 transferred）
       const result = await API.transferGloves({ location, reason: note, snCodes: [snCode], notes: note });
 
-      // 2. 扣减库存
-      if (regEntry) {
-        let invType = regEntry.equipmentType;
-        if (regEntry.equipmentType === 'glove') invType = regEntry.handType === 'left' ? 'left_glove' : 'right_glove';
-        else if (regEntry.equipmentType === 'dexterous_hand') invType = regEntry.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
-        Storage.adjustInventory(invType, -1, user, snCode);
-        Storage.addTransaction({ equipmentType: regEntry.equipmentType, handType: regEntry.handType, direction: 'out', quantity: 1, snCode, updatedBy: user, note: `调出到 ${location}` });
-      }
-
-      if (result?.success || !result) {
+      if (result && result.success) {
+        // 扣减库存（走服务端 API）
+        if (regEntry) {
+          let invType = regEntry.equipmentType;
+          if (regEntry.equipmentType === 'glove') invType = regEntry.handType === 'left' ? 'left_glove' : 'right_glove';
+          else if (regEntry.equipmentType === 'dexterous_hand') invType = regEntry.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
+          else invType = regEntry.equipmentType || 'left_glove';
+          await API.adjustInventory(invType, -1, user, snCode);
+          await API.addTransaction({ equipmentType: regEntry.equipmentType, handType: regEntry.handType, direction: 'out', quantity: 1, snCode, updatedBy: user, note: `调出到 ${location}` });
+        }
         this.notify(`✅ ${snCode} 已调出到 ${location}`);
         await Storage._syncFromServer();
         this.renderSNCodes();
