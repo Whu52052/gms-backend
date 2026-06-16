@@ -640,14 +640,21 @@ function serveStatic(req, res) {
   const ext = path.extname(filePath);
   if (!MIME_TYPES[ext]) return false;
   try {
-    // Use memory cache for static assets (1h TTL)
     const cached = getStaticFile(filePath, MIME_TYPES[ext], filePath);
     if (!cached) return false;
     const accept = req.headers['accept-encoding'] || '';
     const useGzip = accept.includes('gzip') && cached.gzipped && cached.gzipped.length < cached.data.length;
+
+    // HTML/JS: no-cache (每次更新即时生效)
+    // 图片/字体等: 长期缓存
+    const isDynamic = ext === '.html' || ext === '.js' || ext === '.css';
+    const cacheHeader = isDynamic
+      ? 'no-cache, no-store, must-revalidate'
+      : 'public, max-age=86400';
+
     const headers = {
       'Content-Type': cached.contentType,
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': cacheHeader,
       'ETag': '"' + cached.ts.toString(36) + '"',
     };
     if (useGzip) {
