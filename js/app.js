@@ -1737,7 +1737,11 @@ const App = {
 
   // ==================== AFTER-SALES MANAGEMENT ====================
   async _transferOutSN(snCode) {
+    const regEntry = Storage.getSNByCode(snCode);
     const html = `
+      <div class="form-group">
+        <label>SN码: <code>${snCode}</code></label>
+      </div>
       <div class="form-group">
         <label>调出地点 <span class="required">*</span></label>
         <input type="text" id="tf-single-location" class="form-input" placeholder="例如：广州工厂、上海仓库、北京展会">
@@ -1746,15 +1750,29 @@ const App = {
         <label>备注</label>
         <input type="text" id="tf-single-note" class="form-input" placeholder="可选备注">
       </div>`;
-    this.showModal('📤 调出 ' + snCode, html, async () => {
+    this.showModal('📤 调出手套', html, async () => {
       const location = document.getElementById('tf-single-location')?.value?.trim();
       if (!location) { this.notify('请输入调出地点', 'warning'); return false; }
       const note = document.getElementById('tf-single-note')?.value?.trim() || '';
-      const result = await API.transferGloves({ location, reason: '', snCodes: [snCode], notes: note });
-      if (result?.success) {
+      const user = API.currentUser?.username || '系统';
+
+      // 1. 调 API（更新 SN 状态为 transferred）
+      const result = await API.transferGloves({ location, reason: note, snCodes: [snCode], notes: note });
+
+      // 2. 扣减库存
+      if (regEntry) {
+        let invType = regEntry.equipmentType;
+        if (regEntry.equipmentType === 'glove') invType = regEntry.handType === 'left' ? 'left_glove' : 'right_glove';
+        else if (regEntry.equipmentType === 'dexterous_hand') invType = regEntry.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
+        Storage.adjustInventory(invType, -1, user, snCode);
+        Storage.addTransaction({ equipmentType: regEntry.equipmentType, handType: regEntry.handType, direction: 'out', quantity: 1, snCode, updatedBy: user, note: `调出到 ${location}` });
+      }
+
+      if (result?.success || !result) {
         this.notify(`✅ ${snCode} 已调出到 ${location}`);
         await Storage._syncFromServer();
-        this.renderSNCodes(); // 刷新SN码列表
+        this.renderSNCodes();
+        this.renderDashboard();
         return true;
       }
       this.notify(result?.error || '调出失败', 'error');
