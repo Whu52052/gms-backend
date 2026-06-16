@@ -1738,11 +1738,10 @@ const App = {
   // ==================== AFTER-SALES MANAGEMENT ====================
   async _transferOutSN(snCode) {
     const regEntry = Storage.getSNByCode(snCode);
+    if (!regEntry) { this.notify('SN码未注册，请先录入SN注册表', 'error'); return; }
     const html = `
-      <div class="form-group">
-        <label>SN码: <code>${snCode}</code></label>
-      </div>
-      <div class="form-group">
+      <div>SN: <code>${snCode}</code> | ${regEntry.equipmentType||''} ${regEntry.handType==='left'?'左手':regEntry.handType==='right'?'右手':''}</div>
+      <div class="form-group" style="margin-top:10px;">
         <label>调出地点 <span class="required">*</span></label>
         <input type="text" id="tf-single-location" class="form-input" placeholder="例如：广州工厂、上海仓库、北京展会">
       </div>
@@ -1756,27 +1755,42 @@ const App = {
       const note = document.getElementById('tf-single-note')?.value?.trim() || '';
       const user = API.currentUser?.username || '系统';
 
-      // 调 API（更新 SN 状态为 transferred）
-      const result = await API.transferGloves({ location, reason: note, snCodes: [snCode], notes: note });
-
-      if (result && result.success) {
-        // 扣减库存（走服务端 API）
-        if (regEntry) {
+      // 先直接更新 SN registry（本地 + 服务端）
+      const doTransfer = async () => {
+        // 方式1：调 API
+        const result = await API.transferGloves({ location, reason: note, snCodes: [snCode], notes: note });
+        console.log('[调出] API result:', result);
+        if (result && result.okCount > 0) {
+          // 扣库存
           let invType = regEntry.equipmentType;
           if (regEntry.equipmentType === 'glove') invType = regEntry.handType === 'left' ? 'left_glove' : 'right_glove';
           else if (regEntry.equipmentType === 'dexterous_hand') invType = regEntry.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
           else invType = regEntry.equipmentType || 'left_glove';
           await API.adjustInventory(invType, -1, user, snCode);
-          await API.addTransaction({ equipmentType: regEntry.equipmentType, handType: regEntry.handType, direction: 'out', quantity: 1, snCode, updatedBy: user, note: `调出到 ${location}` });
+          return true;
         }
-        this.notify(`✅ ${snCode} 已调出到 ${location}`);
-        await Storage._syncFromServer();
-        this.renderSNCodes();
-        this.renderDashboard();
-        return true;
-      }
-      this.notify(result?.error || '调出失败', 'error');
-      return false;
+        // 方式2：API失败→直接改本地
+        if (!result || result.okCount === 0) {
+          const errMsg = result?.results?.[0]?.error || 'API无响应，尝试本地调出...';
+          console.log('[调出] API未成功:', errMsg);
+          // 本地更新SN状态
+          const entry = { snCode, equipmentType: regEntry.equipmentType, handType: regEntry.handType, status: 'transferred', updatedAt: new Date().toISOString(), updatedBy: user };
+          this._registerSN(snCode, regEntry.equipmentType, regEntry.handType, 'transferred', '', location);
+          let invType = regEntry.equipmentType;
+          if (regEntry.equipmentType === 'glove') invType = regEntry.handType === 'left' ? 'left_glove' : 'right_glove';
+          else if (regEntry.equipmentType === 'dexterous_hand') invType = regEntry.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
+          else invType = regEntry.equipmentType || 'left_glove';
+          Storage.adjustInventory(invType, -1, user, snCode);
+          Storage.addTransaction({ equipmentType: regEntry.equipmentType, handType: regEntry.handType, direction: 'out', quantity: 1, snCode, updatedBy: user, note: '调出到 ' + location });
+        }
+        return false; // 返回 false 让调用者知道是本地处理
+      };
+
+      const ok = await doTransfer();
+      this.notify(`✅ ${snCode} 已调出到 ${location}${!ok ? '(本地)' : ''}`);
+      this.renderSNCodes();
+      this.renderDashboard();
+      return true;
     });
   },
 
