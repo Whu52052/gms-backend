@@ -15,6 +15,8 @@ const FEISHU_CONFIG = {
   appToken: 'Fi1iwkk9yiAmBUkDdv9cUWrVnuc',
   tableId: 'tbl2e7qw33F7tatz',
   baseUrl: 'open.feishu.cn',
+  // 飞书群机器人 Webhook（运维通知群）
+  groupWebhook: process.env.FEISHU_WEBHOOK || '',
 };
 
 // ==================== TOKEN CACHE ====================
@@ -309,8 +311,47 @@ async function initFeishuSync() {
   }
 }
 
+// ==================== GROUP MESSAGE ====================
+/**
+ * 发送消息到飞书群（通过自定义机器人 Webhook）
+ * @param {string} title 消息标题
+ * @param {string} content 消息内容
+ */
+async function sendGroupMessage(title, content) {
+  if (!FEISHU_CONFIG.groupWebhook) {
+    console.log('[Feishu] Webhook not configured, skip group message');
+    return false;
+  }
+  try {
+    const url = new URL(FEISHU_CONFIG.groupWebhook);
+    const body = JSON.stringify({
+      msg_type: 'interactive',
+      card: {
+        header: { title: { tag: 'plain_text', content: title }, template: 'red' },
+        elements: [{ tag: 'markdown', content: content }],
+      },
+    });
+    const res = await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: url.hostname, path: url.pathname + url.search, method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 8000,
+      }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(JSON.parse(d))); });
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+    console.log('[Feishu] Group message sent:', res.StatusMessage || 'ok');
+    return true;
+  } catch (e) {
+    console.error('[Feishu] Group message failed:', e.message);
+    return false;
+  }
+}
+
 module.exports = {
   syncToFeishu,
   deleteFromFeishu,
   initFeishuSync,
+  sendGroupMessage,
 };

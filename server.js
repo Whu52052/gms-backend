@@ -922,6 +922,18 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
   setImmediate(() => {
     realtime.notifyNewTechSupport(item);
     feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Sync err:', e.message));
+    // 飞书群通知
+    var machine = item.machineNumber || item.machineId || '未知设备';
+    var fault = item.faultType || '未知故障';
+    var submitter = item.submitterName || '未知用户';
+    feishu.sendGroupMessage(
+      '🔔 新技术支持请求',
+      '**' + machine + '** 提交了一个技术支持\n' +
+      '> 故障类型：' + fault + '\n' +
+      '> 提交人：' + submitter + '\n' +
+      '> 提交时间：' + now.slice(0, 19).replace('T', ' ') + '\n\n' +
+      '请尽快处理！'
+    ).catch(e => console.error('[Feishu] Group notify err:', e.message));
   });
 }
 
