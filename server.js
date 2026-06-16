@@ -862,6 +862,21 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
   if (!equipmentType || !machineId || !faultType) {
     return sendJSON(res, { error: '请填写所有必填字段' }, 400);
   }
+
+  // 检查该设备是否已有未完成的技术支持（防止重复提交）
+  const machineNo = machineNumber || machineId;
+  const [allRows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC');
+  const existingItems = allRows.map(r => JSON.parse(r.data));
+  const unfinished = existingItems.find(
+    item => (item.machineNumber === machineNo || item.machineId === machineId) &&
+            (item.status === 'pending' || item.status === 'responded')
+  );
+  if (unfinished) {
+    const statusLabel = unfinished.status === 'pending' ? '待响应' : '处理中';
+    return sendJSON(res, {
+      error: `设备 ${machineNo} 已有 ${statusLabel} 的技术支持请求（提交人：${unfinished.submitterName}），请等待维修完成后再提交`,
+    }, 400);
+  }
   const now = new Date().toISOString();
   const id = 'ts-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const item = {
