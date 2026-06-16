@@ -4197,20 +4197,36 @@ const App = {
   },
 
   async _recallSelectedTransfers() {
-    const checks = document.querySelectorAll('.tf-sn-check:checked');
-    const snCodes = Array.from(checks).map(cb => cb.value);
+    var checks = document.querySelectorAll('.tf-sn-check:checked');
+    var snCodes = Array.from(checks).map(function(cb) { return cb.value; });
     if (snCodes.length === 0) { this.notify('请勾选要调回的SN码', 'warning'); return; }
-    if (!confirm(`确认调回 ${snCodes.length} 个手套？`)) return;
+    if (!confirm('确认调回 ' + snCodes.length + ' 个手套？')) return;
 
-    const result = await API.recallGloves({ snCodes });
-    if (result?.success) {
-      this.notify(`已调回 ${result.okCount} 个手套`);
-      await Storage._syncFromServer();
-      this.closeModal();
-      this.renderDashboard();  // 刷新仪表盘
-    } else {
-      this.notify(result?.error || '调回失败', 'error');
+    var self = this;
+    var user = self._currentUser();
+    var ok = 0;
+    for (var i = 0; i < snCodes.length; i++) {
+      var sn = snCodes[i];
+      var reg = Storage.getSNByCode(sn);
+      if (!reg) continue;
+      var invType = reg.equipmentType;
+      if (invType === 'glove') invType = reg.handType === 'left' ? 'left_glove' : 'right_glove';
+      else if (invType === 'dexterous_hand') invType = reg.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
+      else if (!invType) invType = 'left_glove';
+      // 恢复 SN 状态 + 加库存（同 _markAsDamaged 逻辑）
+      self._registerSN(sn, reg.equipmentType, reg.handType, 'available', '', '');
+      Storage.adjustInventory(invType, 1, user, sn);
+      Storage.addTransaction({
+        equipmentType: reg.equipmentType, handType: reg.handType,
+        direction: 'in', quantity: 1, snCode: sn,
+        updatedBy: user, note: '调回公司'
+      });
+      ok++;
     }
+    self.notify('✅ 已调回 ' + ok + ' 个手套');
+    await Storage._syncFromServer();
+    self.closeModal();
+    self.renderDashboard();
   },
 
   async doDeletePopupMessage(id) {
