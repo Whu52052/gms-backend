@@ -2141,15 +2141,37 @@ const App = {
         });
       }
 
-      // Handle transferred SNs via transfer API
+      // Handle transferred SNs — global offline type OR per-SN selection
       if (status === 'offline') {
-        const transferredSNs = Object.entries(snTransferMap)
-          .filter(([sn, isTransfer]) => isTransfer)
-          .map(([sn]) => sn);
+        const offlineType = document.getElementById('machine-offline-type')?.value;
+        let transferredSNs = [];
+        let transferLocation = '';
+
+        if (offlineType === 'transfer') {
+          // 全局调用：机器上所有已分配SN码全部调出
+          transferLocation = document.getElementById('machine-transfer-location')?.value?.trim() || '未指定地点';
+          document.querySelectorAll('.machine-sn-input, .machine-sn-damage').forEach(el => {
+            const sn = el.dataset.sn || el.value?.trim();
+            if (sn) transferredSNs.push(sn);
+          });
+          // 如果冇逐SN字段，从注册表查找
+          if (transferredSNs.length === 0) {
+            const registry = Storage.getSNRegistry();
+            const machineSns = registry.filter(r => r.machineNumber === machineNumber && r.status === 'in_use');
+            transferredSNs = machineSns.map(r => r.snCode);
+          }
+        } else {
+          // 逐SN选择：只调出标记为 transfer 的SN
+          transferredSNs = Object.entries(snTransferMap)
+            .filter(([sn, isTransfer]) => isTransfer)
+            .map(([sn]) => sn);
+          transferLocation = Object.values(snTransferMap).find(v => v && v !== true && v !== 'true') || '';
+        }
+
         if (transferredSNs.length > 0) {
-          const loc = Object.values(snTransferMap).find(v => v && v !== true && v !== 'true') || '未指定地点';
           try {
-            await API.transferGloves({ location: loc, reason, snCodes: transferredSNs, notes: '' });
+            await API.transferGloves({ location: transferLocation || '未指定地点', reason, snCodes: transferredSNs, notes: '' });
+            this.notify(`已调出 ${transferredSNs.length} 个手套到 ${transferLocation || '未指定地点'}`);
           } catch {}
         }
       }
@@ -2413,6 +2435,7 @@ const App = {
     const typeSelect = document.getElementById('machine-device-type');
     const offlineTypeGroup = document.getElementById('machine-offline-type-group');
     const damageReasonGroup = document.getElementById('machine-damage-reason-group');
+    const transferLocationGroup = document.getElementById('machine-transfer-location-group');
     if (!statusSelect || !numberInput || !typeSelect) return;
 
     const number = numberInput.value.trim();
@@ -2420,9 +2443,11 @@ const App = {
 
     const machines = Storage.getMachines();
     const isOffline = statusSelect.value === 'offline';
-    // 下线时隐藏全局下线类型和损坏原因（改为逐SN选择）
-    if (offlineTypeGroup) offlineTypeGroup.style.display = 'none';
+
+    // 下线时显示全局下线类型选择
+    if (offlineTypeGroup) offlineTypeGroup.style.display = isOffline ? '' : 'none';
     if (damageReasonGroup) damageReasonGroup.style.display = 'none';
+    if (transferLocationGroup) transferLocationGroup.style.display = 'none';
 
     if (isOffline) {
       const existingOnline = machines.find(m => m.machineNumber === number && m.status === 'online');
