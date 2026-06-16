@@ -136,6 +136,10 @@ const API = {
     localStorage.removeItem('gms_login_history');
     localStorage.removeItem('gms_login_token');
     if (this.eventSource) { this.eventSource.close(); this.eventSource = null; }
+    // Clear all periodic timers
+    if (this._autoRefreshInterval) { clearInterval(this._autoRefreshInterval); this._autoRefreshInterval = null; }
+    if (this._heartbeatInterval) { clearInterval(this._heartbeatInterval); this._heartbeatInterval = null; }
+    if (this._pollingInterval) { clearInterval(this._pollingInterval); this._pollingInterval = null; }
   },
 
   _setupBeforeUnload() {
@@ -170,6 +174,10 @@ const API = {
   _listenSSE() {
     if (this.eventSource) { this.eventSource.close(); this.eventSource = null; }
     if (this._pollingInterval) { clearInterval(this._pollingInterval); this._pollingInterval = null; }
+    // Start periodic auto-refresh safety net (every 30s)
+    this._startAutoRefresh();
+    // Start token heartbeat (every 10min to keep session alive)
+    this._startTokenHeartbeat();
 
     this._sseFailures = 0;
     this._sseLastFail = 0;
@@ -265,6 +273,40 @@ const API = {
         this._listenSSE();
       }
     }, 5000);
+  },
+
+  // ==================== AUTO-REFRESH SAFETY NET ====================
+  // Periodic data sync every 30s — ensures data freshness even if SSE events are missed
+  _startAutoRefresh() {
+    if (this._autoRefreshInterval) clearInterval(this._autoRefreshInterval);
+    this._autoRefreshInterval = setInterval(async () => {
+      if (!this.online || !this.token) return;
+      // Skip if user is actively typing
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) return;
+      try {
+        await Storage._syncFromServer();
+        this._notifyUIUpdate();
+      } catch {}
+    }, 30000); // 30 seconds
+  },
+
+  // ==================== TOKEN HEARTBEAT ====================
+  // Lightweight API call every 10 minutes to keep the token's sliding window alive
+  _startTokenHeartbeat() {
+    if (this._heartbeatInterval) clearInterval(this._heartbeatInterval);
+    this._heartbeatInterval = setInterval(async () => {
+      if (!this.online || !this.token) return;
+      try {
+        const res = await this._fetchWithTimeout(this.baseURL + '/api/health', {
+          headers: this._headers()
+        }, 5000);
+        if (!res.ok) {
+          // Token may have expired — force re-login
+          console.warn('[API] Token heartbeat failed, session may have expired');
+        }
+      } catch {}
+    }, 10 * 60 * 1000); // 10 minutes
   },
 
   // Targeted UI update after SSE data sync — renders directly without innerHTML clear, no flicker

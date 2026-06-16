@@ -1462,7 +1462,7 @@ const App = {
         // Fallback: derive from transactions
         const txsForSn = allSnTxs.filter(t => t.snCode === sn.snCode).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         const latestTx = txsForSn[0];
-        if (latestTx.direction === 'out' && latestTx.machineNumber) {
+        if (latestTx && latestTx.direction === 'out' && latestTx.machineNumber) {
           sn.status = '在用';
           sn.machine = latestTx.machineNumber;
           sn.statusClass = 'badge-out';
