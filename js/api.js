@@ -91,6 +91,8 @@ const API = {
           this._saveLoginHistory(data.user);
           this._listenSSE();
           this._setupBeforeUnload();
+          // 记住登录态（Cookie 7天有效）
+          this._setCookie('gms_logged', '1', 7);
           // 🔴 微信级实时: 启动 WebSocket 双向通信
           if (typeof Realtime !== 'undefined') {
             Realtime.init(data.token);

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Operations System - 运营管理系统
  */
 const OpsApp = {
@@ -189,6 +189,15 @@ const OpsApp = {
     });
   },
 
+
+  _setCookie(name, value, days) {
+    var d = new Date(); d.setTime(d.getTime() + (days * 86400000));
+    document.cookie = name + "=" + encodeURIComponent(value) + ";expires=" + d.toUTCString() + ";path=/";
+  },
+  _getCookie(name) {
+    var m = document.cookie.match("(^|;)\\s*" + name + "\\s*=\\s*([^;]+)");
+    return m ? decodeURIComponent(m[2]) : null;
+  },
   switchTab(tab) {
     this.currentTab = tab;
     document.body.classList.remove('sidebar-open');

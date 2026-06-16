@@ -152,7 +152,9 @@ const App = {
     await Storage._syncFromServer();
     this.updateUserDisplay();
     this.updateHealthDot();
-    this.renderDashboard();
+    // 从 Cookie 恢复上次页面（如有）
+    var lastTab = this._getCookie("gms_last_tab");
+    if (lastTab && lastTab !== "dashboard") { this.switchTab(lastTab); } else { this.renderDashboard(); }
     this.startAutoRefresh();
     this.startHealthCheck();
     this.refreshSidebarInventory();
@@ -305,9 +307,22 @@ const App = {
     });
   },
 
+
+  _setCookie(name, value, days) {
+    var d = new Date(); d.setTime(d.getTime() + (days * 86400000));
+    document.cookie = name + "=" + encodeURIComponent(value) + ";expires=" + d.toUTCString() + ";path=/";
+  },
+  _getCookie(name) {
+    var m = document.cookie.match("(^|;)\\s*" + name + "\\s*=\\s*([^;]+)");
+    return m ? decodeURIComponent(m[2]) : null;
+  },
+  _deleteCookie(name) {
+    document.cookie = name + "=;expires=Thu,01 Jan 1970 00:00:00 UTC;path=/";
+  },
   switchTab(tab) {
     console.log('[switchTab] Switching to:', tab);
     this.currentTab = tab;
+    this._setCookie("gms_last_tab", tab, 7);
     // Close mobile sidebar when a nav item is clicked
     document.body.classList.remove('sidebar-open');
     document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
