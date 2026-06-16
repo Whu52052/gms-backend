@@ -1500,7 +1500,7 @@ const App = {
           <div class="sn-card-footer">
             <span class="badge ${sn.statusClass || (sn.status === '可用' ? 'badge-in' : 'badge-out')}">${sn.status}${sn.machine ? ' · ' + sn.machine : ''}</span>
             <span class="sn-card-time">${self._formatTime(sn.latest.timestamp)}</span>
-            ${sn.status === '可用' ? `<button class="btn btn-xs btn-warning" onclick="event.stopPropagation();App._markAsDamaged('${sn.snCode}')" title="标记为损坏" style="margin-left:4px;">⚠</button><button class="btn btn-xs btn-outline" onclick="event.stopPropagation();App._transferOutSN('${sn.snCode}')" title="调出到外部场地" style="margin-left:2px;">📤</button>` : ''}
+            ${sn.status === '可用' ? `<button class="btn btn-xs btn-warning" onclick="event.stopPropagation();App._markAsDamaged('${sn.snCode}')" title="标记为损坏" style="margin-left:4px;padding:1px 5px;font-size:0.65rem;">⚠</button><button class="btn btn-xs btn-outline" onclick="event.stopPropagation();App._transferOutSN('${sn.snCode}')" title="调出到外部场地" style="margin-left:2px;padding:1px 5px;font-size:0.65rem;">📤</button>` : ''}
             ${self._isPrivileged() ? `<button class="btn btn-xs btn-danger sn-delete-btn" data-sn="${sn.snCode.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}" title="删除此SN码" style="margin-left:auto;">🗑</button>` : ''}
           </div>
         </div>
