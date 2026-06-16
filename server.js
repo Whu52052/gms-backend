@@ -931,7 +931,7 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
       '**' + machine + '** 提交了一个技术支持\n' +
       '> 故障类型：' + fault + '\n' +
       '> 提交人：' + submitter + '\n' +
-      '> 提交时间：' + now.slice(0, 19).replace('T', ' ') + '\n\n' +
+      '> 提交时间：' + (new Date(new Date(now).getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ')) + '\n\n' +
       '请尽快处理！'
     ).catch(e => console.error('[Feishu] Group notify err:', e.message));
   });
@@ -1028,17 +1028,40 @@ async function handleTransferGloves(req, res, authUser, body) {
   const now = new Date().toISOString();
   const transferId = 'tf-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+  // Gather inventory deductions first (before DB transaction)
+  const inventoryDeltas = {}; // inv_type → -count
+
   for (const snCode of snCodes) {
     const [rows] = await pool.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
     if (rows.length === 0) { results.push({ snCode, ok: false, error: 'SN码不存在' }); continue; }
     const sn = rows[0];
     if (sn.status === 'transferred') { results.push({ snCode, ok: false, error: '已调出，请先调回' }); continue; }
 
+    // Map equipmentType + handType to inventory type
+    const invType = _snToInvType(sn.equipmentType, sn.handType);
+    inventoryDeltas[invType] = (inventoryDeltas[invType] || 0) - 1;
+
     await pool.execute(
       'UPDATE sn_registry SET status = ?, updatedAt = ? WHERE snCode = ?',
       ['transferred', now, snCode]
     );
     results.push({ snCode, ok: true });
+  }
+
+  // Synchronize inventory: deduct transferred-out gloves
+  for (const [invType, delta] of Object.entries(inventoryDeltas)) {
+    try {
+      const [invRows] = await pool.execute('SELECT quantity FROM inventory WHERE inv_type = ?', [invType]);
+      const currentQty = invRows.length > 0 ? invRows[0].quantity : 0;
+      const newQty = Math.max(0, currentQty + delta);
+      await pool.execute(
+        'REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
+        [invType, newQty, now, authUser.username]
+      );
+      broadcastSSE('inventory_updated', { type: invType, quantity: newQty, updatedBy: authUser.username });
+    } catch (e) {
+      console.error('[Transfer] Inventory sync failed for', invType, ':', e.message);
+    }
   }
 
   // Save transfer record
@@ -1072,17 +1095,38 @@ async function handleRecallGloves(req, res, authUser, body) {
   const now = new Date().toISOString();
   const recallId = 'rc-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+  // Gather inventory additions for recalled gloves
+  const inventoryDeltas = {}; // inv_type → +count
+
   for (const snCode of snCodes) {
     const [rows] = await pool.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
     if (rows.length === 0) { results.push({ snCode, ok: false, error: 'SN码不存在' }); continue; }
     const sn = rows[0];
     if (sn.status !== 'transferred') { results.push({ snCode, ok: false, error: '该手套未被调出' }); continue; }
 
+    const invType = _snToInvType(sn.equipmentType, sn.handType);
+    inventoryDeltas[invType] = (inventoryDeltas[invType] || 0) + 1;
+
     await pool.execute(
       'UPDATE sn_registry SET status = ?, updatedAt = ? WHERE snCode = ?',
       ['available', now, snCode]
     );
     results.push({ snCode, ok: true });
+  }
+
+  // Synchronize inventory: add back recalled gloves
+  for (const [invType, delta] of Object.entries(inventoryDeltas)) {
+    try {
+      const [invRows] = await pool.execute('SELECT quantity FROM inventory WHERE inv_type = ?', [invType]);
+      const currentQty = invRows.length > 0 ? invRows[0].quantity : 0;
+      await pool.execute(
+        'REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
+        [invType, currentQty + delta, now, authUser.username]
+      );
+      broadcastSSE('inventory_updated', { type: invType, quantity: currentQty + delta, updatedBy: authUser.username });
+    } catch (e) {
+      console.error('[Recall] Inventory sync failed for', invType, ':', e.message);
+    }
   }
 
   const record = {
@@ -1469,7 +1513,7 @@ async function handleGetInventory(req, res, user, type) {
 }
 
 async function handleAdjustInventory(req, res, user, type, body) {
-  const { delta } = body;
+  const { delta, snCode } = body;
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -1481,6 +1525,33 @@ async function handleAdjustInventory(req, res, user, type, body) {
       'REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
       [type, newQty, new Date().toISOString(), user.username]
     );
+
+    // SN consistency check: if SN code provided, verify it exists and status is consistent
+    if (snCode) {
+      const [snRows] = await conn.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
+      if (snRows.length > 0) {
+        const sn = snRows[0];
+        const expectedInvType = _snToInvType(sn.equipmentType, sn.handType);
+        // Warn if inventory type doesn't match SN's equipment type
+        if (expectedInvType !== type) {
+          console.warn(`[Inventory] SN ${snCode} type mismatch: expected ${expectedInvType}, got ${type}`);
+        }
+        // If delta < 0 (outbound), SN should be available or in_use (not damaged/transferred)
+        if (delta < 0 && sn.status !== 'available' && sn.status !== 'in_use') {
+          console.warn(`[Inventory] SN ${snCode} outbound with status=${sn.status}, delta=${delta}`);
+        }
+        // If delta > 0 (inbound), SN should not already be available (avoid double-counting)
+        if (delta > 0 && sn.status === 'available') {
+          console.warn(`[Inventory] SN ${snCode} inbound but already available — possible double-count`);
+        }
+      } else {
+        // SN code provided but not found — only warn on outbound (new SNs can be created on inbound)
+        if (delta < 0) {
+          console.warn(`[Inventory] SN ${snCode} not found in registry, outbound delta=${delta}`);
+        }
+      }
+    }
+
     await conn.commit();
     broadcastSSE('inventory_updated', { type, quantity: newQty, updatedBy: user.username });
     sendJSON(res, { success: true, newQuantity: newQty });
@@ -2199,7 +2270,7 @@ const server = http.createServer(async (req, res) => {
         onlineUsers: count,
         loadLevel: level,
         loadLabel: label,
-        version: '3.9.0',
+        version: '3.9.1',
       });
     }
 

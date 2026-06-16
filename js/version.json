@@ -1,0 +1,8 @@
+{
+  "app": 17,
+  "operations": 10,
+  "api": 8,
+  "ws-client": 1,
+  "storage": 8,
+  "config": 4
+}

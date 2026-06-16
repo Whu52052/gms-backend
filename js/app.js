@@ -729,7 +729,12 @@ const App = {
         updatedBy: user,
         attachment: attachment || '',
       });
-      if (direction === 'in' && snCode) this._registerSN(snCode, eqType, handType, 'available');
+      if (direction === 'in' && snCode) {
+        this._registerSN(snCode, eqType, handType, 'available');
+      } else if (direction === 'out' && snCode) {
+        // Mark SN as no longer available (transferred out of warehouse)
+        this._registerSN(snCode, eqType, handType, 'transferred', '', '手动出库');
+      }
       this.notifyWithUndo(`操作成功！当前库存: ${result.newQuantity}`);
       this.refreshCurrentTab();
       return true;
@@ -868,7 +873,11 @@ const App = {
         note: note || '',
         attachment: attachment || '',
       });
-      if (direction === 'in' && snCode) this._registerSN(snCode, 'glove', hand, 'available');
+      if (direction === 'in' && snCode) {
+        this._registerSN(snCode, 'glove', hand, 'available');
+      } else if (direction === 'out' && snCode) {
+        this._registerSN(snCode, 'glove', hand, 'transferred', '', '手动出库');
+      }
       this.notifyWithUndo(`手套${hand === 'left' ? '左手' : '右手'}${direction === 'in' ? '入库' : '出库'}成功！当前库存: ${result.newQuantity}`);
       this.renderGloveInventory();
       return true;
@@ -1049,7 +1058,11 @@ const App = {
         note: note || '',
         attachment: attachment || '',
       });
-      if (direction === 'in' && snCode) this._registerSN(snCode, 'dexterous_hand', hand, 'available');
+      if (direction === 'in' && snCode) {
+        this._registerSN(snCode, 'dexterous_hand', hand, 'available');
+      } else if (direction === 'out' && snCode) {
+        this._registerSN(snCode, 'dexterous_hand', hand, 'transferred', '', '手动出库');
+      }
       this.notifyWithUndo(`灵巧手${hand === 'left' ? '左手' : '右手'}${direction === 'in' ? '入库' : '出库'}成功！当前库存: ${result.newQuantity}`);
       this.renderDexterousHand();
       return true;
@@ -1336,7 +1349,11 @@ const App = {
         note: note || '',
         attachment: attachment || '',
       });
-      if (direction === 'in' && snCode) this._registerSN(snCode, inventoryType, isLR ? hand : null, 'available');
+      if (direction === 'in' && snCode) {
+        this._registerSN(snCode, inventoryType, isLR ? hand : null, 'available');
+      } else if (direction === 'out' && snCode) {
+        this._registerSN(snCode, inventoryType, isLR ? hand : null, 'transferred', '', '手动出库');
+      }
       this.notifyWithUndo(`${label}${direction === 'in' ? '入库' : '出库'}成功！当前库存: ${result.newQuantity}`);
       this.switchTab(tabId);
       return true;
@@ -2208,9 +2225,11 @@ const App = {
         });
       }
 
+      // Determine offline type at function scope (used by both transfer handling and inventory/Sn logic below)
+      const offlineType = (status === 'offline') ? (document.getElementById('machine-offline-type')?.value) : null;
+
       // Handle transferred SNs — global offline type OR per-SN selection
       if (status === 'offline') {
-        const offlineType = document.getElementById('machine-offline-type')?.value;
         let transferredSNs = [];
         let transferLocation = '';
 
@@ -2315,12 +2334,14 @@ const App = {
           });
         }
       } else {
-        // Return inventory when going offline (skip damaged items)
+        // Return inventory when going offline (skip damaged AND transferred items)
         const needed = Storage.getDeviceConsumptionMap(effectiveDeviceType);
         for (const [invType, qty] of Object.entries(needed)) {
           const sn = snMap[invType] || '';
-          // Don't return damaged gloves to available inventory
-          if (offlineType !== 'damaged') {
+          const isDamaged = snDamageMap[sn] || false;
+          const isTransferred = offlineType === 'transfer' || !!snTransferMap[sn];
+          // Don't return damaged or transferred gloves to available inventory
+          if (!isDamaged && !isTransferred) {
             Storage.adjustInventory(invType, qty, user, machineNumber);
           }
           const eqType = (invType === 'left_glove' || invType === 'right_glove') ? 'glove'
@@ -2329,6 +2350,10 @@ const App = {
           const handType = (invType === 'left_glove' || invType === 'left_dexterous_hand') ? 'left'
             : (invType === 'right_glove' || invType === 'right_dexterous_hand') ? 'right'
             : null;
+          let offlineNote;
+          if (isDamaged) offlineNote = '损坏';
+          else if (isTransferred) offlineNote = '调出';
+          else offlineNote = '自动归还';
           Storage.addTransaction({
             equipmentType: eqType,
             handType: handType,
@@ -2338,7 +2363,7 @@ const App = {
             pairId: pairId,
             machineNumber: machineNumber,
             updatedBy: user,
-            note: `机器${machineNumber}下线${offlineType === 'damaged' ? '损坏' : '自动归还'}`,
+            note: `机器${machineNumber}下线${offlineNote}`,
           });
         }
       }
@@ -2367,6 +2392,7 @@ const App = {
         updatedAt: now,
       });
       // Update SN registry status for each SN code (await server confirmation)
+      const failedSNs = [];  // Track failures for rollback
       if (snMap && Object.keys(snMap).length > 0) {
         for (const [invType, sn] of Object.entries(snMap)) {
           if (!sn) continue;
@@ -2375,11 +2401,22 @@ const App = {
           const hType = (invType === 'left_glove' || invType === 'left_dexterous_hand') ? 'left'
             : (invType === 'right_glove' || invType === 'right_dexterous_hand') ? 'right' : null;
           if (status === 'online') {
-            await this._registerSNChecked(sn, eqType, hType, 'in_use', machineNumber);
+            const ok = await this._registerSNChecked(sn, eqType, hType, 'in_use', machineNumber);
+            if (!ok) failedSNs.push({ sn, invType, eqType, hType });
           } else if (status === 'offline') {
-            // Use per-SN damage status and reason
+            // Use per-SN damage/transfer status and reason
             const isDamaged = snDamageMap[sn] || false;
-            await this._registerSNChecked(sn, eqType, hType, isDamaged ? 'damaged' : 'available', '', isDamaged ? (snReasonMap[sn] || reason || '损坏') : '');
+            const isTransferred = offlineType === 'transfer' || !!snTransferMap[sn];
+            let ok;
+            if (isDamaged) {
+              ok = await this._registerSNChecked(sn, eqType, hType, 'damaged', '', snReasonMap[sn] || reason || '损坏');
+            } else if (isTransferred) {
+              const loc = (typeof snTransferMap[sn] === 'string') ? snTransferMap[sn] : (document.getElementById('machine-transfer-location')?.value?.trim() || '未指定地点');
+              ok = await this._registerSNChecked(sn, eqType, hType, 'transferred', '', loc);
+            } else {
+              ok = await this._registerSNChecked(sn, eqType, hType, 'available', '', '');
+            }
+            if (!ok) failedSNs.push({ sn, invType, eqType, hType });
           }
         }
       } else if (status === 'offline') {
@@ -2387,10 +2424,40 @@ const App = {
         const reg = Storage.getSNRegistry();
         const machineInUse = reg.filter(r => r.machineNumber === machineNumber && r.status === 'in_use');
         for (const r of machineInUse) {
-          // Use per-SN damage status if available, otherwise default to available
+          // Use per-SN damage/transfer status if available, otherwise default to available
           const isDamaged = snDamageMap[r.snCode] || false;
-          await this._registerSNChecked(r.snCode, r.equipmentType, r.handType, isDamaged ? 'damaged' : 'available', '', isDamaged ? (snReasonMap[r.snCode] || reason || '损坏') : '');
+          const isTransferred = offlineType === 'transfer' || !!snTransferMap[r.snCode];
+          let ok;
+          if (isDamaged) {
+            ok = await this._registerSNChecked(r.snCode, r.equipmentType, r.handType, 'damaged', '', snReasonMap[r.snCode] || reason || '损坏');
+          } else if (isTransferred) {
+            const loc = (typeof snTransferMap[r.snCode] === 'string') ? snTransferMap[r.snCode] : (document.getElementById('machine-transfer-location')?.value?.trim() || '未指定地点');
+            ok = await this._registerSNChecked(r.snCode, r.equipmentType, r.handType, 'transferred', '', loc);
+          } else {
+            ok = await this._registerSNChecked(r.snCode, r.equipmentType, r.handType, 'available', '', '');
+          }
+          if (!ok) failedSNs.push({ sn: r.snCode, invType: this._snToInvType(r.equipmentType, r.handType), eqType: r.equipmentType, hType: r.handType });
         }
+      }
+
+      // Rollback inventory changes for failed SN registrations
+      if (failedSNs.length > 0) {
+        const needed = Storage.getDeviceConsumptionMap(effectiveDeviceType);
+        for (const { sn, invType } of failedSNs) {
+          const qty = needed[invType] || 1;
+          if (status === 'online') {
+            // Online failed: return the deducted inventory
+            Storage.adjustInventory(invType, qty, user, machineNumber);
+          } else if (status === 'offline') {
+            const isDamaged = snDamageMap[sn] || false;
+            const isTransferred = offlineType === 'transfer' || !!snTransferMap[sn];
+            if (!isDamaged && !isTransferred) {
+              // Offline normal failed: deduct the returned inventory back
+              Storage.adjustInventory(invType, -qty, user, machineNumber);
+            }
+          }
+        }
+        this.notify(`⚠️ ${failedSNs.length} 个SN码状态同步失败，已回滚库存变更`, 'warning');
       }
       this.notify(`${Storage._deviceTypeLabel(effectiveDeviceType)} ${machineNumber} ${status === 'online' ? '上线' : '下线'}成功！库存已自动${status === 'online' ? '扣减' : '归还'}，当前在线机器: ${Storage.getOnlineMachineCount()} 台`);
       this.renderMachines();
@@ -3553,7 +3620,17 @@ const App = {
           const reg = Storage.getSNRegistry();
           const machineInUse = reg.filter(r => r.machineNumber === machineNumber && r.status === 'in_use');
           for (const r of machineInUse) {
-            await this._registerSNChecked(r.snCode, r.equipmentType, r.handType, 'available', '', '');
+            // Check per-SN damage/transfer selections to avoid overwriting
+            const isDam = snDamageMap[r.snCode] || damagedInvTypes.has(
+              (r.equipmentType === 'glove' ? (r.handType === 'left' ? 'left_glove' : 'right_glove')
+                : r.equipmentType === 'dexterous_hand' ? (r.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand')
+                : r.equipmentType)
+            );
+            if (isDam) {
+              await this._registerSNChecked(r.snCode, r.equipmentType, r.handType, 'damaged', '', snReasonMap[r.snCode] || reason || '损坏');
+            } else {
+              await this._registerSNChecked(r.snCode, r.equipmentType, r.handType, 'available', '', '');
+            }
           }
         }
         this.notify(`${deviceLabel} ${machineNumber} ${status === 'online' ? '上线' : '下线'}成功！`);
@@ -6620,6 +6697,14 @@ const App = {
     return invType === 'left_glove' || invType === 'right_glove'
       || invType === 'left_dexterous_hand' || invType === 'right_dexterous_hand'
       || invType.endsWith('_left') || invType.endsWith('_right');
+  },
+
+  // Map equipmentType + handType to inventory type key
+  _snToInvType(equipmentType, handType) {
+    if (equipmentType === 'glove') return handType === 'left' ? 'left_glove' : 'right_glove';
+    if (equipmentType === 'dexterous_hand') return handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
+    if (handType) return equipmentType + '_' + handType;
+    return equipmentType || 'left_glove';
   },
 
   _isPrivileged() {
