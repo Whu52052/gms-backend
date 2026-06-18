@@ -197,7 +197,7 @@ const API = {
             await Storage._syncFromServer();
             this._notifyUIUpdate();
           }
-        }, 3000);
+        }, 300); // 300ms 防抖，近乎实时
       };
       const silentSyncCfg = () => {
         if (this._syncCfgTimer) clearTimeout(this._syncCfgTimer);
@@ -207,7 +207,7 @@ const API = {
             if (typeof App !== 'undefined' && App.refreshSidebarInventory) App.refreshSidebarInventory();
             this._notifyUIUpdate();
           }
-        }, 500);
+        }, 100); // 100ms 防抖，配置变更立即生效
       };
       this.eventSource.addEventListener('inventory_updated', silentSync);
       this.eventSource.addEventListener('machines_updated', silentSync);
@@ -251,7 +251,7 @@ const API = {
   _startPolling() {
     if (this.eventSource) { this.eventSource.close(); this.eventSource = null; }
     if (this._pollingInterval) return; // already polling
-    console.log('[API] SSE unavailable, falling back to polling every 5s');
+    console.log('[API] SSE unavailable, falling back to polling every 1s');
     this._pollingInterval = setInterval(async () => {
       if (!this.online || !this.token) return;
       try {
@@ -278,7 +278,7 @@ const API = {
   },
 
   // ==================== AUTO-REFRESH SAFETY NET ====================
-  // Periodic data sync every 30s — ensures data freshness even if SSE events are missed
+  // 无感刷新：每1秒静默同步数据，跳过正在输入的用户的刷新，不闪屏不打断操作
   _startAutoRefresh() {
     if (this._autoRefreshInterval) clearInterval(this._autoRefreshInterval);
     this._autoRefreshInterval = setInterval(async () => {
@@ -290,7 +290,7 @@ const API = {
         await Storage._syncFromServer();
         this._notifyUIUpdate();
       } catch {}
-    }, 30000); // 30 seconds
+    }, 1000); // 1秒无感刷新
   },
 
   // ==================== TOKEN HEARTBEAT ====================

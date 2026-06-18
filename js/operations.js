@@ -1581,22 +1581,43 @@ const OpsApp = {
 
   initStatusBar() {
     this.refreshStatusBar();
-    setInterval(() => this.refreshStatusBar(), 30000);
+    setInterval(() => this.refreshStatusBar(), 5000);
   },
 
   startHealthCheck() {
     setInterval(async () => {
       API.online = await API._checkServer();
       this.updateHealthDot();
-    }, 30000);
+    }, 5000); // 每5秒检查连接状态
   },
 
   // ==================== AUTO REFRESH ====================
   startAutoRefresh() {
-    // No more interval-based auto-refresh to avoid UI flicker.
-    // Real-time updates are now driven by SSE events via API._notifyUIUpdate().
-    // The manual refresh button remains available for users.
-    this._autoRefreshId = null;
+    // 1秒无感刷新：只刷新当前视图数据，不重新渲染整个页面
+    if (this._autoRefreshId) clearInterval(this._autoRefreshId);
+    this._autoRefreshId = setInterval(() => {
+      if (!API.online) return;
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) return;
+      this.refreshCurrentTab();
+    }, 1000);
+  },
+
+  // 无感刷新当前视图 — 仅更新数据，不闪屏不打断操作
+  refreshCurrentTab() {
+    const tab = this.currentTab;
+    if (tab === 'personal-analysis') {
+      this.renderPersonalAnalysis();
+    } else if (tab === 'task-list') {
+      this.renderTaskList();
+    } else if (tab === 'data-analysis') {
+      this.renderDataAnalysis();
+    } else if (tab === 'team-members') {
+      this.renderTeamMembers();
+    } else if (tab === 'requirements') {
+      this.renderRequirements();
+    }
+    // 静态页面不需要定时刷新
   },
   async _syncFromServer() { if (API.online) await Storage._syncFromServer(); },
   async manualRefresh() {
