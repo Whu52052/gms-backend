@@ -93,6 +93,14 @@ async function initPool() {
     idleTimeout: 60000,
   });
 
+  // 确保每个连接都正确设置 utf8mb4 编码（避免中文乱码）
+  pool.on('connection', async (conn) => {
+    try {
+      await conn.execute("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
+      await conn.execute("SET CHARACTER SET utf8mb4");
+    } catch {}
+  });
+
   // Handle pool errors — don't let them crash the server
   pool.on('error', (err) => {
     console.error('[DB] Pool error (non-fatal):', err.message);
@@ -243,6 +251,65 @@ function migrateDB() {
   return Promise.all(migrations.map(sql =>
     pool.execute(sql).catch(() => { /* column likely already exists */ })
   ));
+}
+
+// 修复因 MySQL 编码设置导致的 tech_support 中文乱码
+async function fixGarbledTechSupport() {
+  try {
+    const [rows] = await pool.execute('SELECT id, data FROM tech_support');
+    if (rows.length === 0) return;
+    let fixedCount = 0;
+    for (const row of rows) {
+      try {
+        const item = JSON.parse(row.data);
+        const fieldsToCheck = ['submitterName', 'equipmentTypeName', 'faultType', 'faultDescription', 'result'];
+        let needsFix = false;
+        for (const f of fieldsToCheck) {
+          const val = item[f];
+          if (typeof val === 'string' && val.length > 0) {
+            // 检测乱码特征：包含 � (U+FFFD) 或高比例非中英文特殊字符
+            if (val.includes('�') || /[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(val)) {
+              needsFix = true;
+              break;
+            }
+            // 检测 Latin-1 误读为 UTF-8 的特征（如 ¬Ã 等）
+            if (/[ÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷]/.test(val) && !/[一-鿿]/.test(val)) {
+              needsFix = true;
+              break;
+            }
+          }
+        }
+        if (needsFix) {
+          // 尝试修复：将 UTF-8 字节序列按 Latin-1 重新编码
+          const fixString = (str) => {
+            if (!str || typeof str !== 'string') return str;
+            try {
+              // 将字符串编码为 Latin-1 字节，再按 UTF-8 解码
+              const bytes = Buffer.from(str, 'latin1');
+              // 只有当解码结果包含中文字符时才认定为修复成功
+              const fixed = bytes.toString('utf8');
+              if (/[一-鿿]/.test(fixed)) return fixed;
+              // 尝试反向：按 UTF-8 编码后按 Latin-1 解码
+              const bytes2 = Buffer.from(str, 'utf8');
+              const fixed2 = bytes2.toString('latin1');
+              if (/[一-鿿]/.test(fixed2)) return fixed2;
+            } catch {}
+            return str;
+          };
+          for (const f of fieldsToCheck) {
+            if (typeof item[f] === 'string' && item[f].length > 0) {
+              item[f] = fixString(item[f]);
+            }
+          }
+          await pool.execute('UPDATE tech_support SET data = ? WHERE id = ?', [JSON.stringify(item), row.id]);
+          fixedCount++;
+        }
+      } catch {}
+    }
+    if (fixedCount > 0) console.log(`[DB] Fixed ${fixedCount} garbled tech_support records`);
+  } catch (e) {
+    console.error('[DB] fixGarbledTechSupport error (non-fatal):', e.message);
+  }
 }
 
 async function seedDefaults() {
@@ -2554,6 +2621,7 @@ async function startup() {
     await migrateDB();
     await migrateFromJSON();
     await seedDefaults();
+    await fixGarbledTechSupport();
     console.log('[DB] Database initialized successfully');
 
     // Init realtime engine (WebSocket + SSE 双通道)
