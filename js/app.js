@@ -6889,24 +6889,18 @@ const App = {
   },
 
   // 无感刷新当前视图 — 仅更新数据，不闪屏不打断操作
+  // 报表/审计/售后等含图表的页面跳过定时刷新，避免图表重绘闪烁
   refreshCurrentView() {
     const tab = this.currentTab;
+    // 仅刷新数据频繁变化的视图
     if (tab === 'dashboard') {
       this.renderDashboard();
     } else if (tab === 'transactions') {
       this.renderTransactions(this.currentPage.transactions);
     } else if (tab === 'machines') {
       this.renderMachines();
-    } else if (tab === 'reports') {
-      this.renderReports();
-    } else if (tab === 'audit') {
-      this.renderAuditLog();
-    } else if (tab === 'after-sales') {
-      this.renderAfterSales();
-    } else if (tab === 'tech-support') {
-      this.renderTechSupport();
     }
-    // 其他tab不需要定时刷新（settings, users等静态页面）
+    // reports/audit/after-sales/tech-support — 含图表，跳过1秒刷新，用户可手动点刷新按钮
   },
 
   bindKeyboardShortcuts() {

@@ -1604,20 +1604,15 @@ const OpsApp = {
   },
 
   // 无感刷新当前视图 — 仅更新数据，不闪屏不打断操作
+  // data-analysis(含图表)/team-members/requirements 跳过定时刷新，避免图表重绘闪烁
   refreshCurrentTab() {
     const tab = this.currentTab;
     if (tab === 'personal-analysis') {
       this.renderPersonalAnalysis();
     } else if (tab === 'task-list') {
       this.renderTaskList();
-    } else if (tab === 'data-analysis') {
-      this.renderDataAnalysis();
-    } else if (tab === 'team-members') {
-      this.renderTeamMembers();
-    } else if (tab === 'requirements') {
-      this.renderRequirements();
     }
-    // 静态页面不需要定时刷新
+    // data-analysis/team-members/requirements — 含图表或静态内容，跳过1秒刷新
   },
   async _syncFromServer() { if (API.online) await Storage._syncFromServer(); },
   async manualRefresh() {
