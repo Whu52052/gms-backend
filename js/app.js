@@ -3668,19 +3668,23 @@ const App = {
     // Find SN codes currently assigned to this machine
     const registry = Storage.getSNRegistry();
     let assignedSns = registry.filter(r => r.machineNumber === machineNumber && r.status === 'in_use');
-    // Fallback: check transactions for the latest online pair
+    // Fallback: check transactions for the latest online pair (any SN with this machineNumber)
     if (assignedSns.length === 0) {
       const txs = Storage.getTransactions();
-      const machineTxs = txs.filter(t => t.machineNumber === machineNumber && t.snCode && t.pairId);
+      const machineTxs = txs.filter(t => t.machineNumber === machineNumber && t.snCode);
       const pairMap = {};
-      machineTxs.forEach(t => { if (!pairMap[t.pairId]) pairMap[t.pairId] = []; pairMap[t.pairId].push(t); });
-      const pairs = Object.entries(pairMap).sort((a, b) => new Date(b[1][0].timestamp).getTime() - new Date(a[1][0].timestamp).getTime());
-      if (pairs.length > 0 && pairs[0][1][0].direction === 'out') {
-        assignedSns = pairs[0][1].map(t => ({
-          snCode: t.snCode,
-          equipmentType: t.equipmentType,
-          handType: t.handType,
-        }));
+      machineTxs.forEach(t => { if (!pairMap[t.pairId || '_nopair_']) pairMap[t.pairId || '_nopair_'] = []; pairMap[t.pairId || '_nopair_'].push(t); });
+      const pairs = Object.entries(pairMap).sort((a, b) => new Date(b[1][0].timestamp || 0).getTime() - new Date(a[1][0].timestamp || 0).getTime());
+      if (pairs.length > 0) {
+        // Find the latest "out" direction transactions
+        const latestOut = machineTxs.filter(t => t.direction === 'out').sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+        if (latestOut.length > 0) {
+          assignedSns = latestOut.map(t => ({
+            snCode: t.snCode,
+            equipmentType: t.equipmentType,
+            handType: t.handType,
+          }));
+        }
       }
     }
     if (assignedSns.length === 0) return '<p style="font-size:0.8rem;color:var(--text-tertiary);">该机器无已分配的SN码</p>';
@@ -3766,65 +3770,131 @@ const App = {
   },
 
   _renderMachineSNPairs(machineNumber) {
-    // Show SN pairs for any machine that has them (not just online)
+    // 显示该机器上所有关联的 SN 码（不限于有 pairId 的交易）
     const transactions = Storage.getTransactions();
-    const snRelatedTypes = ['glove', 'dexterous_hand', 'left_glove', 'right_glove', 'left_dexterous_hand', 'right_dexterous_hand'];
+    const snRegistry = Storage.getSNRegistry();
+
+    // 找到所有与此机器相关且有 SN 码的交易
     const machineTxs = transactions.filter(t =>
-      snRelatedTypes.includes(t.equipmentType) && t.snCode && t.machineNumber === machineNumber && t.pairId
+      t.snCode && t.machineNumber === machineNumber
     );
 
     if (machineTxs.length === 0) return '';
-
-    const pairMap = {};
-    machineTxs.forEach(t => {
-      if (!pairMap[t.pairId]) pairMap[t.pairId] = [];
-      pairMap[t.pairId].push(t);
-    });
-
-    // Show only the LATEST pair (most recent by timestamp)
-    const allPairs = Object.entries(pairMap)
-      .sort((a, b) => new Date(b[1][0].timestamp || 0).getTime() - new Date(a[1][0].timestamp || 0).getTime());
-    const displayPairs = allPairs.slice(0, 1);
 
     const getHand = (t) => {
       if (t.handType === 'left') return '左手';
       if (t.handType === 'right') return '右手';
       if (t.equipmentType && t.equipmentType.endsWith('_left')) return '左手';
       if (t.equipmentType && t.equipmentType.endsWith('_right')) return '右手';
-      return '-';
+      // Infer from SN registry
+      if (t.snCode) {
+        const reg = snRegistry.find(r => r.snCode === t.snCode);
+        if (reg && reg.handType) return reg.handType === 'left' ? '左手' : '右手';
+      }
+      return '通用';
     };
 
-    if (displayPairs.length === 0) return '';
+    const getEqLabel = (t) => {
+      if (t.equipmentType === 'glove') return '🧤 手套';
+      if (t.equipmentType === 'dexterous_hand') return '🤖 灵巧手';
+      if (t.equipmentType === 'gripper') return '🔧 夹爪';
+      return '📦 ' + (t.equipmentType || '设备');
+    };
 
-    let html = '<h4 class="detail-section-title">🏷️ SN码配对</h4><div class="sn-pair-list">';
-    displayPairs.forEach(([pairId, txs]) => {
-      const leftTx = txs.find(t => getHand(t) === '左手');
-      const rightTx = txs.find(t => getHand(t) === '右手');
-      const leftSn = leftTx ? leftTx.snCode : '-';
-      const rightSn = rightTx ? rightTx.snCode : '-';
-      const isActive = txs[0].direction === 'out';
-      // Build clickable SN code with attachment preview
-      const snDisplay = (sn) => {
-        if (!sn || sn === '-') return sn;
-        const reg = Storage.getSNByCode(sn);
-        if (reg && reg.attachment) {
-          return '<a href="#" onclick="event.preventDefault();App._showSNAttachment(\'' + sn + '\')" style="color:var(--color-primary);text-decoration:underline;cursor:pointer;" title="点击查看附件">' + sn + ' 📎</a>';
-        }
-        return sn;
+    // Build SN display
+    const snDisplay = (sn) => {
+      if (!sn || sn === '-') return sn;
+      const reg = Storage.getSNByCode(sn);
+      if (reg && reg.attachment) {
+        return '<a href="#" onclick="event.preventDefault();App._showSNAttachment(\'' + sn + '\')" style="color:var(--color-primary);text-decoration:underline;cursor:pointer;" title="点击查看附件">' + sn + ' 📎</a>';
+      }
+      return sn;
+    };
+
+    // Build status badge for SN code
+    const snStatusBadge = (sn) => {
+      const reg = Storage.getSNByCode(sn);
+      if (!reg) return '';
+      const statusMap = {
+        available: { cls: 'badge-online', label: '空闲' },
+        in_use: { cls: 'badge-warning', label: '使用中' },
+        damaged: { cls: 'badge-danger', label: '损坏' },
+        in_repair: { cls: 'badge-info', label: '售后中' },
+        transferred: { cls: '', label: '已调出' },
       };
-      html +=
-        '<div class="sn-pair-card" style="margin-bottom:8px;' + (isActive ? '' : 'opacity:0.65;') + '">' +
-          '<div class="sn-pair-header">' +
-            '<span class="sn-pair-id">🔗 配对 ' + pairId.slice(-8) + '</span>' +
-            '<span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;' + (isActive ? 'background:#dcfce7;color:#166534;' : 'background:#f3f4f6;color:#6b7280;') + '">' + (isActive ? '🟢 当前' : '📦 历史') + '</span>' +
-            '<span class="sn-pair-time">' + this._formatTime(txs[0].timestamp) + '</span>' +
-          '</div>' +
-          '<div class="sn-pair-body">' +
-            '<div class="sn-pair-col"><div class="sn-pair-label">左手 SN码</div><div class="sn-pair-value">' + snDisplay(leftSn) + '</div></div>' +
-            '<div class="sn-pair-col"><div class="sn-pair-label">右手 SN码</div><div class="sn-pair-value">' + snDisplay(rightSn) + '</div></div>' +
-          '</div>' +
-        '</div>';
+      const s = statusMap[reg.status] || { cls: '', label: reg.status || '未知' };
+      return '<span class="badge ' + s.cls + '" style="font-size:0.7rem;margin-left:4px;">' + s.label + '</span>';
+    };
+
+    let html = '<h4 class="detail-section-title">🏷️ 关联 SN 码</h4><div class="sn-pair-list">';
+
+    // 1. Try to group by pairId first (paired left+right)
+    const pairMap = {};
+    machineTxs.forEach(t => {
+      if (t.pairId) {
+        if (!pairMap[t.pairId]) pairMap[t.pairId] = [];
+        pairMap[t.pairId].push(t);
+      }
     });
+
+    const pairEntries = Object.entries(pairMap)
+      .sort((a, b) => new Date(b[1][0].timestamp || 0).getTime() - new Date(a[1][0].timestamp || 0).getTime());
+
+    if (pairEntries.length > 0) {
+      // Show ALL pairs (not just latest)
+      pairEntries.forEach(([pairId, txs]) => {
+        const leftTx = txs.find(t => getHand(t) === '左手');
+        const rightTx = txs.find(t => getHand(t) === '右手');
+        const otherTxs = txs.filter(t => getHand(t) !== '左手' && getHand(t) !== '右手');
+        const isActive = txs.some(t => t.direction === 'out');
+        html +=
+          '<div class="sn-pair-card" style="margin-bottom:8px;' + (isActive ? '' : 'opacity:0.65;') + '">' +
+            '<div class="sn-pair-header">' +
+              '<span class="sn-pair-id">🔗 配对 ' + pairId.slice(-8) + '</span>' +
+              '<span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;' + (isActive ? 'background:#dcfce7;color:#166534;' : 'background:#f3f4f6;color:#6b7280;') + '">' + (isActive ? '🟢 当前' : '📦 历史') + '</span>' +
+              '<span class="sn-pair-time">' + this._formatTime(txs[0].timestamp) + '</span>' +
+            '</div>' +
+            '<div class="sn-pair-body">' +
+              '<div class="sn-pair-col"><div class="sn-pair-label">左手 SN码</div><div class="sn-pair-value">' + snDisplay(leftTx ? leftTx.snCode : '-') + (leftTx ? snStatusBadge(leftTx.snCode) : '') + '</div></div>' +
+              '<div class="sn-pair-col"><div class="sn-pair-label">右手 SN码</div><div class="sn-pair-value">' + snDisplay(rightTx ? rightTx.snCode : '-') + (rightTx ? snStatusBadge(rightTx.snCode) : '') + '</div></div>' +
+            '</div>';
+        // Show any non-left-right SNs
+        if (otherTxs.length > 0) {
+          html += '<div class="sn-pair-body" style="border-top:1px dashed var(--border-color);padding-top:6px;">' +
+            otherTxs.map(t => '<div class="sn-pair-col"><div class="sn-pair-label">' + getEqLabel(t) + ' ' + getHand(t) + '</div><div class="sn-pair-value">' + snDisplay(t.snCode) + snStatusBadge(t.snCode) + '</div></div>').join('') +
+            '</div>';
+        }
+        html += '</div>';
+      });
+    } else {
+      // 2. No pairId — show all SN codes grouped by equipment type + hand
+      const grouped = {};
+      machineTxs.forEach(t => {
+        const key = getEqLabel(t) + ' · ' + getHand(t);
+        if (!grouped[key]) grouped[key] = [];
+        // Only keep the most recent direction for each SN code
+        const existing = grouped[key].find(e => e.snCode === t.snCode);
+        if (!existing || new Date(t.timestamp || 0).getTime() > new Date(existing.timestamp || 0).getTime()) {
+          if (existing) grouped[key] = grouped[key].filter(e => e.snCode !== t.snCode);
+          grouped[key].push(t);
+        }
+      });
+
+      Object.entries(grouped).forEach(([label, txs]) => {
+        const isActive = txs.some(t => t.direction === 'out');
+        html +=
+          '<div class="sn-pair-card" style="margin-bottom:8px;' + (isActive ? '' : 'opacity:0.65;') + '">' +
+            '<div class="sn-pair-header">' +
+              '<span>' + label + '</span>' +
+              '<span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;' + (isActive ? 'background:#dcfce7;color:#166534;' : 'background:#f3f4f6;color:#6b7280;') + '">' + (isActive ? '🟢 当前' : '📦 历史') + '</span>' +
+            '</div>' +
+            '<div class="sn-pair-body">' +
+              txs.map(t => '<div class="sn-pair-col"><div class="sn-pair-value" style="font-family:monospace;">' + snDisplay(t.snCode) + snStatusBadge(t.snCode) + '</div><div class="sn-pair-label" style="font-size:0.7rem;">' + (t.direction === 'out' ? '↗ 出库' : '↘ 入库') + ' · ' + this._formatTime(t.timestamp) + '</div></div>').join('') +
+            '</div>' +
+          '</div>';
+      });
+    }
+
     html += '</div>';
     return html;
   },
