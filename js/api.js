@@ -340,6 +340,17 @@ const API = {
     return this.token ? { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.token } : { 'Content-Type': 'application/json' };
   },
 
+  _setCookie(name, value, days) {
+    const d = new Date();
+    d.setTime(d.getTime() + (days * 24 * 60 * 60 * 1000));
+    document.cookie = name + '=' + encodeURIComponent(value) + ';expires=' + d.toUTCString() + ';path=/;SameSite=Lax';
+  },
+
+  _getCookie(name) {
+    const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+    return match ? decodeURIComponent(match[2]) : null;
+  },
+
   _fetchWithTimeout(url, options, timeoutMs = 5000) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
