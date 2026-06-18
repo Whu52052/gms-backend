@@ -1487,7 +1487,7 @@ async function handleGetMachines(req, res, user) {
   sendJSON(res, result);
 }
 async function handleAddMachine(req, res, user, body) {
-  if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限添加机器' }, 403);
+  // 普通用户可添加上下线记录（含损坏/调用标记）
   const id = body.id || ('m-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
   await saveJSON('machines', id, { ...body, id });
   broadcastSSE('machines_updated', {});
@@ -1507,7 +1507,7 @@ async function handleGetTransactions(req, res, user) {
   sendJSON(res, await readJSONArray('transactions', Math.min(limit, 50000)));
 }
 async function handleAddTransaction(req, res, user, body) {
-  if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限添加交易记录' }, 403);
+  // 普通用户可添加交易记录（含损坏/调用/上下线等操作）
   const id = body.id || ('tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
   await saveJSON('transactions', id, { ...body, id, timestamp: body.timestamp || new Date().toISOString() });
   broadcastSSE('transactions_updated', {});
@@ -2106,15 +2106,24 @@ async function handleGetSNRegistry(req, res) {
 }
 
 async function handleUpsertSNRegistry(req, res, authUser, body) {
-  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '仅管理员可操作SN注册表' }, 403);
+  // 普通用户可标记损坏/调用，但不能改其他字段（equipmentType/handType等由管理员设置）
   const { snCode, equipmentType, handType, status, machineNumber, damageReason, trackingNumber, attachment, shippedAt, repairedAt } = body;
   if (!snCode) return sendJSON(res, { error: 'SN码不能为空' }, 400);
   const now = new Date().toISOString();
   const [existing] = await pool.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
   if (existing.length > 0) {
+    // 普通用户只能更新 status / machineNumber / damageReason，其他字段保持原值
+    const isAdmin = authUser.role === 'admin' || authUser.role === 'superadmin';
     const fields = ['equipmentType', 'handType', 'status', 'machineNumber', 'trackingNumber', 'damageReason', 'shippedAt', 'repairedAt', 'attachment'];
     const vals = {};
-    fields.forEach(f => { vals[f] = body[f] !== undefined ? body[f] : existing[0][f]; });
+    fields.forEach(f => {
+      if (f === 'equipmentType' || f === 'handType' || f === 'attachment') {
+        // 这些字段只有管理员可修改
+        vals[f] = (isAdmin && body[f] !== undefined) ? body[f] : existing[0][f];
+      } else {
+        vals[f] = body[f] !== undefined ? body[f] : existing[0][f];
+      }
+    });
     vals.updatedAt = now;
     await pool.execute(
       'UPDATE sn_registry SET equipmentType=?, handType=?, status=?, machineNumber=?, trackingNumber=?, damageReason=?, shippedAt=?, repairedAt=?, attachment=?, updatedAt=? WHERE snCode=?',
