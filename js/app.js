@@ -3791,16 +3791,58 @@ const App = {
   },
 
   _renderMachineSNPairs(machineNumber) {
-    // 显示该机器上所有关联的 SN 码（不限于有 pairId 的交易）
+    // 显示该机器上所有关联的 SN 码
+    // 优先从 SN Registry（单一数据源）查询，再从交易记录补充
     const transactions = Storage.getTransactions();
     const snRegistry = Storage.getSNRegistry();
 
-    // 找到所有与此机器相关且有 SN 码的交易
+    // 1. 先从 SN Registry 找：当前在此机器上的 SN 码
+    const registrySns = snRegistry.filter(r =>
+      r.machineNumber === machineNumber && r.snCode
+    );
+
+    // 2. 再找与此机器相关的交易中有 SN 码的
     const machineTxs = transactions.filter(t =>
       t.snCode && t.machineNumber === machineNumber
     );
 
-    if (machineTxs.length === 0) return '';
+    // 3. 合并 registry SN codes（这些是当前真实配对）
+    const seenSns = new Set();
+    const allSnEntries = []; // { snCode, equipmentType, handType, status, source }
+
+    // 优先添加 Registry 中的（当前状态最准确）
+    registrySns.forEach(r => {
+      if (!seenSns.has(r.snCode)) {
+        seenSns.add(r.snCode);
+        allSnEntries.push({
+          snCode: r.snCode,
+          equipmentType: r.equipmentType || '',
+          handType: r.handType || '',
+          status: r.status || 'in_use',
+          source: 'registry',
+          timestamp: r.updatedAt || '',
+          direction: r.status === 'in_use' ? 'out' : 'in',
+        });
+      }
+    });
+
+    // 补充交易中的（可能包含历史记录或 registry 没有的）
+    machineTxs.forEach(t => {
+      if (!seenSns.has(t.snCode)) {
+        seenSns.add(t.snCode);
+        allSnEntries.push({
+          snCode: t.snCode,
+          equipmentType: t.equipmentType || '',
+          handType: t.handType || '',
+          status: t.direction === 'out' ? 'in_use' : 'available',
+          source: 'transaction',
+          timestamp: t.timestamp || '',
+          direction: t.direction || 'in',
+        });
+      }
+    });
+
+    if (allSnEntries.length === 0) return '';
 
     const getHand = (t) => {
       if (t.handType === 'left') return '左手';
@@ -3849,71 +3891,47 @@ const App = {
 
     let html = '<h4 class="detail-section-title">🏷️ 关联 SN 码</h4><div class="sn-pair-list">';
 
-    // 1. Try to group by pairId first (paired left+right)
-    const pairMap = {};
-    machineTxs.forEach(t => {
-      if (t.pairId) {
-        if (!pairMap[t.pairId]) pairMap[t.pairId] = [];
-        pairMap[t.pairId].push(t);
-      }
-    });
+    // 配对展示：左手 + 右手为一对
+    // 先分左右手，再配对展示
+    const leftEntries = allSnEntries.filter(e => getHand(e) === '左手');
+    const rightEntries = allSnEntries.filter(e => getHand(e) === '右手');
+    const otherEntries = allSnEntries.filter(e => getHand(e) !== '左手' && getHand(e) !== '右手');
 
-    const pairEntries = Object.entries(pairMap)
-      .sort((a, b) => new Date(b[1][0].timestamp || 0).getTime() - new Date(a[1][0].timestamp || 0).getTime());
+    // 展示所有当前配对（Registry 来源优先）
+    const isActive = allSnEntries.some(e => e.direction === 'out' || e.status === 'in_use');
 
-    if (pairEntries.length > 0) {
-      // Show ALL pairs (not just latest)
-      pairEntries.forEach(([pairId, txs]) => {
-        const leftTx = txs.find(t => getHand(t) === '左手');
-        const rightTx = txs.find(t => getHand(t) === '右手');
-        const otherTxs = txs.filter(t => getHand(t) !== '左手' && getHand(t) !== '右手');
-        const isActive = txs.some(t => t.direction === 'out');
-        html +=
-          '<div class="sn-pair-card" style="margin-bottom:8px;' + (isActive ? '' : 'opacity:0.65;') + '">' +
-            '<div class="sn-pair-header">' +
-              '<span class="sn-pair-id">🔗 配对 ' + pairId.slice(-8) + '</span>' +
-              '<span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;' + (isActive ? 'background:#dcfce7;color:#166534;' : 'background:#f3f4f6;color:#6b7280;') + '">' + (isActive ? '🟢 当前' : '📦 历史') + '</span>' +
-              '<span class="sn-pair-time">' + this._formatTime(txs[0].timestamp) + '</span>' +
-            '</div>' +
-            '<div class="sn-pair-body">' +
-              '<div class="sn-pair-col"><div class="sn-pair-label">左手 SN码</div><div class="sn-pair-value">' + snDisplay(leftTx ? leftTx.snCode : '-') + (leftTx ? snStatusBadge(leftTx.snCode) : '') + '</div></div>' +
-              '<div class="sn-pair-col"><div class="sn-pair-label">右手 SN码</div><div class="sn-pair-value">' + snDisplay(rightTx ? rightTx.snCode : '-') + (rightTx ? snStatusBadge(rightTx.snCode) : '') + '</div></div>' +
-            '</div>';
-        // Show any non-left-right SNs
-        if (otherTxs.length > 0) {
-          html += '<div class="sn-pair-body" style="border-top:1px dashed var(--border-color);padding-top:6px;">' +
-            otherTxs.map(t => '<div class="sn-pair-col"><div class="sn-pair-label">' + getEqLabel(t) + ' ' + getHand(t) + '</div><div class="sn-pair-value">' + snDisplay(t.snCode) + snStatusBadge(t.snCode) + '</div></div>').join('') +
-            '</div>';
-        }
-        html += '</div>';
-      });
-    } else {
-      // 2. No pairId — show all SN codes grouped by equipment type + hand
-      const grouped = {};
-      machineTxs.forEach(t => {
-        const key = getEqLabel(t) + ' · ' + getHand(t);
-        if (!grouped[key]) grouped[key] = [];
-        // Only keep the most recent direction for each SN code
-        const existing = grouped[key].find(e => e.snCode === t.snCode);
-        if (!existing || new Date(t.timestamp || 0).getTime() > new Date(existing.timestamp || 0).getTime()) {
-          if (existing) grouped[key] = grouped[key].filter(e => e.snCode !== t.snCode);
-          grouped[key].push(t);
-        }
-      });
+    // 按左右手配对展示（取最大数量）
+    const pairCount = Math.max(leftEntries.length, rightEntries.length, 1);
+    for (let i = 0; i < pairCount; i++) {
+      const left = leftEntries[i] || null;
+      const right = rightEntries[i] || null;
+      if (!left && !right) continue;
 
-      Object.entries(grouped).forEach(([label, txs]) => {
-        const isActive = txs.some(t => t.direction === 'out');
-        html +=
-          '<div class="sn-pair-card" style="margin-bottom:8px;' + (isActive ? '' : 'opacity:0.65;') + '">' +
-            '<div class="sn-pair-header">' +
-              '<span>' + label + '</span>' +
-              '<span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;' + (isActive ? 'background:#dcfce7;color:#166534;' : 'background:#f3f4f6;color:#6b7280;') + '">' + (isActive ? '🟢 当前' : '📦 历史') + '</span>' +
-            '</div>' +
-            '<div class="sn-pair-body">' +
-              txs.map(t => '<div class="sn-pair-col"><div class="sn-pair-value" style="font-family:monospace;">' + snDisplay(t.snCode) + snStatusBadge(t.snCode) + '</div><div class="sn-pair-label" style="font-size:0.7rem;">' + (t.direction === 'out' ? '↗ 出库' : '↘ 入库') + ' · ' + this._formatTime(t.timestamp) + '</div></div>').join('') +
-            '</div>' +
-          '</div>';
-      });
+      const leftActive = left && (left.status === 'in_use' || left.direction === 'out');
+      const rightActive = right && (right.status === 'in_use' || right.direction === 'out');
+      const pairActive = leftActive || rightActive;
+
+      html +=
+        '<div class="sn-pair-card" style="margin-bottom:8px;' + (pairActive ? '' : 'opacity:0.65;') + '">' +
+          '<div class="sn-pair-header">' +
+            '<span class="sn-pair-id">🔗 ' + (left ? getEqLabel(left) : getEqLabel(right)) + ' 配对 #' + (i + 1) + '</span>' +
+            '<span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;' + (pairActive ? 'background:#dcfce7;color:#166534;' : 'background:#f3f4f6;color:#6b7280;') + '">' + (pairActive ? '🟢 当前' : '📦 历史') + '</span>' +
+          '</div>' +
+          '<div class="sn-pair-body">' +
+            '<div class="sn-pair-col"><div class="sn-pair-label">左手 SN码</div><div class="sn-pair-value">' + snDisplay(left ? left.snCode : '-') + (left ? snStatusBadge(left.snCode) : '') + '</div></div>' +
+            '<div class="sn-pair-col"><div class="sn-pair-label">右手 SN码</div><div class="sn-pair-value">' + snDisplay(right ? right.snCode : '-') + (right ? snStatusBadge(right.snCode) : '') + '</div></div>' +
+          '</div>' +
+        '</div>';
+    }
+
+    // 展示非左右手的 SN 码（如夹爪等）
+    if (otherEntries.length > 0) {
+      html += '<div class="sn-pair-card" style="margin-bottom:8px;">' +
+        '<div class="sn-pair-header"><span>🔧 其他设备 SN 码</span></div>' +
+        '<div class="sn-pair-body">' +
+          otherEntries.map(e => '<div class="sn-pair-col"><div class="sn-pair-label">' + getEqLabel(e) + ' ' + getHand(e) + '</div><div class="sn-pair-value" style="font-family:monospace;">' + snDisplay(e.snCode) + snStatusBadge(e.snCode) + '</div></div>').join('') +
+        '</div>' +
+      '</div>';
     }
 
     html += '</div>';
