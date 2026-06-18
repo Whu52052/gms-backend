@@ -3468,16 +3468,23 @@ const App = {
       contentHtml,
       async () => {
         const reason = document.getElementById('qt-reason').value.trim();
-        // Read per-SN damage selections and per-SN damage reasons
-        const snDamageMap = {};
+        // Read per-SN actions (normal/damaged/transfer) and reasons
+        const snActionMap = {}; // 'normal' | 'damaged' | 'transfer'
         const snReasonMap = {};
         if (status === 'offline') {
           document.querySelectorAll('.qt-sn-damage').forEach(el => {
-            snDamageMap[el.dataset.sn] = el.value === 'damaged';
+            snActionMap[el.dataset.sn] = el.value; // 'normal', 'damaged', or 'transfer'
           });
-          document.querySelectorAll('.qt-sn-reason').forEach(el => {
-            if (snDamageMap[el.dataset.sn]) {
+          // Read damage reasons
+          document.querySelectorAll('.qt-sn-damage-reason').forEach(el => {
+            if (snActionMap[el.dataset.sn] === 'damaged') {
               snReasonMap[el.dataset.sn] = el.value.trim() || '损坏';
+            }
+          });
+          // Read transfer reasons
+          document.querySelectorAll('.qt-sn-transfer-reason').forEach(el => {
+            if (snActionMap[el.dataset.sn] === 'transfer') {
+              snReasonMap[el.dataset.sn] = el.value.trim() || '调用';
             }
           });
         }
@@ -3537,37 +3544,36 @@ const App = {
             });
           }
         } else {
-          // Build set of inventory types with damaged SNs
+          // Build set of inventory types with damaged/transfer SNs
           const damagedInvTypes = new Set();
+          const transferInvTypes = new Set();
           if (status === 'offline') {
             document.querySelectorAll('.qt-sn-damage').forEach(el => {
               if (el.value === 'damaged' && el.dataset.invType) {
                 damagedInvTypes.add(el.dataset.invType);
+              } else if (el.value === 'transfer' && el.dataset.invType) {
+                transferInvTypes.add(el.dataset.invType);
               }
             });
           }
-          // Also check snDamageMap for backward compatibility
-          for (const [sn, isDam] of Object.entries(snDamageMap)) {
-            if (isDam) {
-              const el = document.querySelector(`.qt-sn-damage[data-sn="${sn}"]`);
-              if (el && el.dataset.invType) damagedInvTypes.add(el.dataset.invType);
-            }
-          }
           for (const [invType, qty] of Object.entries(needed)) {
             const isDamaged = damagedInvTypes.has(invType);
+            const isTransfer = transferInvTypes.has(invType);
             const sn = document.querySelector(`.qt-sn-damage[data-inv-type="${invType}"]`);
             const snCode = sn ? sn.dataset.sn : (snMap[invType] || '');
-            if (!isDamaged) {
+            // 损坏和调用都不归还库存
+            if (!isDamaged && !isTransfer) {
               Storage.adjustInventory(invType, qty, user, machineNumber);
             }
             const eqType = (invType === 'left_glove' || invType === 'right_glove') ? 'glove'
               : (invType === 'left_dexterous_hand' || invType === 'right_dexterous_hand') ? 'dexterous_hand' : invType;
             const handType = (invType === 'left_glove' || invType === 'left_dexterous_hand') ? 'left'
               : (invType === 'right_glove' || invType === 'right_dexterous_hand') ? 'right' : null;
+            const noteLabel = isDamaged ? '损坏' : isTransfer ? '调用' : '自动归还';
             Storage.addTransaction({
               equipmentType: eqType, handType, direction: 'in', quantity: qty,
               snCode: snCode, pairId, machineNumber, updatedBy: user,
-              note: `机器${machineNumber}下线${isDamaged ? '损坏' : '自动归还'}`,
+              note: `机器${machineNumber}下线${noteLabel}`,
             });
           }
         }
@@ -3584,9 +3590,13 @@ const App = {
           machineNumber, deviceType: effectiveDeviceType, status,
           onlineTime: recordOnlineTime, offlineTime: recordOfflineTime,
           onlineReason: status === 'online' ? reason : '',
-          offlineReason: status === 'offline' ? (Object.values(snDamageMap).some(v => v)
-            ? Object.entries(snDamageMap).filter(([,v]) => v).map(([sn]) => sn + '(' + (snReasonMap[sn] || '损坏') + ')').join('; ')
-            : reason) : '',
+          offlineReason: status === 'offline'
+            ? (reason ? reason + '; ' : '')
+              + Object.entries(snActionMap)
+                .filter(([, v]) => v !== 'normal')
+                .map(([sn, v]) => sn + '(' + (v === 'damaged' ? '损坏' : '调用') + (snReasonMap[sn] ? ': ' + snReasonMap[sn] : '') + ')')
+                .join('; ')
+            : '',
           updatedBy: user, updatedAt: now,
         });
         // Update SN registry — ALWAYS update for every inventory type in needed (await server confirmation)
@@ -3602,6 +3612,8 @@ const App = {
             snCode = snEl.dataset.sn;
             if (snEl.value === 'damaged') {
               await this._registerSNChecked(snCode, eqType, hType, 'damaged', '', snReasonMap[snCode] || reason || '损坏');
+            } else if (snEl.value === 'transfer') {
+              await this._registerSNChecked(snCode, eqType, hType, 'transferred', '', snReasonMap[snCode] || reason || '调用');
             } else {
               await this._registerSNChecked(snCode, eqType, hType, 'available', '', '');
             }
@@ -3620,14 +3632,17 @@ const App = {
           const reg = Storage.getSNRegistry();
           const machineInUse = reg.filter(r => r.machineNumber === machineNumber && r.status === 'in_use');
           for (const r of machineInUse) {
-            // Check per-SN damage/transfer selections to avoid overwriting
-            const isDam = snDamageMap[r.snCode] || damagedInvTypes.has(
-              (r.equipmentType === 'glove' ? (r.handType === 'left' ? 'left_glove' : 'right_glove')
-                : r.equipmentType === 'dexterous_hand' ? (r.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand')
-                : r.equipmentType)
-            );
+            // Check per-SN action selections to avoid overwriting
+            const action = snActionMap[r.snCode] || 'normal';
+            const invType = (r.equipmentType === 'glove' ? (r.handType === 'left' ? 'left_glove' : 'right_glove')
+              : r.equipmentType === 'dexterous_hand' ? (r.handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand')
+              : r.equipmentType);
+            const isDam = action === 'damaged' || damagedInvTypes.has(invType);
+            const isTransfer = action === 'transfer' || transferInvTypes.has(invType);
             if (isDam) {
               await this._registerSNChecked(r.snCode, r.equipmentType, r.handType, 'damaged', '', snReasonMap[r.snCode] || reason || '损坏');
+            } else if (isTransfer) {
+              await this._registerSNChecked(r.snCode, r.equipmentType, r.handType, 'transferred', '', snReasonMap[r.snCode] || reason || '调用');
             } else {
               await this._registerSNChecked(r.snCode, r.equipmentType, r.handType, 'available', '', '');
             }
@@ -3708,7 +3723,8 @@ const App = {
               <option value="transfer">调用</option>
             </select>
           </div>
-          <input type="text" class="qt-sn-reason" data-sn="${sn.snCode}" data-inv-type="${invType}" placeholder="填写该手套的损坏原因" style="display:none;width:100%;padding:6px 8px;margin-top:4px;font-size:0.8rem;border:1px solid var(--border-color);border-radius:4px;">
+          <input type="text" class="qt-sn-reason qt-sn-damage-reason" data-sn="${sn.snCode}" data-inv-type="${invType}" placeholder="填写损坏原因" style="display:none;width:100%;padding:6px 8px;margin-top:4px;font-size:0.8rem;border:1px solid var(--border-color);border-radius:4px;">
+          <input type="text" class="qt-sn-reason qt-sn-transfer-reason" data-sn="${sn.snCode}" data-inv-type="${invType}" placeholder="填写调用去向（如：调往XX机器/XX项目）" style="display:none;width:100%;padding:6px 8px;margin-top:4px;font-size:0.8rem;border:1px solid var(--border-color);border-radius:4px;">
         </div>`;
     });
     html += '</div>';
@@ -3716,12 +3732,17 @@ const App = {
   },
 
   _onSnDamageChange(el) {
-    // 显示/隐藏当前SN的损坏原因输入框
+    // 显示/隐藏当前SN的损坏原因或调用去向输入框
     const sn = el.dataset.sn;
-    const reasonInput = document.querySelector(`.qt-sn-reason[data-sn="${sn}"]`);
-    if (reasonInput) {
-      reasonInput.style.display = el.value === 'damaged' ? '' : 'none';
-      if (el.value !== 'damaged') reasonInput.value = '';
+    const damageInput = document.querySelector(`.qt-sn-damage-reason[data-sn="${sn}"]`);
+    const transferInput = document.querySelector(`.qt-sn-transfer-reason[data-sn="${sn}"]`);
+    // Hide all first, then show the relevant one
+    if (damageInput) { damageInput.style.display = 'none'; damageInput.value = ''; }
+    if (transferInput) { transferInput.style.display = 'none'; transferInput.value = ''; }
+    if (el.value === 'damaged' && damageInput) {
+      damageInput.style.display = '';
+    } else if (el.value === 'transfer' && transferInput) {
+      transferInput.style.display = '';
     }
   },
 
