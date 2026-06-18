@@ -2325,6 +2325,12 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
 
+    // Favicon — return SVG icon to avoid 404 in browser console
+    if (req.url === '/favicon.ico' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' });
+      return res.end('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="80" font-size="80">🧤</text></svg>');
+    }
+
     if (req.url === '/api/health' && req.method === 'GET') {
       return sendJSON(res, { status: 'ok', uptime: process.uptime() });
     }
