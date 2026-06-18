@@ -1,0 +1,88 @@
+# ===================================================================
+#  Yunwei CI/CD Pipeline
+#  触发: push master → 构建镜像 → 推送到 Docker Hub → SSH 部署
+# ===================================================================
+name: Deploy Yunwei
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  DOCKER_IMAGE: yunwei-app
+  NODE_VERSION: '20'
+
+jobs:
+  # ========== Job 1: 代码质量检查 ==========
+  lint:
+    name: Lint & Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Security audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Check syntax
+        run: node -c server.js && node -c feishu.js
+
+  # ========== Job 2: 构建 Docker 镜像 ==========
+  build:
+    name: Build Docker Image
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ env.DOCKER_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test container startup
+        run: |
+          docker run -d --name yunwei-test -p 8765:8765 \
+            -e DB_HOST=mysql -e REDIS_HOST=redis \
+            ${{ env.DOCKER_IMAGE }}:latest
+          sleep 10
+          docker logs yunwei-test
+          docker stop yunwei-test && docker rm yunwei-test
+
+  # ========== Job 3: 部署到服务器 (可选) ==========
+  deploy:
+    name: Deploy to Server
+    needs: build
+    runs-on: ubuntu-latest
+    if: false  # 改为 true 启用自动部署
+    steps:
+      - name: SSH Deploy
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            cd ~/yunwei
+            git pull origin master
+            docker-compose down
+            docker-compose up -d --build
+            docker-compose ps

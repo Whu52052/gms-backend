@@ -98,6 +98,35 @@ async function initPool() {
     console.error('[DB] Pool error (non-fatal):', err.message);
   });
 
+  // Store original execute for auto-recovery wrapper
+  const _origExecute = pool.execute.bind(pool);
+  pool.execute = async function(...args) {
+    try {
+      return await _origExecute(...args);
+    } catch (e) {
+      if (e.message && e.message.includes('Pool is closed')) {
+        console.warn('[DB] Pool closed, reinitializing...');
+        await initPool();
+        return _origExecute(...args);
+      }
+      throw e;
+    }
+  };
+
+  // Periodic health check — keep pool alive
+  const _healthCheck = setInterval(async () => {
+    try {
+      const conn = await _origExecute('SELECT 1');
+    } catch (e) {
+      if (e.message && e.message.includes('Pool is closed')) {
+        console.warn('[DB] Health check found closed pool, reconnecting...');
+        try { await initPool(); } catch(e2) { console.error('[DB] Reconnect failed:', e2.message); }
+      }
+    }
+  }, 30000);
+  // Allow event loop to exit if server stops
+  if (_healthCheck.unref) _healthCheck.unref();
+
   // Test connection
   const conn = await pool.getConnection();
   await conn.ping();
@@ -190,10 +219,6 @@ function initDB() {
       createdBy VARCHAR(64),
       createdAt VARCHAR(64)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-    `CREATE TABLE IF NOT EXISTS transfers (
-      id VARCHAR(64) PRIMARY KEY,
-      data MEDIUMTEXT
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ];
   return Promise.all(statements.map(sql => pool.execute(sql)));
 }
@@ -207,6 +232,7 @@ function migrateDB() {
     `ALTER TABLE sn_registry ADD COLUMN repairedAt VARCHAR(64)`,
     `ALTER TABLE users ADD COLUMN parentId VARCHAR(64)`,
     `ALTER TABLE users ADD COLUMN displayName VARCHAR(64)`,
+    `ALTER TABLE users ADD COLUMN status VARCHAR(16) DEFAULT 'active'`,
     `UPDATE users SET displayName = username WHERE displayName IS NULL`,
     // Performance indexes (MySQL 5.7+ and 8.0 compatible)
     `CREATE INDEX idx_sn_updated ON sn_registry(updatedAt)`,
@@ -456,7 +482,7 @@ async function invalidateUserTokens(userId) {
     try {
       const members = await redisClient.sMembers(`u:tk:${userId}`);
       if (members.length > 0) {
-        await redisClient.del(members.map(k => `tk:${k.replace('tk:', '')}`));
+        await redisClient.del(...members.map(k => `tk:${k.replace('tk:', '')}`));
         await redisClient.del(`u:tk:${userId}`);
       }
     } catch {}
@@ -495,6 +521,11 @@ function _invalidateCache(event) {
     'inventory_config_updated': 'inventory_config',
     'sn_registry_updated': 'sn_registry',
     'machines_updated': 'machines',
+    'inventory_updated': 'sync',
+    'transactions_updated': 'sync',
+    'tech_support_updated': 'sync',
+    'settings_updated': 'sync',
+    'users_updated': 'sync',
   };
   for (const [evt, key] of Object.entries(map)) {
     if (event === evt) _cache.delete(key);
@@ -531,7 +562,7 @@ const ALLOWED_TABLES = new Set([
   'machines', 'transactions', 'audit_log',
   'equipment_config', 'inventory_config',
   'ops_orders', 'ops_customers', 'ops_production',
-  'tech_support', 'group_transfers', 'transfers',
+  'tech_support', 'group_transfers',
 ]);
 
 function validateTable(table) {
@@ -596,7 +627,7 @@ function parseBody(req) {
   });
 }
 
-function sendJSON(res, data, status = 200, req) {
+function sendJSON(res, data, status = 200, req, extraHeaders = {}) {
   const body = Buffer.from(JSON.stringify(data), 'utf-8');
   const accept = (req && req.headers && req.headers['accept-encoding']) || '';
   const useGzip = accept.includes('gzip') && body.length > 1024;
@@ -605,6 +636,7 @@ function sendJSON(res, data, status = 200, req) {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+    ...extraHeaders,
   };
   if (useGzip) {
     headers['Content-Encoding'] = 'gzip';
@@ -616,10 +648,30 @@ function sendJSON(res, data, status = 200, req) {
   }
 }
 
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  if (!cookieHeader) return cookies;
+  cookieHeader.split(';').forEach(pair => {
+    const idx = pair.indexOf('=');
+    if (idx > 0) cookies[pair.substring(0, idx).trim()] = pair.substring(idx + 1).trim();
+  });
+  return cookies;
+}
+
 async function requireAuth(req, res) {
+  let token = null;
+  // 1. Try Bearer header first (primary auth method)
   const auth = req.headers['authorization'];
-  if (!auth || !auth.startsWith('Bearer ')) { sendJSON(res, { error: '未登录' }, 401); return null; }
-  const user = await validateToken(auth.slice(7));
+  if (auth && auth.startsWith('Bearer ')) {
+    token = auth.slice(7);
+  }
+  // 2. Fall back to cookie
+  if (!token && req.headers['cookie']) {
+    const cookies = parseCookies(req.headers['cookie']);
+    token = cookies.gms_token || null;
+  }
+  if (!token) { sendJSON(res, { error: '未登录' }, 401); return null; }
+  const user = await validateToken(token);
   if (!user) { sendJSON(res, { error: '登录已过期' }, 401); return null; }
   return user;
 }
@@ -640,21 +692,14 @@ function serveStatic(req, res) {
   const ext = path.extname(filePath);
   if (!MIME_TYPES[ext]) return false;
   try {
+    // Use memory cache for static assets (1h TTL)
     const cached = getStaticFile(filePath, MIME_TYPES[ext], filePath);
     if (!cached) return false;
     const accept = req.headers['accept-encoding'] || '';
     const useGzip = accept.includes('gzip') && cached.gzipped && cached.gzipped.length < cached.data.length;
-
-    // HTML/JS: no-cache (每次更新即时生效)
-    // 图片/字体等: 长期缓存
-    const isDynamic = ext === '.html' || ext === '.js' || ext === '.css';
-    const cacheHeader = isDynamic
-      ? 'no-cache, no-store, must-revalidate'
-      : 'public, max-age=86400';
-
     const headers = {
       'Content-Type': cached.contentType,
-      'Cache-Control': cacheHeader,
+      'Cache-Control': 'public, max-age=3600',
       'ETag': '"' + cached.ts.toString(36) + '"',
     };
     if (useGzip) {
@@ -680,16 +725,28 @@ async function handleLogin(req, res, body) {
     return sendJSON(res, { error: '用户名或密码错误' }, 401);
   }
   const user = rows[0];
+  // Check if user account is disabled
+  if (user.status === 'disabled') return sendJSON(res, { error: '账户已被禁用，请联系管理员' }, 403);
   // Clean expired/stale tokens and invalidate user's existing tokens
   await invalidateUserTokens(user.id);
-  const STALE_THRESHOLD = 30 * 60 * 1000; // 30分钟无操作才清理
+  const STALE_THRESHOLD = 3 * 60 * 1000;
   Object.keys(tokens).forEach(k => {
     const t = tokens[k];
     if (t.expires < Date.now() || (Date.now() - (t.lastActive || 0)) > STALE_THRESHOLD) delete tokens[k];
   });
   saveTokens();
   const token = await createToken(user);
-  sendJSON(res, { token, user: { id: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, system: user.system || 'maintenance' } });
+  sendJSON(res, { token, user: { id: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role, system: user.system || 'maintenance' } }, 200, req, {
+    'Set-Cookie': `gms_token=${token}; Path=/; Max-Age=604800; SameSite=Lax`,
+  });
+}
+
+async function handleTokenVerify(req, res, body) {
+  const { token } = body;
+  if (!token) return sendJSON(res, { valid: false, error: 'Missing token' }, 400);
+  const user = await validateToken(token);
+  if (!user) return sendJSON(res, { valid: false, error: 'Invalid or expired token' }, 401);
+  sendJSON(res, { valid: true, user: { userId: user.userId, username: user.username, role: user.role, system: user.system } });
 }
 
 async function handleForceLogout(req, res, user, targetUserId) {
@@ -712,7 +769,7 @@ async function handleGetUsers(req, res, user) {
   // Superadmin sees all users within their own system
   const onlineIds = new Set();
   Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
-  sendJSON(res, users.map(u => ({ id: u.id, username: u.username, displayName: u.displayName || u.username, role: u.role, system: u.system || 'maintenance', parentId: u.parentId || null, createdAt: u.createdAt, online: onlineIds.has(u.id) })));
+  sendJSON(res, users.map(u => ({ id: u.id, username: u.username, displayName: u.displayName || u.username, role: u.role, system: u.system || 'maintenance', status: u.status || 'active', parentId: u.parentId || null, createdAt: u.createdAt, online: onlineIds.has(u.id) })));
 }
 
 async function handleAddUser(req, res, user, body) {
@@ -829,6 +886,24 @@ async function handlePromoteUser(req, res, user, userId) {
   sendJSON(res, { success: true, message: '已晋升为管理员', newRole: 'admin' });
 }
 
+async function handleToggleUserStatus(req, res, authUser, userId) {
+  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '仅管理员可执行此操作' }, 403);
+  const [target] = await pool.execute('SELECT * FROM users WHERE id = ?', [userId]);
+  if (target.length === 0) return sendJSON(res, { error: '用户不存在' }, 404);
+  if (target[0].role === 'superadmin') return sendJSON(res, { error: '无法禁用超级管理员' }, 403);
+  if (authUser.role === 'admin' && target[0].role === 'admin') return sendJSON(res, { error: '管理员无法禁用其他管理员' }, 403);
+  const currentStatus = target[0].status || 'active';
+  const newStatus = currentStatus === 'disabled' ? 'active' : 'disabled';
+  await pool.execute('UPDATE users SET status = ? WHERE id = ?', [newStatus, userId]);
+  // If disabled, invalidate all their tokens (force logout)
+  if (newStatus === 'disabled') {
+    await invalidateUserTokens(userId);
+    saveTokens();
+  }
+  broadcastSSE('users_updated', {});
+  sendJSON(res, { success: true, status: newStatus, message: newStatus === 'disabled' ? '已禁用' : '已启用' });
+}
+
 async function handleGetTechSupportList(req, res, authUser) {
   const [rows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC');
   let items = rows.map(r => JSON.parse(r.data));
@@ -862,6 +937,18 @@ async function handleGetTechSupportDetail(req, res, authUser, id) {
     if (!allowed) return sendJSON(res, { error: '无权限查看' }, 403);
   }
   sendJSON(res, item);
+}
+
+async function handleGetRepairResults(req, res) {
+  const [rows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC LIMIT 2000');
+  const results = new Set();
+  for (const row of rows) {
+    try {
+      const item = JSON.parse(row.data);
+      if (item.result && item.result.trim()) results.add(item.result.trim());
+    } catch {}
+  }
+  sendJSON(res, [...results].sort());
 }
 
 async function handleSubmitTechSupport(req, res, authUser, body) {
@@ -918,22 +1005,14 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
   broadcastSSE('tech_support_updated', { action: 'created', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
-  // 🔴 微信级实时通知: 运维系统立即看到新请求
+  // 实时通知: 飞书多维表格同步 + 飞书群消息推送
   setImmediate(() => {
     realtime.notifyNewTechSupport(item);
     feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Sync err:', e.message));
-    // 飞书群通知
-    var machine = item.machineNumber || item.machineId || '未知设备';
-    var fault = item.faultType || '未知故障';
-    var submitter = item.submitterName || '未知用户';
     feishu.sendGroupMessage(
-      '🔔 新技术支持请求',
-      '**' + machine + '** 提交了一个技术支持\n' +
-      '> 故障类型：' + fault + '\n' +
-      '> 提交人：' + submitter + '\n' +
-      '> 提交时间：' + (new Date(new Date(now).getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ')) + '\n\n' +
-      '请尽快处理！'
-    ).catch(e => console.error('[Feishu] Group notify err:', e.message));
+      '🔧 新的技术支持请求',
+      `**提交人：** ${item.submitterName}\n**设备：** ${item.equipmentTypeName || item.equipmentType}\n**机器编号：** ${item.machineNumber}\n**故障类型：** ${item.faultType}\n**故障描述：** ${item.faultDescription || '无'}\n**提交时间：** ${new Date(item.submittedAt).toLocaleString('zh-CN')}\n\n[查看详情](http://10.5.50.100:8765)`
+    ).catch(e => console.error('[Feishu] Notify err:', e.message));
   });
 }
 
@@ -981,10 +1060,12 @@ async function handleCompleteTechSupport(req, res, authUser, id, body) {
   if (item.status !== 'responded') {
     return sendJSON(res, { error: '请先响应技术支持请求，再进行维修完成' }, 400);
   }
+  const result = (body && body.result || '').trim();
+  if (!result) return sendJSON(res, { error: '维修结果为必填项，请填写维修结果' }, 400);
   const now = new Date().toISOString();
   item.status = 'completed';
   item.completedAt = now;
-  item.result = (body && body.result) || '';
+  item.result = result;
   item.repairSeconds = Math.round((new Date(now) - new Date(item.respondedAt)) / 1000);
   item.totalSeconds = Math.round((new Date(now) - new Date(item.submittedAt)) / 1000);
   await pool.execute('REPLACE INTO tech_support (id, data) VALUES (?, ?)', [id, JSON.stringify(item)]);
@@ -993,7 +1074,7 @@ async function handleCompleteTechSupport(req, res, authUser, id, body) {
   broadcastSSE('tech_support_updated', { action: 'completed', id });
   broadcastSSE('machines_updated', {});
   sendJSON(res, { success: true, item });
-  // 🔴 微信级实时通知: 运营提交人立即看到"维修完成"
+  // 实时通知: 飞书同步
   setImmediate(() => {
     realtime.notifyTechCompleted(item);
     feishu.syncToFeishu(item).catch(e => console.error("[Feishu] Sync err:", e.message));
@@ -1012,178 +1093,6 @@ async function handleDeleteTechSupport(req, res, authUser, id) {
   sendJSON(res, { success: true });
   // Sync delete to Feishu (background, zero impact on response time)
   setImmediate(() => feishu.deleteFromFeishu(id).catch(e => console.error("[Feishu] Delete err:", e.message)));
-}
-
-// ==================== GLOVE TRANSFER-OUT (手套调出) ====================
-// 手套调出到外部场地（不在公司），可从外部调回
-
-async function handleTransferGloves(req, res, authUser, body) {
-  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '仅管理员可执行调出操作' }, 403);
-  const { location, reason, snCodes, notes } = body;
-  if (!location || !snCodes || !Array.isArray(snCodes) || snCodes.length === 0) {
-    return sendJSON(res, { error: '请填写调出地点并选择至少一个SN码' }, 400);
-  }
-
-  const results = [];
-  const now = new Date().toISOString();
-  const transferId = 'tf-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-
-  // Gather inventory deductions first (before DB transaction)
-  const inventoryDeltas = {}; // inv_type → -count
-
-  for (const snCode of snCodes) {
-    const [rows] = await pool.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
-    if (rows.length === 0) { results.push({ snCode, ok: false, error: 'SN码不存在' }); continue; }
-    const sn = rows[0];
-    if (sn.status === 'transferred') { results.push({ snCode, ok: false, error: '已调出，请先调回' }); continue; }
-
-    // Map equipmentType + handType to inventory type
-    const invType = _snToInvType(sn.equipmentType, sn.handType);
-    inventoryDeltas[invType] = (inventoryDeltas[invType] || 0) - 1;
-
-    await pool.execute(
-      'UPDATE sn_registry SET status = ?, updatedAt = ? WHERE snCode = ?',
-      ['transferred', now, snCode]
-    );
-    results.push({ snCode, ok: true });
-  }
-
-  // Synchronize inventory: deduct transferred-out gloves
-  for (const [invType, delta] of Object.entries(inventoryDeltas)) {
-    try {
-      const [invRows] = await pool.execute('SELECT quantity FROM inventory WHERE inv_type = ?', [invType]);
-      const currentQty = invRows.length > 0 ? invRows[0].quantity : 0;
-      const newQty = Math.max(0, currentQty + delta);
-      await pool.execute(
-        'REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
-        [invType, newQty, now, authUser.username]
-      );
-      broadcastSSE('inventory_updated', { type: invType, quantity: newQty, updatedBy: authUser.username });
-    } catch (e) {
-      console.error('[Transfer] Inventory sync failed for', invType, ':', e.message);
-    }
-  }
-
-  // Save transfer record
-  const record = {
-    id: transferId,
-    type: 'transfer_out',
-    location,
-    reason: reason || '',
-    snCodes: results.filter(r => r.ok).map(r => r.snCode),
-    operatorId: authUser.userId,
-    operatorName: authUser.displayName || authUser.username,
-    notes: notes || '',
-    createdAt: now,
-  };
-  try { await saveJSON('transfers', transferId, record); } catch {}
-
-  broadcastSSE('transfers_updated', { action: 'created', id: transferId });
-  broadcastSSE('sn_registry_updated', {});
-  const okCount = results.filter(r => r.ok).length;
-  sendJSON(res, { success: true, transferId, okCount, failCount: results.length - okCount, results });
-}
-
-async function handleRecallGloves(req, res, authUser, body) {
-  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '仅管理员可执行调回操作' }, 403);
-  const { snCodes } = body;
-  if (!snCodes || !Array.isArray(snCodes) || snCodes.length === 0) {
-    return sendJSON(res, { error: '请选择要调回的SN码' }, 400);
-  }
-
-  const results = [];
-  const now = new Date().toISOString();
-  const recallId = 'rc-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-
-  // Gather inventory additions for recalled gloves
-  const inventoryDeltas = {}; // inv_type → +count
-
-  for (const snCode of snCodes) {
-    const [rows] = await pool.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
-    if (rows.length === 0) { results.push({ snCode, ok: false, error: 'SN码不存在' }); continue; }
-    const sn = rows[0];
-    if (sn.status !== 'transferred') { results.push({ snCode, ok: false, error: '该手套未被调出' }); continue; }
-
-    const invType = _snToInvType(sn.equipmentType, sn.handType);
-    inventoryDeltas[invType] = (inventoryDeltas[invType] || 0) + 1;
-
-    await pool.execute(
-      'UPDATE sn_registry SET status = ?, updatedAt = ? WHERE snCode = ?',
-      ['available', now, snCode]
-    );
-    results.push({ snCode, ok: true });
-  }
-
-  // Synchronize inventory: add back recalled gloves
-  for (const [invType, delta] of Object.entries(inventoryDeltas)) {
-    try {
-      const [invRows] = await pool.execute('SELECT quantity FROM inventory WHERE inv_type = ?', [invType]);
-      const currentQty = invRows.length > 0 ? invRows[0].quantity : 0;
-      await pool.execute(
-        'REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
-        [invType, currentQty + delta, now, authUser.username]
-      );
-      broadcastSSE('inventory_updated', { type: invType, quantity: currentQty + delta, updatedBy: authUser.username });
-    } catch (e) {
-      console.error('[Recall] Inventory sync failed for', invType, ':', e.message);
-    }
-  }
-
-  const record = {
-    id: recallId,
-    type: 'transfer_recall',
-    snCodes: results.filter(r => r.ok).map(r => r.snCode),
-    operatorId: authUser.userId,
-    operatorName: authUser.displayName || authUser.username,
-    createdAt: now,
-  };
-  try { await saveJSON('transfers', recallId, record); } catch {}
-
-  broadcastSSE('transfers_updated', { action: 'recalled', id: recallId });
-  broadcastSSE('sn_registry_updated', {});
-  sendJSON(res, { success: true, recallId, okCount: results.filter(r => r.ok).length, results });
-}
-
-async function handleGetTransfers(req, res, authUser) {
-  const [rows] = await pool.execute('SELECT data FROM transfers ORDER BY id DESC LIMIT 500');
-  sendJSON(res, rows.map(r => JSON.parse(r.data)));
-}
-
-async function handleGetTransferStats(req, res, authUser) {
-  // 仪表盘统计：调出中/已调回
-  const [rows] = await pool.execute('SELECT data FROM transfers ORDER BY id DESC');
-  const all = rows.map(r => JSON.parse(r.data));
-  const [snRows] = await pool.execute("SELECT status, COUNT(*) as cnt FROM sn_registry GROUP BY status");
-  const snStats = {};
-  snRows.forEach(r => { snStats[r.status] = r.cnt; });
-
-  const transferredOut = snStats.transferred || 0;
-  const totalTransfers = all.filter(t => t.type === 'transfer_out').length;
-
-  // 计算仍在外部的手套（最后一条记录是调出且未调回）
-  const latestBySN = {};
-  for (const t of all) {
-    for (const sn of (t.snCodes || [])) {
-      if (!latestBySN[sn]) latestBySN[sn] = t.type;
-    }
-  }
-  const stillOut = Object.values(latestBySN).filter(v => v === 'transfer_out').length;
-
-  // 按地点统计
-  const byLocation = {};
-  all.filter(t => t.type === 'transfer_out').forEach(t => {
-    const loc = t.location || '未知';
-    if (!byLocation[loc]) byLocation[loc] = 0;
-    byLocation[loc] += (t.snCodes || []).length;
-  });
-
-  sendJSON(res, {
-    currentlyOut: stillOut,
-    transferredOut,
-    totalTransfers,
-    byLocation,
-    recentTransfers: all.filter(t => t.type === 'transfer_out').slice(0, 5),
-  });
 }
 
 // Helper: Update the latest machine record's status by machineNumber
@@ -1321,24 +1230,33 @@ async function handleApproveGroupTransfer(req, res, authUser, transferId) {
   if (authUser.role !== 'admin' && authUser.role !== 'superadmin') {
     return sendJSON(res, { error: '仅组长可审批调配' }, 403);
   }
-  const [rows] = await pool.execute('SELECT data FROM group_transfers WHERE id = ?', [transferId]);
-  if (rows.length === 0) return sendJSON(res, { error: '调配请求不存在' }, 404);
-  const item = JSON.parse(rows[0].data);
-  if (item.status !== 'pending') return sendJSON(res, { error: '该请求已处理' }, 400);
-  if (item.toAdminId !== authUser.userId && item.fromAdminId !== authUser.userId) {
-    return sendJSON(res, { error: '您不是该调配的相关组长，无权审批' }, 403);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.execute('SELECT data FROM group_transfers WHERE id = ? FOR UPDATE', [transferId]);
+    if (rows.length === 0) { await conn.rollback(); conn.release(); return sendJSON(res, { error: '调配请求不存在' }, 404); }
+    const item = JSON.parse(rows[0].data);
+    if (item.status !== 'pending') { await conn.rollback(); conn.release(); return sendJSON(res, { error: '该请求已处理' }, 400); }
+    if (item.toAdminId !== authUser.userId && item.fromAdminId !== authUser.userId) {
+      await conn.rollback(); conn.release(); return sendJSON(res, { error: '您不是该调配的相关组长，无权审批' }, 403);
+    }
+    const isSender = (item.fromAdminId === authUser.userId);
+    const newParentId = isSender ? item.toAdminId : item.fromAdminId;
+    await conn.execute('UPDATE users SET parentId = ? WHERE id = ?', [newParentId, item.userId]);
+    item.status = 'completed';
+    item.completedAt = new Date().toISOString();
+    item.updatedAt = new Date().toISOString();
+    await conn.execute('REPLACE INTO group_transfers (id, data) VALUES (?, ?)', [transferId, JSON.stringify(item)]);
+    await conn.commit();
+    broadcastSSE('users_updated', {});
+    broadcastSSE('group_transfer_updated', { action: 'approved', id: transferId });
+    sendJSON(res, { success: true, item });
+  } catch (e) {
+    await conn.rollback();
+    sendJSON(res, { error: '审批失败: ' + e.message }, 500);
+  } finally {
+    conn.release();
   }
-  // Either admin can approve → user's parentId changes to the other admin
-  const isSender = (item.fromAdminId === authUser.userId);
-  const newParentId = isSender ? item.toAdminId : item.fromAdminId;
-  await pool.execute('UPDATE users SET parentId = ? WHERE id = ?', [newParentId, item.userId]);
-  item.status = 'completed';
-  item.completedAt = new Date().toISOString();
-  broadcastSSE('users_updated', {});
-  item.updatedAt = new Date().toISOString();
-  await pool.execute('REPLACE INTO group_transfers (id, data) VALUES (?, ?)', [transferId, JSON.stringify(item)]);
-  broadcastSSE('group_transfer_updated', { action: 'approved', id: transferId });
-  sendJSON(res, { success: true, item });
 }
 
 async function handleRejectGroupTransfer(req, res, authUser, transferId) {
@@ -1394,10 +1312,15 @@ async function handleGetGroupMembers(req, res, authUser) {
     return sendJSON(res, { error: '仅组长可查看组员' }, 403);
   }
   // System isolation: admins only see same-system users; superadmin sees all
-  const systemFilter = authUser.role === 'superadmin' ? '' : `AND \`system\` = '${authUser.system}'`;
+  let systemFilter = '';
+  const params = [];
+  if (authUser.role !== 'superadmin') {
+    systemFilter = 'AND `system` = ?';
+    params.push(authUser.system || 'maintenance');
+  }
   const [users] = await pool.execute(
     `SELECT id, username, displayName, role, \`system\`, parentId, createdBy, createdAt
-     FROM users WHERE role = 'user' ${systemFilter} ORDER BY username`
+     FROM users WHERE role = 'user' ${systemFilter} ORDER BY username`, params
   );
   // Group by parentId
   const groups = {};
@@ -1409,10 +1332,15 @@ async function handleGetGroupMembers(req, res, authUser) {
   // Get admin names (only from same system for non-superadmin)
   const adminIds = Object.keys(groups);
   if (adminIds.length > 0) {
-    const adminSystemFilter = authUser.role === 'superadmin' ? '' : `AND \`system\` = '${authUser.system}'`;
+    let adminParams = [...adminIds];
+    let adminSystemFilter = '';
+    if (authUser.role !== 'superadmin') {
+      adminSystemFilter = 'AND `system` = ?';
+      adminParams.push(authUser.system || 'maintenance');
+    }
     const [admins] = await pool.execute(
       `SELECT id, username, displayName FROM users WHERE id IN (${adminIds.map(() => '?').join(',')}) ${adminSystemFilter}`,
-      adminIds
+      adminParams
     );
     admins.forEach(a => {
       if (groups[a.id]) groups[a.id].adminName = a.displayName || a.username;
@@ -1434,7 +1362,9 @@ async function handleLogout(req, res, user) {
     saveTokens();
   }
   broadcastSSE('users_updated', {});
-  sendJSON(res, { success: true });
+  sendJSON(res, { success: true }, 200, req, {
+    'Set-Cookie': 'gms_token=; Path=/; Max-Age=0',
+  });
 }
 
 async function handleBeaconLogout(req, res, body) {
@@ -1450,18 +1380,21 @@ async function handleBeaconLogout(req, res, body) {
 async function handleChangePassword(req, res, user, body) {
   const { oldPassword, newPassword } = body;
   if (!oldPassword || !newPassword) return sendJSON(res, { error: '请输入旧密码和新密码' }, 400);
-  if (newPassword.length < 4) return sendJSON(res, { error: '新密码至少4个字符' }, 400);
+  const trimmedPw = newPassword.trim();
+  if (trimmedPw.length < 6) return sendJSON(res, { error: '新密码至少6个字符' }, 400);
+  if (!/[A-Za-z]/.test(trimmedPw) || !/[0-9]/.test(trimmedPw)) return sendJSON(res, { error: '新密码需包含字母和数字' }, 400);
   const [rows] = await pool.execute('SELECT * FROM users WHERE id = ?', [user.userId]);
   if (rows.length === 0) return sendJSON(res, { error: '用户不存在' }, 404);
   if (rows[0].passwordHash !== hashPassword(oldPassword)) return sendJSON(res, { error: '旧密码错误' }, 403);
-  await pool.execute('UPDATE users SET passwordHash = ? WHERE id = ?', [hashPassword(newPassword), user.userId]);
+  await pool.execute('UPDATE users SET passwordHash = ? WHERE id = ?', [hashPassword(trimmedPw), user.userId]);
   sendJSON(res, { success: true });
 }
 
 // Reset another user's password (superadmin → admin, admin → group members)
 async function handleResetPassword(req, res, user, userId, body) {
   const { newPassword } = body;
-  if (!newPassword || newPassword.length < 4) return sendJSON(res, { error: '新密码至少4个字符' }, 400);
+  const trimmedPw = (newPassword || '').trim();
+  if (!trimmedPw || trimmedPw.length < 6) return sendJSON(res, { error: '新密码至少6个字符' }, 400);
 
   // Only admin and superadmin can reset others' passwords
   if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限' }, 403);
@@ -1487,7 +1420,7 @@ async function handleResetPassword(req, res, user, userId, body) {
     }
   }
 
-  await pool.execute('UPDATE users SET passwordHash = ? WHERE id = ?', [hashPassword(newPassword.trim()), userId]);
+  await pool.execute('UPDATE users SET passwordHash = ? WHERE id = ?', [hashPassword(trimmedPw), userId]);
 
   // Invalidate target user's tokens (force re-login)
   await invalidateUserTokens(userId);
@@ -1513,7 +1446,9 @@ async function handleGetInventory(req, res, user, type) {
 }
 
 async function handleAdjustInventory(req, res, user, type, body) {
-  const { delta, snCode } = body;
+  const { delta } = body;
+  if (typeof delta !== 'number' || !Number.isFinite(delta)) return sendJSON(res, { error: 'delta 必须为有效数字' }, 400);
+  if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限调整库存' }, 403);
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -1525,33 +1460,6 @@ async function handleAdjustInventory(req, res, user, type, body) {
       'REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
       [type, newQty, new Date().toISOString(), user.username]
     );
-
-    // SN consistency check: if SN code provided, verify it exists and status is consistent
-    if (snCode) {
-      const [snRows] = await conn.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
-      if (snRows.length > 0) {
-        const sn = snRows[0];
-        const expectedInvType = _snToInvType(sn.equipmentType, sn.handType);
-        // Warn if inventory type doesn't match SN's equipment type
-        if (expectedInvType !== type) {
-          console.warn(`[Inventory] SN ${snCode} type mismatch: expected ${expectedInvType}, got ${type}`);
-        }
-        // If delta < 0 (outbound), SN should be available or in_use (not damaged/transferred)
-        if (delta < 0 && sn.status !== 'available' && sn.status !== 'in_use') {
-          console.warn(`[Inventory] SN ${snCode} outbound with status=${sn.status}, delta=${delta}`);
-        }
-        // If delta > 0 (inbound), SN should not already be available (avoid double-counting)
-        if (delta > 0 && sn.status === 'available') {
-          console.warn(`[Inventory] SN ${snCode} inbound but already available — possible double-count`);
-        }
-      } else {
-        // SN code provided but not found — only warn on outbound (new SNs can be created on inbound)
-        if (delta < 0) {
-          console.warn(`[Inventory] SN ${snCode} not found in registry, outbound delta=${delta}`);
-        }
-      }
-    }
-
     await conn.commit();
     broadcastSSE('inventory_updated', { type, quantity: newQty, updatedBy: user.username });
     sendJSON(res, { success: true, newQuantity: newQty });
@@ -1579,6 +1487,7 @@ async function handleGetMachines(req, res, user) {
   sendJSON(res, result);
 }
 async function handleAddMachine(req, res, user, body) {
+  if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限添加机器' }, 403);
   const id = body.id || ('m-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
   await saveJSON('machines', id, { ...body, id });
   broadcastSSE('machines_updated', {});
@@ -1594,10 +1503,11 @@ async function handleDeleteMachine(req, res, user, machineId) {
 // -- Transactions --
 async function handleGetTransactions(req, res, user) {
   const url = new URL(req.url, 'http://localhost');
-  const limit = url.searchParams.get('limit') || 10000;
-  sendJSON(res, await readJSONArray('transactions', limit));
+  const limit = Math.max(1, parseInt(url.searchParams.get('limit')) || 10000);
+  sendJSON(res, await readJSONArray('transactions', Math.min(limit, 50000)));
 }
 async function handleAddTransaction(req, res, user, body) {
+  if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限添加交易记录' }, 403);
   const id = body.id || ('tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
   await saveJSON('transactions', id, { ...body, id, timestamp: body.timestamp || new Date().toISOString() });
   broadcastSSE('transactions_updated', {});
@@ -1605,15 +1515,86 @@ async function handleAddTransaction(req, res, user, body) {
 }
 async function handleDeleteTransaction(req, res, user, txId) {
   if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无删除权限' }, 403);
+  const item = await readJSONById('transactions', txId);
+  if (!item) return sendJSON(res, { error: '交易记录不存在' }, 404);
   await deleteJSON('transactions', txId);
   broadcastSSE('transactions_updated', {});
   sendJSON(res, { success: true });
 }
 
+// -- Inventory Transfer (物资调拨) --
+async function handleTransferInventory(req, res, authUser, body) {
+  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '仅管理员可执行调拨' }, 403);
+  const { invType, quantity, destination, note } = body;
+  if (!invType || !quantity || !destination) return sendJSON(res, { error: '请填写库存类型、数量和调拨目的地' }, 400);
+  const qty = parseInt(quantity);
+  if (isNaN(qty) || qty <= 0) return sendJSON(res, { error: '数量必须为正整数' }, 400);
+  const dest = (destination || '').trim();
+  if (!dest) return sendJSON(res, { error: '调拨目的地不能为空' }, 400);
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.execute('SELECT quantity FROM inventory WHERE inv_type = ? FOR UPDATE', [invType]);
+    const currentQty = rows.length > 0 ? rows[0].quantity : 0;
+    if (currentQty < qty) {
+      await conn.rollback();
+      return sendJSON(res, { error: `库存不足，当前仅有 ${currentQty} 件` }, 400);
+    }
+    const newQty = currentQty - qty;
+    const now = new Date().toISOString();
+    await conn.execute('REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
+      [invType, newQty, now, authUser.username]);
+
+    // Record transaction
+    const txId = 'tf-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    await conn.execute('INSERT INTO transactions (id, data) VALUES (?, ?)', [txId, JSON.stringify({
+      id: txId, equipmentType: invType, direction: 'out', quantity: qty,
+      updatedBy: authUser.username, timestamp: now, note: note || `调拨至${dest}`,
+      transferDestination: dest, isTransfer: true,
+    })]);
+
+    await conn.commit();
+    broadcastSSE('inventory_updated', { type: invType, quantity: newQty, updatedBy: authUser.username });
+    broadcastSSE('transactions_updated', {});
+    sendJSON(res, { success: true, newQuantity: newQty, transferred: qty, destination: dest });
+  } catch (e) {
+    await conn.rollback();
+    sendJSON(res, { error: '调拨失败: ' + e.message }, 500);
+  } finally {
+    conn.release();
+  }
+}
+
+// Get transfer stats for dashboard
+async function handleGetTransferStats(req, res) {
+  const [txRows] = await pool.execute('SELECT data FROM transactions ORDER BY id DESC LIMIT 5000');
+  const transfers = txRows.map(r => JSON.parse(r.data)).filter(t => t.isTransfer);
+  const today = new Date().setHours(0, 0, 0, 0);
+  const todayTransfers = transfers.filter(t => new Date(t.timestamp).getTime() >= today);
+  const monthTransfers = transfers.filter(t => {
+    const d = new Date(t.timestamp);
+    const now = new Date();
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  });
+  const byDest = {};
+  transfers.forEach(t => {
+    const dest = t.transferDestination || '未知';
+    byDest[dest] = (byDest[dest] || 0) + t.quantity;
+  });
+  sendJSON(res, {
+    total: transfers.reduce((s, t) => s + t.quantity, 0),
+    today: todayTransfers.reduce((s, t) => s + t.quantity, 0),
+    thisMonth: monthTransfers.reduce((s, t) => s + t.quantity, 0),
+    byDestination: Object.entries(byDest).map(([k, v]) => ({ destination: k, quantity: v })).sort((a, b) => b.quantity - a.quantity),
+    recent: transfers.slice(0, 10),
+  });
+}
+
 // -- Audit Log --
 async function handleGetAuditLog(req, res, user) {
   const url = new URL(req.url, 'http://localhost');
-  const limit = parseInt(url.searchParams.get('limit')) || 500;
+  const limit = Math.max(1, parseInt(url.searchParams.get('limit')) || 500);
   sendJSON(res, await readJSONArray('audit_log', Math.min(limit, 5000)));
 }
 
@@ -1622,6 +1603,7 @@ async function handleGetSettings(req, res, user) {
   sendJSON(res, await readJSONObject('settings'));
 }
 async function handleSaveSettings(req, res, user, body) {
+  if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '仅管理员可修改系统设置' }, 403);
   for (const [k, v] of Object.entries(body)) {
     await pool.execute('REPLACE INTO settings (skey, value) VALUES (?, ?)', [k, JSON.stringify(v)]);
   }
@@ -1634,17 +1616,29 @@ async function handleGetEquipmentConfig(req, res) {
   const result = await _cached('equipment_config', () => readJSONArray('equipment_config'));
   sendJSON(res, result);
 }
-async function handleSaveEquipmentConfig(req, res, body) {
-  await pool.execute('DELETE FROM equipment_config');
-  if (Array.isArray(body)) {
-    for (const item of body) {
-      await pool.execute('INSERT INTO equipment_config (id, data) VALUES (?, ?)', [item.id, JSON.stringify(item)]);
+async function handleSaveEquipmentConfig(req, res, authUser, body) {
+  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '无权限修改设备配置' }, 403);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.execute('DELETE FROM equipment_config');
+    if (Array.isArray(body)) {
+      for (const item of body) {
+        await conn.execute('INSERT INTO equipment_config (id, data) VALUES (?, ?)', [item.id, JSON.stringify(item)]);
+      }
     }
+    await conn.commit();
+    broadcastSSE('equipment_config_updated', {});
+    sendJSON(res, { success: true });
+  } catch (e) {
+    await conn.rollback();
+    sendJSON(res, { error: '保存失败: ' + e.message }, 500);
+  } finally {
+    conn.release();
   }
-  broadcastSSE('equipment_config_updated', {});
-  sendJSON(res, { success: true });
 }
-async function handleDeleteEquipmentConfig(req, res, id) {
+async function handleDeleteEquipmentConfig(req, res, authUser, id) {
+  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '无权限删除设备配置' }, 403);
   await deleteJSON('equipment_config', id);
   broadcastSSE('equipment_config_updated', {});
   sendJSON(res, { success: true });
@@ -1655,17 +1649,29 @@ async function handleGetInventoryConfig(req, res) {
   const result = await _cached('inventory_config', () => readJSONArray('inventory_config'));
   sendJSON(res, result);
 }
-async function handleSaveInventoryConfig(req, res, body) {
-  await pool.execute('DELETE FROM inventory_config');
-  if (Array.isArray(body)) {
-    for (const item of body) {
-      await pool.execute('INSERT INTO inventory_config (id, data) VALUES (?, ?)', [item.id, JSON.stringify(item)]);
+async function handleSaveInventoryConfig(req, res, authUser, body) {
+  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '无权限修改库存配置' }, 403);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.execute('DELETE FROM inventory_config');
+    if (Array.isArray(body)) {
+      for (const item of body) {
+        await conn.execute('INSERT INTO inventory_config (id, data) VALUES (?, ?)', [item.id, JSON.stringify(item)]);
+      }
     }
+    await conn.commit();
+    broadcastSSE('inventory_config_updated', {});
+    sendJSON(res, { success: true });
+  } catch (e) {
+    await conn.rollback();
+    sendJSON(res, { error: '保存失败: ' + e.message }, 500);
+  } finally {
+    conn.release();
   }
-  broadcastSSE('inventory_config_updated', {});
-  sendJSON(res, { success: true });
 }
-async function handleDeleteInventoryConfig(req, res, id) {
+async function handleDeleteInventoryConfig(req, res, authUser, id) {
+  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '无权限删除库存配置' }, 403);
   await deleteJSON('inventory_config', id);
   broadcastSSE('inventory_config_updated', {});
   sendJSON(res, { success: true });
@@ -1689,14 +1695,24 @@ async function handleGetOps(req, res, table) {
 }
 async function handleSaveOps(req, res, table, body) {
   validateTable(table);
-  await pool.execute(`DELETE FROM ${table}`);
-  if (Array.isArray(body)) {
-    for (const item of body) {
-      await pool.execute(`INSERT INTO ${table} (id, data) VALUES (?, ?)`, [item.id || ('_' + Date.now().toString(36)), JSON.stringify(item)]);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.execute(`DELETE FROM ${table}`);
+    if (Array.isArray(body)) {
+      for (const item of body) {
+        await conn.execute(`INSERT INTO ${table} (id, data) VALUES (?, ?)`, [item.id || ('_' + Date.now().toString(36)), JSON.stringify(item)]);
+      }
     }
+    await conn.commit();
+    broadcastSSE(`${table}_updated`, {});
+    sendJSON(res, { success: true });
+  } catch (e) {
+    await conn.rollback();
+    sendJSON(res, { error: '保存失败: ' + e.message }, 500);
+  } finally {
+    conn.release();
   }
-  broadcastSSE(`${table}_updated`, {});
-  sendJSON(res, { success: true });
 }
 
 // -- Last Backup --
@@ -1803,20 +1819,22 @@ async function handleExportTechSupportXLSX(req, res, user) {
         if (startTime) {
           const [sh, sm] = startTime.split(':').map(Number);
           const startMin = sh * 60 + sm;
-          // If endTime < startTime, it spans midnight (e.g. 7:00 to 02:00 next day)
           if (endTime) {
             const [eh, em] = endTime.split(':').map(Number);
             const endMin = eh * 60 + em;
             if (endMin < startMin) {
-              // Spanning midnight: allow >= startMin OR <= endMin
               if (hourMin < startMin && hourMin > endMin) return false;
             } else {
-              // Normal range: startMin <= hourMin <= endMin
               if (hourMin < startMin || hourMin > endMin) return false;
             }
           } else {
             if (hourMin < startMin) return false;
           }
+        } else if (endTime) {
+          // Only endTime specified: filter items before endTime
+          const [eh, em] = endTime.split(':').map(Number);
+          const endMin = eh * 60 + em;
+          if (hourMin > endMin) return false;
         }
       }
       return true;
@@ -1867,23 +1885,25 @@ async function handleClearAllData(req, res, user) {
   try {
     await conn.beginTransaction();
     const tables = ['inventory', 'machines', 'transactions', 'audit_log',
-      'ops_orders', 'ops_customers', 'ops_production', 'sn_registry', 'tech_support'];
+      'ops_orders', 'ops_customers', 'ops_production', 'sn_registry', 'tech_support',
+      'equipment_config', 'inventory_config', 'settings', 'group_transfers', 'popup_messages'];
     for (const t of tables) await conn.execute('DELETE FROM ' + t);
     await conn.commit();
+    // Clean uploaded photo files
+    try {
+      if (fs.existsSync(UPLOADS_DIR)) {
+        fs.readdirSync(UPLOADS_DIR).forEach(f => { try { fs.unlinkSync(path.join(UPLOADS_DIR, f)); } catch {} });
+      }
+    } catch {}
+    const events = ['inventory', 'machines', 'transactions', 'audit_log', 'ops_orders', 'ops_customers', 'ops_production', 'sn_registry', 'tech_support', 'equipment_config', 'inventory_config', 'group_transfers'];
+    events.forEach(e => broadcastSSE(e + '_updated', {}));
+    sendJSON(res, { success: true });
   } catch (e) {
     await conn.rollback();
+    sendJSON(res, { error: '清除失败: ' + e.message }, 500);
   } finally {
     conn.release();
   }
-  // Clean uploaded photo files
-  try {
-    if (fs.existsSync(UPLOADS_DIR)) {
-      fs.readdirSync(UPLOADS_DIR).forEach(f => { try { fs.unlinkSync(path.join(UPLOADS_DIR, f)); } catch {} });
-    }
-  } catch {}
-  const events = ['inventory', 'machines', 'transactions', 'audit_log', 'ops_orders', 'ops_customers', 'ops_production', 'sn_registry', 'tech_support'];
-  events.forEach(e => broadcastSSE(e + '_updated', {}));
-  sendJSON(res, { success: true });
 }
 
 // -- Full Export (ZIP) --
@@ -1893,18 +1913,20 @@ async function handleExportFull(req, res, user) {
   const zip = new AdmZip();
 
   const [inv] = await pool.execute('SELECT * FROM inventory');
-  const machines = await readJSONArray('machines');
-  const transactions = await readJSONArray('transactions');
-  const auditLog = await readJSONArray('audit_log');
+  const machines = await readJSONArray('machines', 50000);
+  const transactions = await readJSONArray('transactions', 50000);
+  const auditLog = await readJSONArray('audit_log', 50000);
   const settings = await readJSONObject('settings');
   const [snReg] = await pool.execute('SELECT * FROM sn_registry');
-  const equipmentConfig = await readJSONArray('equipment_config');
-  const inventoryConfig = await readJSONArray('inventory_config');
-  const opsOrders = await readJSONArray('ops_orders');
-  const opsCustomers = await readJSONArray('ops_customers');
-  const opsProduction = await readJSONArray('ops_production');
+  const equipmentConfig = await readJSONArray('equipment_config', 500);
+  const inventoryConfig = await readJSONArray('inventory_config', 500);
+  const opsOrders = await readJSONArray('ops_orders', 50000);
+  const opsCustomers = await readJSONArray('ops_customers', 50000);
+  const opsProduction = await readJSONArray('ops_production', 50000);
   const [tsRows] = await pool.execute('SELECT data FROM tech_support');
   const techSupport = tsRows.map(r => JSON.parse(r.data));
+  const [userRows] = await pool.execute('SELECT id, username, passwordHash, role, `system`, displayName, parentId, createdBy, createdAt, status FROM users');
+  const [popupRows] = await pool.execute('SELECT * FROM popup_messages');
 
   const backup = {
     version: '4.0-mysql',
@@ -1918,6 +1940,7 @@ async function handleExportFull(req, res, user) {
       shippedAt: r.shippedAt, repairedAt: r.repairedAt
     })),
     equipmentConfig, inventoryConfig, opsOrders, opsCustomers, opsProduction, techSupport,
+    users: userRows, popupMessages: popupRows,
   };
   zip.addFile('backup.json', Buffer.from(JSON.stringify(backup, null, 2), 'utf8'));
 
@@ -1945,8 +1968,7 @@ async function handleImportFull(req, res, user, body) {
   if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '仅管理员可执行此操作' }, 403);
   if (!body || !body.zipData) return sendJSON(res, { error: '缺少备份数据' }, 400);
 
-  try {
-    const AdmZip = require('adm-zip');
+  const AdmZip = require('adm-zip');
     const buf = Buffer.from(body.zipData, 'base64');
     const zip = new AdmZip(buf);
     const entries = zip.getEntries();
@@ -1958,70 +1980,89 @@ async function handleImportFull(req, res, user, body) {
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
+      // Phase 1: Delete all data in transaction
       const tables = ['inventory', 'machines', 'transactions', 'audit_log', 'sn_registry',
-        'ops_orders', 'ops_customers', 'ops_production', 'tech_support'];
+        'ops_orders', 'ops_customers', 'ops_production', 'tech_support',
+        'settings', 'equipment_config', 'inventory_config', 'group_transfers', 'popup_messages'];
       for (const t of tables) await conn.execute('DELETE FROM ' + t);
-      await conn.execute('DELETE FROM settings');
-      await conn.execute('DELETE FROM equipment_config');
-      await conn.execute('DELETE FROM inventory_config');
+
+      // Phase 2: Restore all data in same transaction
+      // Restore inventory
+      if (Array.isArray(backup.inventory)) {
+        for (const r of backup.inventory) {
+          await conn.execute('REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
+            [r.type, r.quantity, r.updatedAt, r.updatedBy]);
+        }
+      }
+
+      // Restore JSON blob tables
+      const jsonTables = {
+        machines: 'machines', transactions: 'transactions', auditLog: 'audit_log',
+        equipmentConfig: 'equipment_config', inventoryConfig: 'inventory_config',
+        opsOrders: 'ops_orders', opsCustomers: 'ops_customers', opsProduction: 'ops_production',
+        techSupport: 'tech_support',
+      };
+      for (const [jsonKey, table] of Object.entries(jsonTables)) {
+        if (Array.isArray(backup[jsonKey])) {
+          for (const item of backup[jsonKey]) {
+            const id = item.id || item.snCode || item.type || ('_' + Math.random().toString(36).slice(2));
+            await conn.execute(`REPLACE INTO ${table} (id, data) VALUES (?, ?)`, [id, JSON.stringify(item)]);
+          }
+        }
+      }
+
+      // Restore settings
+      if (backup.settings && typeof backup.settings === 'object') {
+        for (const [k, v] of Object.entries(backup.settings)) {
+          await conn.execute('REPLACE INTO settings (skey, value) VALUES (?, ?)', [k, JSON.stringify(v)]);
+        }
+      }
+
+      // Restore SN registry
+      if (Array.isArray(backup.snRegistry)) {
+        for (const r of backup.snRegistry) {
+          await conn.execute(
+            'REPLACE INTO sn_registry (snCode, equipmentType, handType, status, machineNumber, damageReason, trackingNumber, attachment, updatedAt, shippedAt, repairedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [r.snCode, r.equipmentType || null, r.handType || null, r.status || 'available',
+              r.machineNumber || null, r.damageReason || null, r.trackingNumber || null,
+              r.attachment || null, r.updatedAt || new Date().toISOString(),
+              r.shippedAt || null, r.repairedAt || null]
+          );
+        }
+      }
+
+      // Restore users
+      if (Array.isArray(backup.users)) {
+        for (const u of backup.users) {
+          await conn.execute(
+            'REPLACE INTO users (id, username, passwordHash, role, `system`, displayName, parentId, createdBy, createdAt, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [u.id, u.username, u.passwordHash, u.role || 'user', u.system || 'maintenance', u.displayName || u.username, u.parentId || null, u.createdBy || null, u.createdAt || new Date().toISOString(), u.status || 'active']
+          );
+        }
+      }
+      // Restore popup messages
+      if (Array.isArray(backup.popupMessages)) {
+        for (const p of backup.popupMessages) {
+          await conn.execute('REPLACE INTO popup_messages (id, category, text, createdBy, createdAt) VALUES (?, ?, ?, ?, ?)',
+            [p.id, p.category, p.text, p.createdBy || 'system', p.createdAt || new Date().toISOString()]);
+        }
+      }
+
       await conn.commit();
     } catch (e) {
       await conn.rollback();
-      throw e;
+      console.error('[IMPORT] Failed:', e.message);
+      return sendJSON(res, { error: '恢复失败: ' + e.message }, 500);
     } finally {
       conn.release();
     }
 
-    // Clean uploads dir
+    // Clean uploads dir (outside transaction — file I/O)
     try {
       if (fs.existsSync(UPLOADS_DIR)) {
         fs.readdirSync(UPLOADS_DIR).forEach(f => { try { fs.unlinkSync(path.join(UPLOADS_DIR, f)); } catch {} });
       }
     } catch {}
-
-    // Restore inventory
-    if (Array.isArray(backup.inventory)) {
-      for (const r of backup.inventory) {
-        await pool.execute('REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
-          [r.type, r.quantity, r.updatedAt, r.updatedBy]);
-      }
-    }
-
-    // Restore JSON blob tables
-    const jsonTables = {
-      machines: 'machines', transactions: 'transactions', auditLog: 'audit_log',
-      equipmentConfig: 'equipment_config', inventoryConfig: 'inventory_config',
-      opsOrders: 'ops_orders', opsCustomers: 'ops_customers', opsProduction: 'ops_production',
-      techSupport: 'tech_support',
-    };
-    for (const [jsonKey, table] of Object.entries(jsonTables)) {
-      if (Array.isArray(backup[jsonKey])) {
-        for (const item of backup[jsonKey]) {
-          const id = item.id || item.snCode || item.type || ('_' + Math.random().toString(36).slice(2));
-          await pool.execute(`REPLACE INTO ${table} (id, data) VALUES (?, ?)`, [id, JSON.stringify(item)]);
-        }
-      }
-    }
-
-    // Restore settings
-    if (backup.settings && typeof backup.settings === 'object') {
-      for (const [k, v] of Object.entries(backup.settings)) {
-        await pool.execute('REPLACE INTO settings (skey, value) VALUES (?, ?)', [k, JSON.stringify(v)]);
-      }
-    }
-
-    // Restore SN registry
-    if (Array.isArray(backup.snRegistry)) {
-      for (const r of backup.snRegistry) {
-        await pool.execute(
-          'REPLACE INTO sn_registry (snCode, equipmentType, handType, status, machineNumber, damageReason, trackingNumber, attachment, updatedAt, shippedAt, repairedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [r.snCode, r.equipmentType || null, r.handType || null, r.status || 'available',
-            r.machineNumber || null, r.damageReason || null, r.trackingNumber || null,
-            r.attachment || null, r.updatedAt || new Date().toISOString(),
-            r.shippedAt || null, r.repairedAt || null]
-        );
-      }
-    }
 
     // Restore uploaded files
     entries.forEach(e => {
@@ -2037,17 +2078,21 @@ async function handleImportFull(req, res, user, body) {
     eventNames.forEach(t => broadcastSSE(t + '_updated', {}));
 
     sendJSON(res, { success: true, message: '数据恢复成功' });
-  } catch (e) {
-    console.error('[IMPORT] Failed:', e.message);
-    sendJSON(res, { error: '恢复失败: ' + e.message }, 500);
-  }
 }
 
 // Helper: Map SN equipmentType + handType to inventory type key
 function _snToInvType(equipmentType, handType) {
-  if (equipmentType === 'glove') return handType === 'left' ? 'left_glove' : 'right_glove';
-  if (equipmentType === 'dexterous_hand') return handType === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
-  if (handType) return equipmentType + '_' + handType;
+  if (equipmentType === 'glove') {
+    if (handType === 'left') return 'left_glove';
+    if (handType === 'right') return 'right_glove';
+    return 'right_glove'; // default when handType is missing/invalid for gloves
+  }
+  if (equipmentType === 'dexterous_hand') {
+    if (handType === 'left') return 'left_dexterous_hand';
+    if (handType === 'right') return 'right_dexterous_hand';
+    return 'right_dexterous_hand'; // default when handType is missing/invalid
+  }
+  if (handType === 'left' || handType === 'right') return equipmentType + '_' + handType;
   return equipmentType || 'left_glove';
 }
 
@@ -2061,6 +2106,7 @@ async function handleGetSNRegistry(req, res) {
 }
 
 async function handleUpsertSNRegistry(req, res, authUser, body) {
+  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') return sendJSON(res, { error: '仅管理员可操作SN注册表' }, 403);
   const { snCode, equipmentType, handType, status, machineNumber, damageReason, trackingNumber, attachment, shippedAt, repairedAt } = body;
   if (!snCode) return sendJSON(res, { error: 'SN码不能为空' }, 400);
   const now = new Date().toISOString();
@@ -2087,6 +2133,9 @@ async function handleUpsertSNRegistry(req, res, authUser, body) {
 async function handleShipSN(req, res, authUser, body) {
   const { snCode, trackingNumber } = body;
   if (!snCode || !trackingNumber) return sendJSON(res, { error: '缺少SN码或快递单号' }, 400);
+  const [existing] = await pool.execute('SELECT status FROM sn_registry WHERE snCode = ?', [snCode]);
+  if (existing.length === 0) return sendJSON(res, { error: 'SN码不存在' }, 404);
+  if (existing[0].status !== 'damaged') return sendJSON(res, { error: `当前状态 "${existing[0].status}" 不支持发货，仅有"损坏"状态的SN码可以发货返厂` }, 400);
   const now = new Date().toISOString();
   await pool.execute(
     'UPDATE sn_registry SET status=?, trackingNumber=?, shippedAt=?, updatedAt=? WHERE snCode=?',
@@ -2100,23 +2149,36 @@ async function handleRepairCompleteSN(req, res, authUser, body) {
   const { snCode } = body;
   if (!snCode) return sendJSON(res, { error: '缺少SN码' }, 400);
   const now = new Date().toISOString();
-  const [existing] = await pool.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
-  if (existing.length > 0 && (existing[0].status === 'damaged' || existing[0].status === 'in_repair')) {
-    const invType = _snToInvType(existing[0].equipmentType, existing[0].handType);
-    const [rows] = await pool.execute('SELECT quantity FROM inventory WHERE inv_type = ?', [invType]);
-    const currentQty = rows.length > 0 ? rows[0].quantity : 0;
-    await pool.execute(
-      'REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
-      [invType, currentQty + 1, now, '系统']
-    );
-    broadcastSSE('inventory_updated', { type: invType, quantity: currentQty + 1, updatedBy: '系统' });
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [existing] = await conn.execute('SELECT * FROM sn_registry WHERE snCode = ? FOR UPDATE', [snCode]);
+    if (existing.length > 0 && (existing[0].status === 'damaged' || existing[0].status === 'in_repair')) {
+      const invType = _snToInvType(existing[0].equipmentType, existing[0].handType);
+      const [rows] = await conn.execute('SELECT quantity FROM inventory WHERE inv_type = ? FOR UPDATE', [invType]);
+      const currentQty = rows.length > 0 ? rows[0].quantity : 0;
+      await conn.execute(
+        'REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
+        [invType, currentQty + 1, now, '系统']
+      );
+      await conn.execute(
+        'UPDATE sn_registry SET status=?, repairedAt=?, updatedAt=? WHERE snCode=?',
+        ['available', now, now, snCode]
+      );
+      await conn.commit();
+      broadcastSSE('inventory_updated', { type: invType, quantity: currentQty + 1, updatedBy: '系统' });
+      broadcastSSE('sn_registry_updated', {});
+      sendJSON(res, { success: true });
+    } else {
+      await conn.rollback();
+      sendJSON(res, { error: '该SN码状态不支持维修完成操作' }, 400);
+    }
+  } catch (e) {
+    await conn.rollback();
+    sendJSON(res, { error: e.message }, 500);
+  } finally {
+    conn.release();
   }
-  await pool.execute(
-    'UPDATE sn_registry SET status=?, repairedAt=?, updatedAt=?, trackingNumber=NULL, machineNumber=NULL, damageReason=NULL WHERE snCode=?',
-    ['available', now, now, snCode]
-  );
-  broadcastSSE('sn_registry_updated', {});
-  sendJSON(res, { success: true });
 }
 
 async function handleDeleteSNFull(req, res, authUser, body) {
@@ -2129,12 +2191,12 @@ async function handleDeleteSNFull(req, res, authUser, body) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const [existing] = await conn.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
+    const [existing] = await conn.execute('SELECT * FROM sn_registry WHERE snCode = ? FOR UPDATE', [snCode]);
     if (existing.length === 0) { await conn.rollback(); return sendJSON(res, { success: false, message: 'SN码不存在' }, 404); }
 
     if (existing[0].status === 'available') {
       const invType = _snToInvType(existing[0].equipmentType, existing[0].handType);
-      const [rows] = await conn.execute('SELECT quantity FROM inventory WHERE inv_type = ?', [invType]);
+      const [rows] = await conn.execute('SELECT quantity FROM inventory WHERE inv_type = ? FOR UPDATE', [invType]);
       const cur = rows.length > 0 ? rows[0].quantity : 0;
       await conn.execute('REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
         [invType, Math.max(0, cur - 1), now, user]);
@@ -2163,19 +2225,30 @@ async function handleDeleteSNFull(req, res, authUser, body) {
 }
 
 async function handleDeleteSNRegistry(req, res, snCode) {
-  const [existing] = await pool.execute('SELECT * FROM sn_registry WHERE snCode = ?', [snCode]);
-  if (existing.length > 0 && existing[0].status === 'available') {
-    const invType = _snToInvType(existing[0].equipmentType, existing[0].handType);
-    const [rows] = await pool.execute('SELECT quantity FROM inventory WHERE inv_type = ?', [invType]);
-    const currentQty = rows.length > 0 ? rows[0].quantity : 0;
-    const newQty = Math.max(0, currentQty - 1);
-    await pool.execute('REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
-      [invType, newQty, new Date().toISOString(), '系统']);
-    broadcastSSE('inventory_updated', { type: invType, quantity: newQty, updatedBy: '系统' });
+  const now = new Date().toISOString();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [existing] = await conn.execute('SELECT * FROM sn_registry WHERE snCode = ? FOR UPDATE', [snCode]);
+    if (existing.length > 0 && existing[0].status === 'available') {
+      const invType = _snToInvType(existing[0].equipmentType, existing[0].handType);
+      const [rows] = await conn.execute('SELECT quantity FROM inventory WHERE inv_type = ? FOR UPDATE', [invType]);
+      const currentQty = rows.length > 0 ? rows[0].quantity : 0;
+      const newQty = Math.max(0, currentQty - 1);
+      await conn.execute('REPLACE INTO inventory (inv_type, quantity, updatedAt, updatedBy) VALUES (?, ?, ?, ?)',
+        [invType, newQty, now, '系统']);
+      broadcastSSE('inventory_updated', { type: invType, quantity: newQty, updatedBy: '系统' });
+    }
+    await conn.execute('DELETE FROM sn_registry WHERE snCode = ?', [snCode]);
+    await conn.commit();
+    broadcastSSE('sn_registry_updated', {});
+    sendJSON(res, { success: true });
+  } catch (e) {
+    await conn.rollback();
+    sendJSON(res, { error: e.message }, 500);
+  } finally {
+    conn.release();
   }
-  await pool.execute('DELETE FROM sn_registry WHERE snCode = ?', [snCode]);
-  broadcastSSE('sn_registry_updated', {});
-  sendJSON(res, { success: true });
 }
 
 // -- File Upload / Delete --
@@ -2270,7 +2343,7 @@ const server = http.createServer(async (req, res) => {
         onlineUsers: count,
         loadLevel: level,
         loadLabel: label,
-        version: '3.9.1',
+        version: '3.9.0',
       });
     }
 
@@ -2294,6 +2367,7 @@ const server = http.createServer(async (req, res) => {
 
     // Public: login
     if (url.pathname === '/api/auth/login' && req.method === 'POST') return handleLogin(req, res, body);
+    if (url.pathname === '/api/auth/verify' && req.method === 'POST') return handleTokenVerify(req, res, body);
     if (url.pathname === '/api/beacon-logout' && req.method === 'POST') return handleBeaconLogout(req, res, body);
 
     // Auth required for all other API routes
@@ -2302,6 +2376,9 @@ const server = http.createServer(async (req, res) => {
 
     // Inventory
     if (url.pathname === '/api/inventory' && req.method === 'GET') return handleGetAllInventory(req, res, authUser);
+    // Transfer routes BEFORE generic :type match
+    if (url.pathname === '/api/inventory/transfer' && req.method === 'POST') return handleTransferInventory(req, res, authUser, body);
+    if (url.pathname === '/api/inventory/transfer-stats' && req.method === 'GET') return handleGetTransferStats(req, res);
     const invMatch = url.pathname.match(/^\/api\/inventory\/(.+)$/);
     if (invMatch && req.method === 'GET') return handleGetInventory(req, res, authUser, invMatch[1]);
     if (invMatch && req.method === 'POST') return handleAdjustInventory(req, res, authUser, invMatch[1], body);
@@ -2342,6 +2419,7 @@ const server = http.createServer(async (req, res) => {
     // Tech Support
     if (url.pathname === '/api/tech-support' && req.method === 'GET') return handleGetTechSupportList(req, res, authUser);
     if (url.pathname === '/api/tech-support' && req.method === 'POST') return handleSubmitTechSupport(req, res, authUser, body);
+    if (url.pathname === '/api/tech-support/repair-results' && req.method === 'GET') return handleGetRepairResults(req, res);
     const tsDetailMatch = url.pathname.match(/^\/api\/tech-support\/([^/]+)$/);
     if (tsDetailMatch && req.method === 'GET') return handleGetTechSupportDetail(req, res, authUser, tsDetailMatch[1]);
     const tsRespondMatch = url.pathname.match(/^\/api\/tech-support\/([^/]+)\/respond$/);
@@ -2375,6 +2453,8 @@ const server = http.createServer(async (req, res) => {
     // Promote/demote user
     const promoteMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/promote$/);
     if (promoteMatch && req.method === 'POST') return handlePromoteUser(req, res, authUser, promoteMatch[1]);
+    const toggleStatusMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/toggle-status$/);
+    if (toggleStatusMatch && req.method === 'POST') return handleToggleUserStatus(req, res, authUser, toggleStatusMatch[1]);
 
     // Reset user password (admin/superadmin action)
     const resetPwdMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/reset-password$/);
@@ -2385,15 +2465,15 @@ const server = http.createServer(async (req, res) => {
 
     // Equipment Config
     if (url.pathname === '/api/equipment-config' && req.method === 'GET') return handleGetEquipmentConfig(req, res);
-    if (url.pathname === '/api/equipment-config' && req.method === 'POST') return handleSaveEquipmentConfig(req, res, body);
+    if (url.pathname === '/api/equipment-config' && req.method === 'POST') return handleSaveEquipmentConfig(req, res, authUser, body);
     const delEq = url.pathname.match(/^\/api\/equipment-config\/(.+)$/);
-    if (delEq && req.method === 'DELETE') return handleDeleteEquipmentConfig(req, res, delEq[1]);
+    if (delEq && req.method === 'DELETE') return handleDeleteEquipmentConfig(req, res, authUser, delEq[1]);
 
     // Inventory Config
     if (url.pathname === '/api/inventory-config' && req.method === 'GET') return handleGetInventoryConfig(req, res);
-    if (url.pathname === '/api/inventory-config' && req.method === 'POST') return handleSaveInventoryConfig(req, res, body);
+    if (url.pathname === '/api/inventory-config' && req.method === 'POST') return handleSaveInventoryConfig(req, res, authUser, body);
     const delInv = url.pathname.match(/^\/api\/inventory-config\/(.+)$/);
-    if (delInv && req.method === 'DELETE') return handleDeleteInventoryConfig(req, res, delInv[1]);
+    if (delInv && req.method === 'DELETE') return handleDeleteInventoryConfig(req, res, authUser, delInv[1]);
 
     // Data integrity
     if (url.pathname === '/api/data-integrity' && req.method === 'GET') return handleDataIntegrity(req, res);
@@ -2433,12 +2513,6 @@ const server = http.createServer(async (req, res) => {
 
     // Full import (ZIP with images)
     if (url.pathname === '/api/import/full' && req.method === 'POST') return handleImportFull(req, res, authUser, body);
-
-    // Glove transfer-out / recall (手套调出/调回)
-    if (url.pathname === '/api/transfers' && req.method === 'POST') return handleTransferGloves(req, res, authUser, body);
-    if (url.pathname === '/api/transfers/recall' && req.method === 'POST') return handleRecallGloves(req, res, authUser, body);
-    if (url.pathname === '/api/transfers' && req.method === 'GET') return handleGetTransfers(req, res, authUser);
-    if (url.pathname === '/api/transfers/stats' && req.method === 'GET') return handleGetTransferStats(req, res, authUser);
 
     // Clear all data (admin only)
     if (url.pathname === '/api/clear-all-data' && req.method === 'POST') return handleClearAllData(req, res, authUser);
@@ -2547,10 +2621,10 @@ const staticCache = new Map(); // path → { data, contentType, gzipped }
 
 function getStaticFile(filePath, contentType, cacheKey) {
   const cached = staticCache.get(cacheKey);
-  // Check file mtime — always reload if changed (no TTL, instant update after git pull)
+  // Check file mtime to auto-invalidate cache when file is updated (e.g. git pull)
   try {
     const mtime = fs.statSync(filePath).mtimeMs;
-    if (cached && cached.fileMtime === mtime) return cached; // mtime 未变 → 用缓存
+    if (cached && cached.fileMtime === mtime && (Date.now() - cached.ts) < 3600000) return cached; // 1h cache, mtime-checked
   } catch { if (cached) staticCache.delete(cacheKey); return null; }
   try {
     const data = fs.readFileSync(filePath);

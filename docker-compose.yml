@@ -156,7 +156,7 @@ services:
     container_name: yunwei-nginx
     restart: always
     ports:
-      - "80:80"
+      - "8088:80"
       - "443:443"
     volumes:
       - ./nginx-prod.conf:/etc/nginx/nginx.conf:ro
