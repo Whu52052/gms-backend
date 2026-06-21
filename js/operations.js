@@ -1593,14 +1593,14 @@ const OpsApp = {
 
   // ==================== AUTO REFRESH ====================
   startAutoRefresh() {
-    // 1秒无感刷新：只刷新当前视图数据，不重新渲染整个页面
+    // 5秒无感刷新：只刷新当前视图数据，不重新渲染整个页面
     if (this._autoRefreshId) clearInterval(this._autoRefreshId);
     this._autoRefreshId = setInterval(() => {
       if (!API.online) return;
       const activeEl = document.activeElement;
       if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) return;
       this.refreshCurrentTab();
-    }, 1000);
+    }, 5000);
   },
 
   // 无感刷新当前视图 — 仅更新数据，不闪屏不打断操作
