@@ -6877,7 +6877,7 @@ const App = {
   },
 
   startAutoRefresh() {
-    // 5秒无感刷新：只刷新当前视图数据，不重新渲染整个页面
+    // 15秒无感刷新：只刷新当前视图数据，不重新渲染整个页面
     if (this._autoRefreshId) clearInterval(this._autoRefreshId);
     this._autoRefreshId = setInterval(() => {
       if (!API.online) return;
@@ -6885,7 +6885,7 @@ const App = {
       const activeEl = document.activeElement;
       if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) return;
       this.refreshCurrentView();
-    }, 5000);
+    }, 15000);
   },
 
   // 无感刷新当前视图 — 仅更新数据，不闪屏不打断操作

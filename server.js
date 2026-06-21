@@ -521,7 +521,7 @@ const CACHE_TTL = {
   sn_registry: 15000,        // 15s
   machines: 15000,           // 15s
   tech_support: 10000,       // 10s
-  sync: 30000,               // 30s
+  sync: 60000,               // 60s
 };
 
 function _invalidateCache(event) {
@@ -2309,10 +2309,10 @@ async function handleSync(req, res) {
       settings, equipmentConfig, inventoryConfig,
       opsOrders, opsCustomers, opsProduction] = await Promise.all([
     pool.execute('SELECT * FROM inventory'),
-    pool.execute('SELECT * FROM sn_registry ORDER BY updatedAt DESC LIMIT 5000'),
-    pool.execute('SELECT data FROM tech_support ORDER BY id DESC LIMIT 1000'),
-    pool.execute('SELECT data FROM machines ORDER BY id DESC LIMIT 5000'),
-    pool.execute('SELECT data FROM transactions ORDER BY id DESC LIMIT 500'),
+    pool.execute('SELECT * FROM sn_registry ORDER BY updatedAt DESC LIMIT 2000'),
+    pool.execute('SELECT data FROM tech_support ORDER BY id DESC LIMIT 100'),
+    pool.execute('SELECT data FROM machines ORDER BY id DESC LIMIT 500'),
+    pool.execute('SELECT data FROM transactions ORDER BY id DESC LIMIT 200'),
     pool.execute('SELECT skey, value FROM settings'),
     pool.execute('SELECT data FROM equipment_config ORDER BY id DESC'),
     pool.execute('SELECT data FROM inventory_config ORDER BY id DESC'),

@@ -4,11 +4,11 @@
  */
 const mysql = require('mysql2/promise');
 
-const DB_HOST = process.env.DB_HOST || 'sh-cynosdbmysql-grp-pbo2ohcm.sql.tencentcdb.com';
-const DB_PORT = parseInt(process.env.DB_PORT || '22387');
-const DB_USER = process.env.DB_USER || 'ubuntu';
-const DB_PASSWORD = process.env.DB_PASSWORD || '';
-const DB_NAME = process.env.DB_NAME || 'gms';
+const DB_HOST = process.env.DB_HOST || process.env.MYSQL_HOST || 'sh-cynosdbmysql-grp-pbo2ohcm.sql.tencentcdb.com';
+const DB_PORT = parseInt(process.env.DB_PORT || process.env.MYSQL_PORT || '22387');
+const DB_USER = process.env.DB_USER || process.env.MYSQL_USER || 'Wuzhenyu';
+const DB_PASSWORD = process.env.DB_PASSWORD || process.env.MYSQL_PASSWORD || 'Wh111852';
+const DB_NAME = process.env.DB_NAME || process.env.MYSQL_DATABASE || 'gms';
 
 (async () => {
   let conn;

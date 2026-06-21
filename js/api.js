@@ -290,7 +290,7 @@ const API = {
         await Storage._syncFromServer();
         this._notifyUIUpdate();
       } catch {}
-    }, 5000); // 5秒无感刷新
+    }, 15000); // 15秒无感刷新
   },
 
   // ==================== TOKEN HEARTBEAT ====================
