@@ -520,6 +520,7 @@ const CACHE_TTL = {
   inventory_config: 120000,  // 2min
   sn_registry: 15000,        // 15s
   machines: 15000,           // 15s
+  tech_support: 10000,       // 10s
   sync: 30000,               // 30s
 };
 
@@ -531,13 +532,15 @@ function _invalidateCache(event) {
     'machines_updated': 'machines',
     'inventory_updated': 'sync',
     'transactions_updated': 'sync',
-    'tech_support_updated': 'sync',
+    'tech_support_updated': 'tech_support',
     'settings_updated': 'sync',
     'users_updated': 'sync',
   };
   for (const [evt, key] of Object.entries(map)) {
     if (event === evt) _cache.delete(key);
   }
+  // tech_support changes also invalidate sync cache
+  if (event === 'tech_support_updated') _cache.delete('sync');
   // Note: sync cache uses its own TTL (30s), NOT invalidated on every SSE event
   // to prevent thundering herd — 200 users × every broadcast = DB overload
 }
@@ -913,22 +916,25 @@ async function handleToggleUserStatus(req, res, authUser, userId) {
 }
 
 async function handleGetTechSupportList(req, res, authUser) {
-  const [rows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC');
-  let items = rows.map(r => JSON.parse(r.data));
+  // 使用缓存（10秒TTL）避免每次请求都加载+解析555条JSON
+  const items = await _cached('tech_support', async () => {
+    const [rows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC');
+    return rows.map(r => JSON.parse(r.data));
+  });
+  // 权限过滤（运营系统用户只看自己的）
+  let filtered = items;
   if (authUser.system === 'operations' && authUser.role !== 'superadmin') {
     if (authUser.role === 'admin') {
-      // Admin/leader sees own requests + all subordinates' requests
       const [subs] = await pool.execute('SELECT id FROM users WHERE parentId = ?', [authUser.userId]);
       const subIds = new Set(subs.map(s => s.id));
-      subIds.add(authUser.userId); // also own
-      items = items.filter(item => subIds.has(item.submitterId));
+      subIds.add(authUser.userId);
+      filtered = items.filter(item => subIds.has(item.submitterId));
     } else {
-      // Regular user sees only own requests
-      items = items.filter(item => item.submitterId === authUser.userId);
+      filtered = items.filter(item => item.submitterId === authUser.userId);
     }
   }
-  items.sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0));
-  sendJSON(res, items);
+  filtered.sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0));
+  sendJSON(res, filtered);
 }
 
 async function handleGetTechSupportDetail(req, res, authUser, id) {
@@ -969,10 +975,12 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
     return sendJSON(res, { error: '请填写所有必填字段' }, 400);
   }
 
-  // 检查该设备是否已有未完成的技术支持（防止重复提交）
+  // 检查该设备是否已有未完成的技术支持（使用缓存避免全表扫描）
   const machineNo = machineNumber || machineId;
-  const [allRows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC');
-  const existingItems = allRows.map(r => JSON.parse(r.data));
+  const existingItems = await _cached('tech_support', async () => {
+    const [rows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC');
+    return rows.map(r => JSON.parse(r.data));
+  });
   const unfinished = existingItems.find(
     item => (item.machineNumber === machineNo || item.machineId === machineId) &&
             (item.status === 'pending' || item.status === 'responded')
