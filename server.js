@@ -25,9 +25,31 @@ let redisClient, redisSub, redisPub;
 
 async function initRedis() {
   try {
-    redisClient = redis.createClient({ url: REDIS_URL });
+    redisClient = redis.createClient({
+      url: REDIS_URL,
+      socket: {
+        reconnectStrategy: (retries) => {
+          if (retries > 20) {
+            console.error('[Redis] Max retries reached, running without Redis');
+            return new Error('Max retries exceeded');
+          }
+          const delay = Math.min(retries * 500, 5000);
+          console.warn(`[Redis] Reconnect attempt ${retries} in ${delay}ms`);
+          return delay;
+        },
+      },
+    });
     redisSub = redisClient.duplicate();
     redisPub = redisClient.duplicate();
+
+    // 关键：捕获 Redis 错误，防止 crash 整个进程
+    const onError = (role) => (err) => {
+      console.error(`[Redis ${role}] Error (non-fatal):`, err.message);
+    };
+    redisClient.on('error', onError('client'));
+    redisSub.on('error', onError('sub'));
+    redisPub.on('error', onError('pub'));
+
     await Promise.all([redisClient.connect(), redisSub.connect(), redisPub.connect()]);
     console.log(`[Worker ${process.env.pm_id || '?'}] Redis connected: ${REDIS_URL}`);
     return true;
