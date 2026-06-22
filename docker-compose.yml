@@ -125,6 +125,8 @@ services:
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_DIR: /var/log/yunwei
+    ports:
+      - "8765:8765"
     volumes:
       - uploads_data:/app/uploads
       - log_data:/var/log/yunwei
