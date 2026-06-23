@@ -1113,20 +1113,11 @@ body.login-mode #main-content { padding: 0; }
   50% { transform: scale(1.05); }
 }
 .login-box h1 {
-  font-size: 1.6rem;
-  font-weight: 800;
+  font-size: 1.5rem;
+  font-weight: 600;
   margin-bottom: 6px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.02em;
-}
-[data-theme="dark"] .login-box h1 {
-  background: linear-gradient(135deg, #818cf8 0%, #a78bfa 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--text-primary);
+  letter-spacing: 0.05em;
 }
 .login-tagline {
   font-size: 0.85rem;
