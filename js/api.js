@@ -220,12 +220,28 @@ const API = {
       this.eventSource.addEventListener('ops_orders_updated', silentSync);
       this.eventSource.addEventListener('ops_customers_updated', silentSync);
       this.eventSource.addEventListener('ops_production_updated', silentSync);
-      this.eventSource.addEventListener('tech_support_updated', silentSync);
+      this.eventSource.addEventListener('tech_support_updated', (e) => {
+        console.log('[SSE] tech_support_updated received:', e.data);
+        // 直接获取最新数据，绕过缓存
+        (async () => {
+          try {
+            const data = await this._fetch('GET', '/api/tech-support');
+            if (Array.isArray(data) && typeof Storage !== 'undefined') {
+              localStorage.setItem('gms_tech_support', JSON.stringify(data));
+              console.log('[SSE] tech_support data updated, count:', data.length);
+            }
+          } catch (err) {
+            console.error('[SSE] Failed to fetch tech_support:', err);
+          }
+          silentSync();
+        })();
+      });
       this.eventSource.addEventListener('group_transfer_updated', silentSync);
       this.eventSource.onopen = () => {
         // SSE connected — reset failure counter
         this._sseFailures = 0;
         this._sseLastFail = 0;
+        console.log('[SSE] Connected successfully');
       };
       this.eventSource.onerror = () => {
         const now = Date.now();
@@ -235,8 +251,10 @@ const API = {
           this._sseFailures = 1;
         }
         this._sseLastFail = now;
+        console.warn('[SSE] Error, failure count:', this._sseFailures);
         // If SSE fails 3+ times within 60s, fall back to polling
         if (this._sseFailures >= 3) {
+          console.log('[SSE] Falling back to polling mode');
           this._startPolling();
         }
       };
@@ -328,6 +346,7 @@ const API = {
 
     if (typeof App !== 'undefined' && App.refreshCurrentTab && App.currentTab) {
       if (lightTabs.includes(App.currentTab) || App.currentTab.indexOf('_') > -1) {
+        console.log('[API] Refreshing tab:', App.currentTab);
         App.refreshCurrentTab();
       }
     }
