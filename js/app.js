@@ -86,7 +86,6 @@ const App = {
       <div class="login-screen">
         <div class="login-box">
           <h1>Worldengine</h1>
-          <p class="login-subtitle">登录系统</p>
           ${errorMsg ? `<div class="alert-banner info" style="margin-bottom:16px;">ℹ ${errorMsg}</div>` : ''}
           <div class="form-group">
             <label>用户名</label>
