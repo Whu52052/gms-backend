@@ -77,7 +77,8 @@ const App = {
 
   initStatusBar() {
     this.refreshStatusBar();
-    setInterval(() => this.refreshStatusBar(), 5000); // 每5秒刷新状态栏
+    if (this._statusBarInterval) clearInterval(this._statusBarInterval);
+    this._statusBarInterval = setInterval(() => this.refreshStatusBar(), 5000);
   },
 
   showLogin(errorMsg) {
@@ -187,10 +188,11 @@ const App = {
   },
 
   startHealthCheck() {
-    setInterval(async () => {
+    if (this._healthCheckInterval) clearInterval(this._healthCheckInterval);
+    this._healthCheckInterval = setInterval(async () => {
       API.online = await API._checkServer();
       this.updateHealthDot();
-    }, 5000); // 每5秒检查连接状态
+    }, 10000);
   },
 
   async manualRefresh() {
