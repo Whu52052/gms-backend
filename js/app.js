@@ -6974,8 +6974,11 @@ const App = {
       this.renderTransactions(this.currentPage.transactions);
     } else if (tab === 'machines') {
       this.renderMachines();
+    } else if (tab === 'tech-support') {
+      // 技术支持页面需要实时显示新消息
+      this.renderTechSupport(this._tsViewMode);
     }
-    // reports/audit/after-sales/tech-support — 含图表，跳过1秒刷新，用户可手动点刷新按钮
+    // reports/audit/after-sales — 含图表，跳过定时刷新，用户可手动点刷新按钮
   },
 
   bindKeyboardShortcuts() {
