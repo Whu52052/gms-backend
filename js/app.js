@@ -41,13 +41,12 @@ const App = {
         await Storage._fullSyncFromServer();
       }
       document.body.classList.add('logged-in');
-      // Restore sidebar, hamburger, and topbar visibility
+      document.body.classList.remove('login-mode');
+      // Restore sidebar and topbar visibility
       const sidebar = document.querySelector('.sidebar');
       if (sidebar) sidebar.style.display = '';
-      const topbarRight = document.querySelector('.topbar-right');
-      if (topbarRight) topbarRight.style.display = '';
-      const hamburger = document.getElementById('hamburger-btn');
-      if (hamburger) hamburger.style.display = '';
+      const topbar = document.querySelector('.topbar');
+      if (topbar) topbar.style.display = '';
       // Tech support nav visible only for maintenance users
       this._updateTechSupportNav();
       this.updateUserDisplay();
@@ -85,31 +84,37 @@ const App = {
     const html = `
       <div class="login-screen">
         <div class="login-box">
+          <div class="login-logo">W</div>
           <h1>Worldengine</h1>
+          <div class="login-tagline">智能设备管理平台</div>
           ${errorMsg ? `<div class="alert-banner info" style="margin-bottom:16px;">ℹ ${errorMsg}</div>` : ''}
           <div class="form-group">
             <label>用户名</label>
-            <input type="text" id="login-username" placeholder="输入用户名" autocomplete="username" required>
+            <div class="login-input-wrap">
+              <span class="login-input-icon">👤</span>
+              <input type="text" id="login-username" placeholder="请输入用户名" autocomplete="username" required>
+            </div>
           </div>
           <div class="form-group">
             <label>密码</label>
-            <input type="password" id="login-password" placeholder="输入密码" autocomplete="current-password" required>
+            <div class="login-input-wrap">
+              <span class="login-input-icon">🔒</span>
+              <input type="password" id="login-password" placeholder="请输入密码" autocomplete="current-password" required>
+            </div>
           </div>
           <div id="login-error" style="color:var(--color-danger);font-size:0.85rem;min-height:20px;text-align:center;"></div>
-          <button class="btn btn-primary" id="login-btn" style="width:100%;padding:12px;" onclick="App.doLogin()">登录</button>
+          <button class="btn btn-primary login-btn" id="login-btn" onclick="App.doLogin()">登 录</button>
         </div>
       </div>
     `;
     document.getElementById('main-content').innerHTML = html;
     document.body.classList.remove('logged-in');
     document.body.classList.remove('sidebar-open');
-    // Hide sidebar, hamburger, and topbar-right during login
-    const topbarRight = document.querySelector('.topbar-right');
-    if (topbarRight) topbarRight.style.display = 'none';
+    document.body.classList.add('login-mode');
+    const topbar = document.querySelector('.topbar');
+    if (topbar) topbar.style.display = 'none';
     const sidebar = document.querySelector('.sidebar');
     if (sidebar) sidebar.style.display = 'none';
-    const hamburger = document.getElementById('hamburger-btn');
-    if (hamburger) hamburger.style.display = 'none';
 
     // Enter key to login
     const pwEl = document.getElementById('login-password');
