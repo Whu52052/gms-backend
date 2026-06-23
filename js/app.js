@@ -85,9 +85,8 @@ const App = {
     const html = `
       <div class="login-screen">
         <div class="login-box">
-          <div class="login-icon">🧤</div>
-          <h1>运维系统</h1>
-          <p class="login-subtitle">请登录以继续</p>
+          <h1>Worldengine</h1>
+          <p class="login-subtitle">登录系统</p>
           ${errorMsg ? `<div class="alert-banner info" style="margin-bottom:16px;">ℹ ${errorMsg}</div>` : ''}
           <div class="form-group">
             <label>用户名</label>
@@ -162,7 +161,8 @@ const App = {
     this.refreshSidebarInventory();
     this._updateTechSupportNav();
     this._updateUsersNav();
-    this.notify(`欢迎，${result.user.username}！`);
+    const systemLabel = result.user.system === 'operations' ? '📊 运营系统' : '🔧 运维系统';
+    this.notify(`欢迎，${result.user.username}！当前系统: ${systemLabel}`);
   },
 
   async doLogout() {

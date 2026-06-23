@@ -60,9 +60,8 @@ const OpsApp = {
     const html = `
       <div class="login-screen">
         <div class="login-box">
-          <div class="login-icon">📊</div>
-          <h1>运营系统</h1>
-          <p class="login-subtitle">请登录以继续</p>
+          <h1>Worldengine</h1>
+          <p class="login-subtitle">登录系统</p>
           ${errorMsg ? '<div class="alert-banner info" style="margin-bottom:16px;">ℹ '+errorMsg+'</div>' : ''}
           <div class="form-group">
             <label>用户名</label>
