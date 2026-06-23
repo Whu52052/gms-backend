@@ -75,35 +75,34 @@ const API = {
   },
 
   async login(username, password) {
-    // Try server first
-    if (this.online) {
-      try {
-        const res = await this._fetchWithTimeout(this.baseURL + '/api/auth/login', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        }, 5000);
-        const data = await res.json();
-        if (res.ok) {
-          this.token = data.token;
-          this.currentUser = data.user;
-          localStorage.setItem('gms_token', data.token);
-          localStorage.setItem('gms_user', JSON.stringify(data.user));
-          this._saveLoginHistory(data.user);
-          this._listenSSE();
-          this._setupBeforeUnload();
-          // 记住登录态（Cookie 7天有效）
-          this._setCookie('gms_logged', '1', 7);
-          // 🔴 微信级实时: 启动 WebSocket 双向通信
-          if (typeof Realtime !== 'undefined') {
-            Realtime.init(data.token);
-            Realtime.requestNotificationPermission();
-          }
-          return { success: true, user: data.user };
+    // Always try server first, regardless of online status
+    // The init() checkServer may not have completed yet when user clicks login
+    try {
+      const res = await this._fetchWithTimeout(this.baseURL + '/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      }, 5000);
+      const data = await res.json();
+      if (res.ok) {
+        this.token = data.token;
+        this.currentUser = data.user;
+        localStorage.setItem('gms_token', data.token);
+        localStorage.setItem('gms_user', JSON.stringify(data.user));
+        this._saveLoginHistory(data.user);
+        this._listenSSE();
+        this._setupBeforeUnload();
+        // 记住登录态（Cookie 7天有效）
+        this._setCookie('gms_logged', '1', 7);
+        // 🔴 微信级实时: 启动 WebSocket 双向通信
+        if (typeof Realtime !== 'undefined') {
+          Realtime.init(data.token);
+          Realtime.requestNotificationPermission();
         }
-        return { success: false, message: data.error };
-      } catch (e) {
-        // Server unreachable, fall through to offline
+        return { success: true, user: data.user };
       }
+      return { success: false, message: data.error };
+    } catch (e) {
+      // Server unreachable, fall through to offline
     }
 
     // Offline login: check against localStorage users
