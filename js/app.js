@@ -7,6 +7,7 @@ const App = {
   currentTab: 'dashboard',
   currentPage: { transactions: 1 },
   pageSize: 15,
+  _repairResultHistory: [],  // 维修结果记忆历史
   filters: {
     equipmentType: 'all',
     direction: 'all',
@@ -4217,16 +4218,25 @@ const App = {
     // Get random funny sentence first
     const popup = await API.getRandomPopupMessage('complete');
     const funnyMsg = popup.text || '辛苦了！';
-    // Show layered popup: top=funny sentence, bottom=input for repair result
-    this._showLayeredPopup('🔧 维修完成', funnyMsg, '请输入维修结果说明...', async (resultText) => {
+    // Load repair result history for autocomplete suggestions
+    this._loadRepairResultHistory();
+    const suggestions = this._getRepairResultHistory();
+    // Show layered popup: top=funny sentence, bottom=input for repair result with suggestions
+    this._showLayeredPopup('🔧 维修完成', funnyMsg, '请输入或选择维修结果...', async (resultText) => {
+      if (!resultText) {
+        this.notify('请输入维修结果', 'error');
+        return;
+      }
       const result = await API.completeTechSupport(id, resultText);
       if (result && result.success) {
+        // Save to history for future autocomplete
+        this._addRepairResultToHistory(resultText);
         this.notify('维修已完成');
         this.renderTechSupportDetail(id);
       } else {
         this.notify(result?.error || result?.message || '操作失败', 'error');
       }
-    });
+    }, suggestions);
   },
 
   async doDeleteTechSupport(id) {
@@ -4265,14 +4275,73 @@ const App = {
     overlay.onclick = (e) => { if (e.target === overlay) close(); };
   },
 
+  // ==================== 维修结果记忆功能 ====================
+  _REPAIR_RESULT_KEY: 'gms_repair_result_history',
+  _MAX_HISTORY: 50,  // 最多保存50条历史记录
+
+  // 从localStorage加载历史记录
+  _loadRepairResultHistory() {
+    try {
+      const data = localStorage.getItem(this._REPAIR_RESULT_KEY);
+      this._repairResultHistory = data ? JSON.parse(data) : [];
+    } catch { this._repairResultHistory = []; }
+  },
+
+  // 保存历史记录到localStorage
+  _saveRepairResultHistory() {
+    try {
+      localStorage.setItem(this._REPAIR_RESULT_KEY, JSON.stringify(this._repairResultHistory));
+    } catch {}
+  },
+
+  // 添加新的维修结果到历史（去重，新结果优先）
+  _addRepairResultToHistory(result) {
+    if (!result || result.trim().length < 2) return;
+    const trimmed = result.trim();
+    // 移除已存在的相同记录
+    this._repairResultHistory = this._repairResultHistory.filter(r => r !== trimmed);
+    // 添加到最前面
+    this._repairResultHistory.unshift(trimmed);
+    // 限制最大数量
+    if (this._repairResultHistory.length > this._MAX_HISTORY) {
+      this._repairResultHistory = this._repairResultHistory.slice(0, this._MAX_HISTORY);
+    }
+    this._saveRepairResultHistory();
+  },
+
+  // 获取历史记录（最多返回20条）
+  _getRepairResultHistory() {
+    return this._repairResultHistory.slice(0, 20);
+  },
+
+  // 清除历史记录
+  _clearRepairResultHistory() {
+    this._repairResultHistory = [];
+    this._saveRepairResultHistory();
+  },
+
   // Layered popup: top=funny sentence, bottom=input field (for repair completion)
-  _showLayeredPopup(title, message, inputPlaceholder, onSubmit) {
+  // Optional suggestions parameter for datalist autocomplete
+  _showLayeredPopup(title, message, inputPlaceholder, onSubmit, suggestions) {
     const overlay = document.getElementById('modal-overlay');
     const body = document.getElementById('modal-body');
     const titleEl = document.getElementById('modal-title');
     const saveBtn = document.getElementById('modal-save');
     const closeBtn = document.getElementById('modal-close-btn');
+    // Generate unique datalist ID
+    const datalistId = 'datalist-' + Date.now();
     titleEl.textContent = title;
+    let inputHtml = `<textarea id="layered-popup-input" class="ts-form-textarea" rows="3" placeholder="${inputPlaceholder || '请输入维修结果...'}" style="width:100%;"></textarea>`;
+    if (suggestions && suggestions.length > 0) {
+      // Use input with datalist instead of textarea for better autocomplete UX
+      inputHtml = `
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <input type="text" id="layered-popup-input" class="ts-form-input" list="${datalistId}" placeholder="${inputPlaceholder || '请输入或选择...'}" style="width:100%;">
+          <datalist id="${datalistId}">
+            ${suggestions.map(s => `<option value="${s.replace(/"/g, '&quot;')}">`).join('')}
+          </datalist>
+        </div>`;
+    }
     body.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:16px;">
         <div style="text-align:center;padding:16px 10px;background:var(--bg-secondary,#f8f9fb);border-radius:var(--radius-lg,14px);border:1px solid var(--border-light,#f3f4f6);">
@@ -4281,7 +4350,7 @@ const App = {
         </div>
         <div>
           <label style="display:block;font-size:.78rem;font-weight:600;color:var(--text-secondary);margin-bottom:6px;">维修结果说明</label>
-          <textarea id="layered-popup-input" class="ts-form-textarea" rows="3" placeholder="${inputPlaceholder || '请输入维修结果...'}" style="width:100%;"></textarea>
+          ${inputHtml}
         </div>
       </div>`;
     overlay.style.display = 'flex';
@@ -4301,6 +4370,9 @@ const App = {
     document.getElementById('modal-close').onclick = close;
     if (closeBtn) closeBtn.onclick = close;
     overlay.onclick = (e) => { if (e.target === overlay) close(); };
+    // Focus input if exists
+    const inputEl = document.getElementById('layered-popup-input');
+    if (inputEl) setTimeout(() => inputEl.focus(), 50);
   },
 
   // ==================== POPUP MESSAGE MANAGEMENT ====================
