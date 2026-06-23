@@ -324,7 +324,7 @@ const API = {
 
     // Only auto-render lightweight tabs — skip heavy data pages (transactions, machines, etc.)
     // that the user can manually refresh. This avoids scroll loss and CPU waste.
-    const lightTabs = ['dashboard', 'glove', 'dexterous', 'gripper', 'reports', 'after-sales'];
+    const lightTabs = ['dashboard', 'glove', 'dexterous', 'gripper', 'reports', 'after-sales', 'tech-support'];
 
     if (typeof App !== 'undefined' && App.refreshCurrentTab && App.currentTab) {
       if (lightTabs.includes(App.currentTab) || App.currentTab.indexOf('_') > -1) {
