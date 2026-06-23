@@ -76,11 +76,18 @@ async function _redisDel(key) {
 
 // ==================== CONFIG ====================
 const PORT = process.env.PORT || 8765;
-const DB_HOST = process.env.DB_HOST || process.env.MYSQL_HOST || 'sh-cynosdbmysql-grp-pbo2ohcm.sql.tencentcdb.com';
-const DB_PORT = parseInt(process.env.DB_PORT || process.env.MYSQL_PORT || '22387');
-const DB_USER = process.env.DB_USER || process.env.MYSQL_USER || 'Wuzhenyu';
-const DB_PASSWORD = process.env.DB_PASSWORD || process.env.MYSQL_PASSWORD || 'Wh111852';
+// SECURITY WARNING: Database credentials should be set via environment variables in production!
+// Do NOT hardcode credentials in source code. Use DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME env vars.
+const DB_HOST = process.env.DB_HOST || process.env.MYSQL_HOST || '';
+const DB_PORT = parseInt(process.env.DB_PORT || process.env.MYSQL_PORT || '3306');
+const DB_USER = process.env.DB_USER || process.env.MYSQL_USER || '';
+const DB_PASSWORD = process.env.DB_PASSWORD || process.env.MYSQL_PASSWORD || '';
 const DB_NAME = process.env.DB_NAME || process.env.MYSQL_DATABASE || 'gms';
+// Validate required database config
+if (!DB_HOST || !DB_USER || !DB_PASSWORD) {
+  console.error('[FATAL] Database credentials not configured. Set DB_HOST, DB_USER, DB_PASSWORD environment variables.');
+  process.exit(1);
+}
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DATA_DIR = path.join(__dirname, 'data');
 const TOKEN_EXPIRY = 2 * 60 * 60 * 1000; // 2 hours sliding window
@@ -443,6 +450,8 @@ function _fmtDuration(seconds) {
   return rm > 0 ? h + '时' + rm + '分' : h + '小时';
 }
 
+// SECURITY NOTE: Using a global salt is acceptable for internal systems.
+// For production systems handling sensitive data, consider using per-user random salts with bcrypt.
 function hashPassword(pw) {
   return crypto.createHash('sha256').update(pw + 'gms-salt').digest('hex');
 }
@@ -752,9 +761,27 @@ function serveStatic(req, res) {
 // -- Auth --
 async function handleLogin(req, res, body) {
   const { username, password } = body;
+  // Input validation: prevent empty, too long, or malicious input
   if (!username || !password) return sendJSON(res, { error: '请输入用户名和密码' }, 400);
-  const [rows] = await pool.execute('SELECT * FROM users WHERE username = ?', [username]);
-  if (rows.length === 0 || rows[0].passwordHash !== hashPassword(password)) {
+  const trimmedUsername = username.trim();
+  const trimmedPassword = password.trim();
+  if (trimmedUsername.length < 2 || trimmedUsername.length > 64) return sendJSON(res, { error: '用户名长度需在2-64字符之间' }, 400);
+  if (trimmedPassword.length < 4 || trimmedPassword.length > 128) return sendJSON(res, { error: '密码长度需在4-128字符之间' }, 400);
+  // SQL injection check
+  if (/[;'"\-\-]/.test(trimmedUsername)) return sendJSON(res, { error: '用户名包含非法字符' }, 400);
+
+  // Brute force protection
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+  const bruteCheck = require('./security').loginBruteForceCheck(clientIp);
+  if (bruteCheck.blocked) {
+    return sendJSON(res, { error: `登录尝试过多，请等待 ${bruteCheck.remainingSeconds} 秒后再试` }, 429);
+  }
+
+  const [rows] = await pool.execute('SELECT * FROM users WHERE username = ?', [trimmedUsername]);
+  const loginSuccess = rows.length > 0 && rows[0].passwordHash === hashPassword(trimmedPassword);
+  require('./security').loginBruteForceRecord(clientIp, loginSuccess);
+
+  if (!loginSuccess) {
     return sendJSON(res, { error: '用户名或密码错误' }, 401);
   }
   const user = rows[0];
@@ -809,9 +836,17 @@ async function handleAddUser(req, res, user, body) {
   if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限添加用户' }, 403);
   const { username, password, role, system, displayName } = body;
   if (!username || !password) return sendJSON(res, { error: '请输入用户名和密码' }, 400);
+  const trimmedUsername = username.trim();
+  const trimmedPassword = password.trim();
+  // Validate username
+  if (trimmedUsername.length < 2 || trimmedUsername.length > 64) return sendJSON(res, { error: '用户名长度需在2-64字符之间' }, 400);
+  if (/[;'"\-\-]/.test(trimmedUsername)) return sendJSON(res, { error: '用户名包含非法字符' }, 400);
+  // Validate password strength
+  if (trimmedPassword.length < 6) return sendJSON(res, { error: '密码至少6个字符' }, 400);
+  if (!/[A-Za-z]/.test(trimmedPassword) || !/[0-9]/.test(trimmedPassword)) return sendJSON(res, { error: '密码需包含字母和数字' }, 400);
   if (user.role === 'admin' && role === 'admin') return sendJSON(res, { error: '管理员只能创建普通用户' }, 403);
   if (role === 'superadmin') return sendJSON(res, { error: '无法创建超级管理员账户' }, 403);
-  const [existing] = await pool.execute('SELECT id FROM users WHERE username = ?', [username]);
+  const [existing] = await pool.execute('SELECT id FROM users WHERE username = ?', [trimmedUsername]);
   if (existing.length > 0) return sendJSON(res, { error: '用户名已存在' }, 400);
   const id = 'u-' + Date.now().toString(36);
   const userSystem = system || user.system || 'maintenance';
@@ -819,10 +854,10 @@ async function handleAddUser(req, res, user, body) {
   const parentId = (user.role === 'admin' || user.role === 'superadmin') ? user.userId : null;
   await pool.execute(
     'INSERT INTO users (id, username, passwordHash, role, `system`, displayName, createdBy, parentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, username, hashPassword(password), role || 'user', userSystem, displayName || username, user.userId, parentId, new Date().toISOString()]
+    [id, trimmedUsername, hashPassword(trimmedPassword), role || 'user', userSystem, displayName || trimmedUsername, user.userId, parentId, new Date().toISOString()]
   );
   broadcastSSE('users_updated', {});
-  sendJSON(res, { success: true, user: { id, username, displayName: displayName || username, role: role || 'user', system: userSystem, parentId } });
+  sendJSON(res, { success: true, user: { id, username: trimmedUsername, displayName: displayName || trimmedUsername, role: role || 'user', system: userSystem, parentId } });
 }
 
 async function handleDeleteUser(req, res, user, userId) {
@@ -1433,6 +1468,7 @@ async function handleResetPassword(req, res, user, userId, body) {
   const { newPassword } = body;
   const trimmedPw = (newPassword || '').trim();
   if (!trimmedPw || trimmedPw.length < 6) return sendJSON(res, { error: '新密码至少6个字符' }, 400);
+  if (!/[A-Za-z]/.test(trimmedPw) || !/[0-9]/.test(trimmedPw)) return sendJSON(res, { error: '新密码需包含字母和数字' }, 400);
 
   // Only admin and superadmin can reset others' passwords
   if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限' }, 403);
@@ -1650,7 +1686,9 @@ async function handleSaveSettings(req, res, user, body) {
 }
 
 // -- Equipment Config --
-async function handleGetEquipmentConfig(req, res) {
+async function handleGetEquipmentConfig(req, res, authUser) {
+  // Auth required
+  if (!authUser) return sendJSON(res, { error: '未登录' }, 401);
   const result = await _cached('equipment_config', () => readJSONArray('equipment_config'));
   sendJSON(res, result);
 }
@@ -1683,7 +1721,9 @@ async function handleDeleteEquipmentConfig(req, res, authUser, id) {
 }
 
 // -- Inventory Config --
-async function handleGetInventoryConfig(req, res) {
+async function handleGetInventoryConfig(req, res, authUser) {
+  // Auth required
+  if (!authUser) return sendJSON(res, { error: '未登录' }, 401);
   const result = await _cached('inventory_config', () => readJSONArray('inventory_config'));
   sendJSON(res, result);
 }
@@ -2135,7 +2175,9 @@ function _snToInvType(equipmentType, handType) {
 }
 
 // ==================== SN REGISTRY ====================
-async function handleGetSNRegistry(req, res) {
+async function handleGetSNRegistry(req, res, authUser) {
+  // Auth required
+  if (!authUser) return sendJSON(res, { error: '未登录' }, 401);
   const rows = await _cached('sn_registry', async () => {
     const [r] = await pool.execute('SELECT * FROM sn_registry ORDER BY updatedAt DESC LIMIT 5000');
     return r;
@@ -2305,11 +2347,19 @@ function handleUpload(req, res, body) {
   if (!data || !filename) return sendJSON(res, { error: '缺少文件数据' }, 400);
   const matches = data.match(/^data:([^;]+);base64,(.+)$/);
   if (!matches) return sendJSON(res, { error: '无效的数据格式' }, 400);
+  const mimeType = matches[1];
   const base64Data = matches[2];
+  // Validate MIME type - only allow safe image types
+  const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
+  if (!ALLOWED_MIME_TYPES.includes(mimeType)) {
+    return sendJSON(res, { error: '只支持上传图片文件 (jpg, png, gif, webp, svg)' }, 400);
+  }
   const decodedBuf = Buffer.from(base64Data, 'base64');
   if (decodedBuf.length > 10 * 1024 * 1024) return sendJSON(res, { error: '文件大小超过限制(最大10MB)' }, 413);
+  // Sanitize filename - remove path traversal characters
+  const safeFilename = filename.replace(/[\/\\]/g, '_').replace(/[^\w\.\-]/g, '');
   // Return the base64 data URL directly — frontend stores it in the attachment field
-  sendJSON(res, { path: data });
+  sendJSON(res, { path: data, filename: safeFilename });
 }
 
 function handleDeleteUpload(req, res, body) {
@@ -2324,7 +2374,9 @@ function handleDeleteUpload(req, res, body) {
 }
 
 // -- Sync endpoint (polling fallback) --
-async function handleSync(req, res) {
+async function handleSync(req, res, authUser) {
+  // Auth required for sync endpoint
+  if (!authUser) return sendJSON(res, { error: '未登录' }, 401);
   const cachedData = await _cached('sync', async () => {
     // Parallel queries for speed
     const [inventory, snRegistry, tsRows, machines, transactions,
@@ -2517,13 +2569,13 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/change-password' && req.method === 'POST') return handleChangePassword(req, res, authUser, body);
 
     // Equipment Config
-    if (url.pathname === '/api/equipment-config' && req.method === 'GET') return handleGetEquipmentConfig(req, res);
+    if (url.pathname === '/api/equipment-config' && req.method === 'GET') return handleGetEquipmentConfig(req, res, authUser);
     if (url.pathname === '/api/equipment-config' && req.method === 'POST') return handleSaveEquipmentConfig(req, res, authUser, body);
     const delEq = url.pathname.match(/^\/api\/equipment-config\/(.+)$/);
     if (delEq && req.method === 'DELETE') return handleDeleteEquipmentConfig(req, res, authUser, delEq[1]);
 
     // Inventory Config
-    if (url.pathname === '/api/inventory-config' && req.method === 'GET') return handleGetInventoryConfig(req, res);
+    if (url.pathname === '/api/inventory-config' && req.method === 'GET') return handleGetInventoryConfig(req, res, authUser);
     if (url.pathname === '/api/inventory-config' && req.method === 'POST') return handleSaveInventoryConfig(req, res, authUser, body);
     const delInv = url.pathname.match(/^\/api\/inventory-config\/(.+)$/);
     if (delInv && req.method === 'DELETE') return handleDeleteInventoryConfig(req, res, authUser, delInv[1]);
@@ -2532,10 +2584,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/data-integrity' && req.method === 'GET') return handleDataIntegrity(req, res);
 
     // Sync (polling fallback)
-    if (url.pathname === '/api/sync' && req.method === 'GET') return handleSync(req, res);
+    if (url.pathname === '/api/sync' && req.method === 'GET') return handleSync(req, res, authUser);
 
     // SN Registry
-    if (url.pathname === '/api/sn-registry' && req.method === 'GET') return handleGetSNRegistry(req, res);
+    if (url.pathname === '/api/sn-registry' && req.method === 'GET') return handleGetSNRegistry(req, res, authUser);
     if (url.pathname === '/api/sn-registry' && req.method === 'POST') return handleUpsertSNRegistry(req, res, authUser, body);
     if (url.pathname === '/api/sn-registry/delete-full' && req.method === 'POST') return handleDeleteSNFull(req, res, authUser, body);
     if (url.pathname === '/api/sn-registry/ship' && req.method === 'POST') return handleShipSN(req, res, authUser, body);

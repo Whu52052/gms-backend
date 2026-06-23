@@ -218,7 +218,7 @@ const App = {
       </div>
       <div class="form-group">
         <label>新密码 <span class="required">*</span></label>
-        <input type="password" id="chpwd-new" placeholder="输入新密码（至少4个字符）" required>
+        <input type="password" id="chpwd-new" placeholder="输入新密码（至少6个字符，需包含字母和数字）" required>
       </div>
       <div class="form-group">
         <label>确认新密码 <span class="required">*</span></label>
@@ -231,7 +231,8 @@ const App = {
       const confirmPwd = document.getElementById('chpwd-confirm').value;
       if (!oldPwd || !newPwd || !confirmPwd) { this.notify('请填写所有字段', 'error'); return false; }
       if (newPwd !== confirmPwd) { this.notify('两次输入的新密码不一致', 'error'); return false; }
-      if (newPwd.length < 4) { this.notify('新密码至少4个字符', 'error'); return false; }
+      if (newPwd.length < 6) { this.notify('新密码至少6个字符', 'error'); return false; }
+      if (!/[A-Za-z]/.test(newPwd) || !/[0-9]/.test(newPwd)) { this.notify('新密码需包含字母和数字', 'error'); return false; }
       const result = await this._changePassword(oldPwd, newPwd);
       if (!result.success) { this.notify(result.message, 'error'); return false; }
       this.notify('密码修改成功');
