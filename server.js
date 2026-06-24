@@ -1311,7 +1311,8 @@ async function handleSubmitTaskProgress(req, res, authUser, body) {
   }
 
   const { progress, note } = body || {};
-  if (typeof progress !== 'number' || isNaN(progress)) {
+  const numProgress = parseFloat(progress);
+  if (isNaN(numProgress)) {
     return sendJSON(res, { error: '进度值无效' }, 400);
   }
 
@@ -1332,24 +1333,24 @@ async function handleSubmitTaskProgress(req, res, authUser, body) {
       return sendJSON(res, { error: '距离上次提交不足1小时，请稍后再试' }, 400);
     }
 
-    const dayProgress = progress - (record.startProgress || progress);
+    const dayProgress = numProgress - (record.startProgress || numProgress);
     history.push({
       hour,
-      progress,
+      progress: numProgress,
       note: note || '',
       submittedAt: new Date().toISOString()
     });
 
     await pool.execute(
       'UPDATE task_progress SET currentProgress = ?, dayProgress = ?, history = ?, updatedAt = ? WHERE id = ?',
-      [progress, dayProgress, JSON.stringify(history), new Date().toISOString(), record.id]
+      [numProgress, dayProgress, JSON.stringify(history), new Date().toISOString(), record.id]
     );
   } else {
     await pool.execute(
       'INSERT INTO task_progress (userId, date, startProgress, currentProgress, dayProgress, history, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [authUser.userId, today, progress, progress, 0, JSON.stringify([{
+      [authUser.userId, today, numProgress, numProgress, 0, JSON.stringify([{
         hour,
-        progress,
+        progress: numProgress,
         note: note || '',
         submittedAt: new Date().toISOString()
       }]), new Date().toISOString()]
