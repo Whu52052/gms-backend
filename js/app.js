@@ -88,7 +88,7 @@ const App = {
             <div class="login-logo">W</div>
           </div>
           <h1>Worldengine</h1>
-          <div class="login-tagline">智能设备管理平台</div>
+          <div class="login-tagline">ai互联</div>
           ${errorMsg ? `<div class="alert-banner info" style="margin-bottom:16px;">ℹ ${errorMsg}</div>` : ''}
           <div class="form-group">
             <label>用户名</label>
