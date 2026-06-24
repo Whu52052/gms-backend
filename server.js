@@ -1220,7 +1220,7 @@ async function handleGetUserRepairStats(req, res, authUser, userId) {
   }
 
   // Get user info
-  const [userRows] = await pool.execute('SELECT id, username, displayName, role, system, createdAt FROM users WHERE id = ?', [userId]);
+  const [userRows] = await pool.execute('SELECT id, username, displayName, role, `system`, createdAt FROM users WHERE id = ?', [userId]);
   if (userRows.length === 0) return sendJSON(res, { error: '用户不存在' }, 404);
   const userInfo = userRows[0];
 
