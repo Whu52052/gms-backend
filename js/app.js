@@ -84,7 +84,9 @@ const App = {
     const html = `
       <div class="login-screen">
         <div class="login-box">
-          <div class="login-logo">W</div>
+          <div class="login-logo-wrapper">
+            <div class="login-logo">W</div>
+          </div>
           <h1>Worldengine</h1>
           <div class="login-tagline">智能设备管理平台</div>
           ${errorMsg ? `<div class="alert-banner info" style="margin-bottom:16px;">ℹ ${errorMsg}</div>` : ''}
@@ -102,7 +104,7 @@ const App = {
               <input type="password" id="login-password" placeholder="请输入密码" autocomplete="current-password" required>
             </div>
           </div>
-          <div id="login-error" style="color:var(--color-danger);font-size:0.85rem;min-height:20px;text-align:center;"></div>
+          <div id="login-error" style="color:#ef4444;font-size:0.85rem;min-height:24px;text-align:center;"></div>
           <button class="btn btn-primary login-btn" id="login-btn" onclick="App.doLogin()">登 录</button>
         </div>
       </div>
