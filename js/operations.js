@@ -724,7 +724,6 @@ const OpsApp = {
               </div>
               <div class="member-info" style="flex:1;">
                 <div class="member-name">${m.displayName || m.username} ${m.id === user.id ? '<span style="color:var(--text-tertiary);font-size:0.75rem;">（我）</span>' : ''}</div>
-                <div class="member-role">${m.role === 'admin' ? '组长' : '组员'}</div>
               </div>
               <span style="color:var(--text-tertiary);font-size:1.2rem;">›</span>
             </div>
