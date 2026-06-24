@@ -1181,11 +1181,41 @@ async function handleDeleteTechSupport(req, res, authUser, id) {
 }
 
 async function handleGetUserRepairStats(req, res, authUser, userId) {
-  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') {
-    return sendJSON(res, { error: '仅组长和管理员可查看' }, 403);
+  // 运营系统用户可以查看同组人员统计，运维系统仅管理员可查看
+  const isOpsUser = authUser.system === 'operations';
+  const isLeader = authUser.role === 'admin' || authUser.role === 'superadmin';
+
+  if (!isOpsUser && !isLeader) {
+    return sendJSON(res, { error: '无权限查看' }, 403);
   }
-  // Verify the user is a subordinate (or superadmin)
-  if (authUser.role !== 'superadmin') {
+
+  // 运营系统用户：可以查看自己和同组人员
+  if (isOpsUser && userId !== authUser.userId) {
+    if (authUser.role === 'superadmin') {
+      // 超级管理员可以看所有人
+    } else if (authUser.role === 'admin') {
+      // 组长可以看自己的组员
+      const [sub] = await pool.execute('SELECT id FROM users WHERE id = ? AND (parentId = ? OR createdBy = ?)', [userId, authUser.userId, authUser.userId]);
+      if (sub.length === 0) {
+        return sendJSON(res, { error: '无权限查看该用户数据' }, 403);
+      }
+    } else {
+      // 普通组员：可以看同组的人（同一个组长下的）
+      // 先找到自己的组长
+      const [me] = await pool.execute('SELECT parentId, createdBy FROM users WHERE id = ?', [authUser.userId]);
+      const leaderId = me[0]?.parentId || me[0]?.createdBy;
+      if (!leaderId) {
+        return sendJSON(res, { error: '无权限查看该用户数据' }, 403);
+      }
+      // 检查目标用户是否在同一组
+      const [colleague] = await pool.execute('SELECT id FROM users WHERE id = ? AND (parentId = ? OR createdBy = ? OR id = ?)', [userId, leaderId, leaderId, leaderId]);
+      if (colleague.length === 0) {
+        return sendJSON(res, { error: '无权限查看该用户数据' }, 403);
+      }
+    }
+  }
+  // 运维系统管理员权限检查
+  if (!isOpsUser && authUser.role !== 'superadmin') {
     const [sub] = await pool.execute('SELECT id FROM users WHERE id = ? AND parentId = ?', [userId, authUser.userId]);
     if (sub.length === 0) {
       return sendJSON(res, { error: '无权限查看该用户数据' }, 403);

@@ -758,7 +758,7 @@ const OpsApp = {
       <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📋 组员统计 <span style="color:var(--text-secondary);font-size:0.8rem;">（${members.length} 人）</span></h3>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:16px;">
         ${combinedData.members.map((m, i) => `
-          <div class="ops-card" style="padding:16px;">
+          <div class="ops-card" style="padding:16px;cursor:pointer;transition:box-shadow .2s;" onclick="OpsApp.showTeamMemberDetail('${m.user.id}')" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,.1)'" onmouseout="this.style.boxShadow=''">
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
               <div class="member-avatar" style="width:40px;height:40px;font-size:18px;background:${['#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4'][i % 6]};">
                 ${(m.user.displayName || m.user.username || '?')[0].toUpperCase()}
@@ -767,6 +767,7 @@ const OpsApp = {
                 <div style="font-weight:600;">${m.user.displayName || m.user.username}</div>
                 <div style="font-size:0.75rem;color:var(--text-secondary);">账号：${m.user.username}</div>
               </div>
+              <span style="color:var(--text-tertiary);font-size:1.2rem;">›</span>
             </div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;">
               <div>
@@ -1006,6 +1007,8 @@ const OpsApp = {
     const stats = data.stats;
     const logs = data.repairLogs || [];
     const fmt = (s) => this._fmtDuration(s);
+    const currentUser = API.currentUser;
+    const isLeader = currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin');
     const statusMap = {
       pending: { label: '待响应', cls: 'pending' },
       responded: { label: '处理中', cls: 'responded' },
@@ -1070,6 +1073,7 @@ const OpsApp = {
         </div>
       </div>
 
+      ${isLeader ? `
       <!-- Repair Logs -->
       <div class="ops-card">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -1114,6 +1118,7 @@ const OpsApp = {
           </div>
         `}
       </div>
+      ` : ''}
     `;
     document.getElementById('main-content').innerHTML = html;
   },
