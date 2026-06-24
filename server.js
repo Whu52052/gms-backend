@@ -937,20 +937,11 @@ async function handleGetSubordinates(req, res, user) {
 }
 
 async function handlePromoteUser(req, res, user, userId) {
-  // Only superadmin and admin can promote/demote users
-  if (user.role !== 'superadmin' && user.role !== 'admin') return sendJSON(res, { error: '无权限执行此操作' }, 403);
+  // Only superadmin can promote users to admin
+  if (user.role !== 'superadmin') return sendJSON(res, { error: '仅超级管理员可执行晋升操作' }, 403);
   const [target] = await pool.execute('SELECT * FROM users WHERE id = ?', [userId]);
   if (target.length === 0) return sendJSON(res, { error: '用户不存在' }, 404);
   if (target[0].role === 'superadmin') return sendJSON(res, { error: '无法修改超级管理员角色' }, 403);
-  // Admin can only manage their own subordinates, and cannot promote to superadmin
-  if (user.role === 'admin') {
-    if (target[0].parentId !== user.userId && target[0].createdBy !== user.userId) {
-      return sendJSON(res, { error: '只能管理自己的组员' }, 403);
-    }
-    if (target[0].role === 'admin') {
-      return sendJSON(res, { error: '管理员无法修改其他管理员角色' }, 403);
-    }
-  }
   if (target[0].role === 'admin') {
     // Demote to user
     await pool.execute('UPDATE users SET role = ? WHERE id = ?', ['user', userId]);

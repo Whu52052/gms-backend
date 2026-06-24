@@ -1093,9 +1093,9 @@ const OpsApp = {
                 + '<td><span class="um-status-dot ' + (u.online ? 'online' : 'offline') + '"></span> ' + (u.online ? '在线' : '离线') + '</td>'
                 + '<td style="font-size:0.8rem;color:var(--text-secondary);">' + (u.createdAt ? new Date(u.createdAt).toLocaleDateString('zh-CN') : '-') + '</td>'
                 + '<td class="um-actions">'
-                + ((isSuper || (user.role === 'admin' && u.role === 'user')) && u.role !== 'superadmin' && !isSelf ? '<button class="btn btn-xs btn-outline" onclick="OpsApp.doPromoteUser(\'' + u.id + '\', \'' + u.username + '\', \'' + u.role + '\')">' + (u.role === 'admin' ? '降级为用户' : '晋升为管理员') + '</button>' : '')
+                + (isSuper && u.role !== 'superadmin' ? '<button class="btn btn-xs btn-outline" onclick="OpsApp.doPromoteUser(\'' + u.id + '\', \'' + u.username + '\', \'' + u.role + '\')">' + (u.role === 'admin' ? '降级为用户' : '晋升为管理员') + '</button>' : '')
                 + (!isSelf && u.role !== 'superadmin' && (isSuper || u.role === 'user') ? '<button class="btn btn-xs btn-outline" onclick="OpsApp.showResetPasswordForm(\'' + u.id + '\', \'' + (u.displayName || u.username) + '\')" title="重置密码" style="color:var(--color-warning,#f59e0b);">🔑 密码</button>' : '')
-                + (!isSelf && u.role !== 'superadmin' && (isSuper || u.role === 'user') ? '<button class="btn btn-xs btn-danger" onclick="OpsApp.doDeleteUser(\'' + u.id + '\', \'' + u.username + '\')">删除</button>' : '')
+                + (!isSelf && u.role !== 'superadmin' ? '<button class="btn btn-xs btn-danger" onclick="OpsApp.doDeleteUser(\'' + u.id + '\', \'' + u.username + '\')">删除</button>' : '')
                 + '</td>'
                 + '</tr>';
             }).join('')}
