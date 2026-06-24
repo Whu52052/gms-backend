@@ -256,6 +256,18 @@ function initDB() {
       createdBy VARCHAR(64),
       createdAt VARCHAR(64)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS task_progress (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      userId VARCHAR(64) NOT NULL,
+      date VARCHAR(16) NOT NULL,
+      startProgress DECIMAL(10,2) DEFAULT 0,
+      currentProgress DECIMAL(10,2) DEFAULT 0,
+      dayProgress DECIMAL(10,2) DEFAULT 0,
+      history JSON,
+      createdAt VARCHAR(64),
+      updatedAt VARCHAR(64),
+      UNIQUE KEY unique_user_date (userId, date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ];
   return Promise.all(statements.map(sql => pool.execute(sql)));
 }
@@ -1247,6 +1259,102 @@ async function handleGetUserRepairStats(req, res, authUser, userId) {
     },
     repairLogs,
   });
+}
+
+// ==================== TASK PROGRESS (组长进度) ====================
+async function handleSubmitTaskProgress(req, res, authUser, body) {
+  const { progress, note } = body || {};
+  if (typeof progress !== 'number' || isNaN(progress)) {
+    return sendJSON(res, { error: '进度值无效' }, 400);
+  }
+
+  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const hour = new Date().getHours();
+
+  // 获取或创建今日进度记录
+  const [existing] = await pool.execute(
+    'SELECT * FROM task_progress WHERE userId = ? AND date = ?',
+    [authUser.userId, today]
+  );
+
+  if (existing.length > 0) {
+    const record = existing[0];
+    const history = JSON.parse(record.history || '[]');
+    const lastEntry = history[history.length - 1];
+
+    // 检查是否可以提交（距离上次提交至少1小时）
+    if (lastEntry && hour - lastEntry.hour < 1) {
+      return sendJSON(res, { error: '距离上次提交不足1小时，请稍后再试' }, 400);
+    }
+
+    // 计算今日进度增量
+    const dayProgress = progress - (record.startProgress || progress);
+
+    // 添加新记录
+    history.push({
+      hour,
+      progress,
+      note: note || '',
+      submittedAt: new Date().toISOString()
+    });
+
+    await pool.execute(
+      'UPDATE task_progress SET currentProgress = ?, dayProgress = ?, history = ?, updatedAt = ? WHERE id = ?',
+      [progress, dayProgress, JSON.stringify(history), new Date().toISOString(), record.id]
+    );
+  } else {
+    // 新建记录（上班开始）
+    await pool.execute(
+      'INSERT INTO task_progress (userId, date, startProgress, currentProgress, dayProgress, history) VALUES (?, ?, ?, ?, ?, ?)',
+      [authUser.userId, today, progress, progress, 0, JSON.stringify([{
+        hour,
+        progress,
+        note: note || '',
+        submittedAt: new Date().toISOString()
+      }])]
+    );
+  }
+
+  sendJSON(res, { success: true, message: '进度已提交' });
+}
+
+async function handleGetTaskProgress(req, res, authUser) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const date = url.searchParams.get('date') || new Date().toISOString().split('T')[0];
+
+  // 获取自己的进度
+  const [myRecord] = await pool.execute(
+    'SELECT * FROM task_progress WHERE userId = ? AND date = ?',
+    [authUser.userId, date]
+  );
+
+  // 如果是组长，也获取组员进度
+  let memberProgress = [];
+  if (authUser.role === 'admin' || authUser.role === 'superadmin') {
+    const [subs] = await pool.execute(
+      'SELECT id, username, displayName FROM users WHERE parentId = ? OR createdBy = ?',
+      [authUser.userId, authUser.userId]
+    );
+    const subIds = subs.map(s => s.id);
+    if (subIds.length > 0) {
+      const placeholders = subIds.map(() => '?').join(',');
+      const [memberRecords] = await pool.execute(
+        `SELECT tp.*, u.username, u.displayName FROM task_progress tp JOIN users u ON tp.userId = u.id WHERE tp.userId IN (${placeholders}) AND tp.date = ?`,
+        [...subIds, date]
+      );
+      memberProgress = memberRecords;
+    }
+  }
+
+  const result = {
+    userId: authUser.userId,
+    username: authUser.username,
+    date,
+    myProgress: myRecord[0] || null,
+    memberProgress
+  };
+
+  sendJSON(res, result);
 }
 
 // Helper: Update the latest machine record's status by machineNumber
@@ -2639,6 +2747,10 @@ const server = http.createServer(async (req, res) => {
     // User repair stats
     const userStatsMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/repair-stats$/);
     if (userStatsMatch && req.method === 'GET') return handleGetUserRepairStats(req, res, authUser, userStatsMatch[1]);
+
+    // Task Progress (运营系统 - 组长提交进度)
+    if (url.pathname === '/api/task-progress' && req.method === 'POST') return handleSubmitTaskProgress(req, res, authUser, body);
+    if (url.pathname === '/api/task-progress' && req.method === 'GET') return handleGetTaskProgress(req, res, authUser);
 
     // Promote/demote user
     const promoteMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/promote$/);

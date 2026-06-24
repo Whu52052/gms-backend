@@ -237,6 +237,7 @@ const OpsApp = {
       'task-list': '任务列表',
       'data-analysis': '数据分析',
       'team-members': '组员',
+      'task-progress': '任务进度',
       'requirements': '需求',
       'tech-support-submit': '提交技术支持请求',
       'tech-support-my': '我的技术支持请求',
@@ -252,8 +253,8 @@ const OpsApp = {
   renderCurrentTab() {
     const tab = this.currentTab;
     const user = API.currentUser;
-    // Normal users (role='user') can access: personal-analysis, tech-support-submit, and team-members
-    const allowedTabs = ['personal-analysis', 'tech-support-submit', 'team-members'];
+    // Normal users (role='user') can access: personal-analysis, tech-support-submit, team-members, task-progress
+    const allowedTabs = ['personal-analysis', 'tech-support-submit', 'team-members', 'task-progress'];
     if (user && user.role === 'user' && !allowedTabs.includes(tab)) {
       document.getElementById('main-content').innerHTML = `<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;">
         <div style="text-align:center;">
@@ -268,6 +269,7 @@ const OpsApp = {
       case 'task-list': this.renderTaskList(); break;
       case 'data-analysis': this.renderDataAnalysis(); break;
       case 'team-members': this.renderTeamMembers(); break;
+      case 'task-progress': this.renderTaskProgress(); break;
       case 'requirements': this.renderRequirements(); break;
       case 'tech-support-submit': this.renderTechSupportSubmit(); break;
       case 'tech-support-my': this.renderTechSupportMy(); break;
@@ -555,10 +557,6 @@ const OpsApp = {
   async renderTeamMembers() {
     const user = API.currentUser;
     const isLeader = user && (user.role === 'admin' || user.role === 'superadmin');
-    if (!isLeader) {
-      document.getElementById('main-content').innerHTML = '<p class="empty-text">仅组长和管理员可查看组员管理</p>';
-      return;
-    }
 
     await this._loadGroupData();
     const groups = this._groupMembers || [];
@@ -567,6 +565,13 @@ const OpsApp = {
 
     const myGroup = groups.find(g => g.adminId === user.id) || { adminName: user.username, members: myUsers };
 
+    // 普通用户显示组长概览页面（无维修日志）
+    if (!isLeader) {
+      await this._renderLeaderOverview(user, myGroup.members);
+      return;
+    }
+
+    // 组长显示完整的管理页面
     const pendingTransfers = transfers.filter(t => t.status === 'pending');
     const historyTransfers = transfers.filter(t => t.status !== 'pending');
 
@@ -684,6 +689,288 @@ const OpsApp = {
       ` : ''}
     `;
     document.getElementById('main-content').innerHTML = html;
+  },
+
+  // 普通用户显示的组长概览页面（无维修日志）
+  async _renderLeaderOverview(user, members) {
+    document.getElementById('main-content').innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;min-height:50vh;">
+        <div style="text-align:center;">
+          <div class="loading-spinner" style="margin:0 auto 16px;"></div>
+          <p style="color:var(--text-secondary);">加载中...</p>
+        </div>
+      </div>
+    `;
+
+    // 获取自己和所有组员的统计数据
+    const allUsers = [user, ...members];
+    const statsPromises = allUsers.map(u => API.getUserRepairStats(u.id).catch(() => null));
+    const allStats = await Promise.all(statsPromises);
+
+    // 合并统计数据
+    const combinedData = {
+      user: user,
+      members: members.map((m, i) => ({
+        user: m,
+        stats: allStats[i + 1]?.stats || {}
+      }))
+    };
+
+    const fmt = (s) => this._fmtDuration(s);
+    const title = user.role === 'admin' ? '👥 组长概览' : '👥 组长概览';
+
+    // 计算今日总进度
+    const myStats = allStats[0]?.stats || {};
+    const totalTechSupport = allStats.reduce((sum, s) => sum + (s?.stats?.totalSubmitted || 0), 0);
+    const totalCompleted = allStats.reduce((sum, s) => sum + (s?.stats?.totalCompleted || 0), 0);
+    const totalRepairSeconds = allStats.reduce((sum, s) => sum + (s?.stats?.todayRepairSeconds || 0) + (s?.stats?.yesterdayRepairSeconds || 0), 0);
+
+    let html = `
+      <div class="page-header">
+        <h2>${title}</h2>
+        <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTeamMembers()">🔄 刷新</button>
+      </div>
+
+      <!-- 组长信息卡片 -->
+      <div class="ops-card" style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div class="member-avatar-lg" style="width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#6366f1,#8b5cf6);">
+            ${(user.displayName || user.username || '?')[0].toUpperCase()}
+          </div>
+          <div style="flex:1;">
+            <h3 style="margin:0 0 4px 0;font-size:1.2rem;">${user.displayName || user.username} <span style="font-size:0.8rem;color:var(--text-secondary);">（组长）</span></h3>
+            <p style="margin:0;color:var(--text-secondary);font-size:0.85rem;">
+              账号：${user.username} · 系统：${user.system === 'operations' ? '运营' : '运维'}
+            </p>
+            <p style="margin:4px 0 0;color:var(--text-tertiary);font-size:0.78rem;">
+              加入时间：${user.createdAt ? new Date(user.createdAt).toLocaleDateString('zh-CN') : '-'}
+            </p>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:1.8rem;font-weight:600;color:var(--color-primary,#6366f1);">${fmt(myStats.weekTechSupportSeconds)}</div>
+            <div style="font-size:0.75rem;color:var(--text-secondary);">本周技术支持</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 组员统计卡片 -->
+      ${members.length > 0 ? `
+      <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📋 组员统计 <span style="color:var(--text-secondary);font-size:0.8rem;">（${members.length} 人）</span></h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:16px;">
+        ${combinedData.members.map((m, i) => `
+          <div class="ops-card" style="padding:16px;">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+              <div class="member-avatar" style="width:40px;height:40px;font-size:18px;background:${['#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4'][i % 6]};">
+                ${(m.user.displayName || m.user.username || '?')[0].toUpperCase()}
+              </div>
+              <div style="flex:1;">
+                <div style="font-weight:600;">${m.user.displayName || m.user.username}</div>
+                <div style="font-size:0.75rem;color:var(--text-secondary);">账号：${m.user.username}</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;">
+              <div>
+                <div style="font-size:1.1rem;font-weight:600;">${m.stats.totalSubmitted || 0}</div>
+                <div style="font-size:0.7rem;color:var(--text-secondary);">技术支持</div>
+              </div>
+              <div>
+                <div style="font-size:1.1rem;font-weight:600;">${fmt(m.stats.yesterdayRepairSeconds)}</div>
+                <div style="font-size:0.7rem;color:var(--text-secondary);">昨日维修</div>
+              </div>
+              <div>
+                <div style="font-size:1.1rem;font-weight:600;">${fmt(m.stats.todayRepairSeconds)}</div>
+                <div style="font-size:0.7rem;color:var(--text-secondary);">今日维修</div>
+              </div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      ` : '<p class="empty-text" style="margin:0 0 16px;">暂无组员</p>'}
+
+      <!-- 汇总统计 -->
+      <div class="ops-overview-row" style="margin-bottom:16px;">
+        <div class="ops-overview-card">
+          <div class="ov-icon blue">📊</div>
+          <div class="ov-info">
+            <div class="ov-value">${totalTechSupport}</div>
+            <div class="ov-label">总技术支持条数</div>
+          </div>
+        </div>
+        <div class="ops-overview-card">
+          <div class="ov-icon green">✅</div>
+          <div class="ov-info">
+            <div class="ov-value">${totalCompleted}</div>
+            <div class="ov-label">已完成</div>
+          </div>
+        </div>
+        <div class="ops-overview-card">
+          <div class="ov-icon orange">⏱️</div>
+          <div class="ov-info">
+            <div class="ov-value">${fmt(totalRepairSeconds)}</div>
+            <div class="ov-label">累计维修时长</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('main-content').innerHTML = html;
+  },
+
+  // ==================== TASK PROGRESS ====================
+  async renderTaskProgress() {
+    const user = API.currentUser;
+    const today = new Date().toISOString().split('T')[0];
+
+    document.getElementById('main-content').innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;min-height:50vh;">
+        <div style="text-align:center;">
+          <div class="loading-spinner" style="margin:0 auto 16px;"></div>
+          <p style="color:var(--text-secondary);">加载中...</p>
+        </div>
+      </div>
+    `;
+
+    const data = await API.getTaskProgress(today);
+    this._renderTaskProgressPage(data || { date: today, myProgress: null, memberProgress: [] });
+  },
+
+  _renderTaskProgressPage(data) {
+    const user = API.currentUser;
+    const isLeader = user && (user.role === 'admin' || user.role === 'superadmin');
+    const myProgress = data.myProgress || {};
+    const history = myProgress.history ? JSON.parse(myProgress.history) : [];
+    const startProgress = myProgress.startProgress || 0;
+    const currentProgress = myProgress.currentProgress || 0;
+    const dayProgress = myProgress.dayProgress || 0;
+
+    const html = `
+      <div class="page-header">
+        <h2>📊 任务进度</h2>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="font-size:0.85rem;color:var(--text-secondary);">${data.date}</span>
+          <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTaskProgress()">🔄 刷新</button>
+        </div>
+      </div>
+
+      <!-- 进度提交卡片 -->
+      <div class="ops-card" style="margin-bottom:16px;">
+        <h3 style="margin:0 0 16px 0;font-size:1rem;">📝 提交进度</h3>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+          <div class="form-group" style="margin:0;flex:1;min-width:200px;">
+            <label style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:4px;display:block;">当前进度值 <span class="required">*</span></label>
+            <input type="number" id="tp-progress-input" class="form-input" step="0.01" placeholder="如：2.34" style="width:100%;">
+          </div>
+          <div class="form-group" style="margin:0;flex:1;min-width:200px;">
+            <label style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:4px;display:block;">备注（可选）</label>
+            <input type="text" id="tp-note-input" class="form-input" placeholder="如：上班开始" style="width:100%;">
+          </div>
+          <button class="btn btn-primary" onclick="OpsApp.doSubmitTaskProgress()" style="white-space:nowrap;">📤 提交</button>
+        </div>
+        <div style="margin-top:12px;padding:10px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;font-size:0.8rem;color:var(--text-secondary);">
+          💡 提示：每个整点可提交一次。例：8点提交2.34，9点提交2.83，则本小时进度为 <strong>0.49</strong>
+        </div>
+      </div>
+
+      <!-- 今日统计 -->
+      <div class="ops-overview-row" style="margin-bottom:16px;">
+        <div class="ops-overview-card">
+          <div class="ov-icon blue">🚀</div>
+          <div class="ov-info">
+            <div class="ov-value">${startProgress.toFixed(2)}</div>
+            <div class="ov-label">初始进度</div>
+          </div>
+        </div>
+        <div class="ops-overview-card">
+          <div class="ov-icon green">📈</div>
+          <div class="ov-info">
+            <div class="ov-value">${currentProgress.toFixed(2)}</div>
+            <div class="ov-label">当前进度</div>
+          </div>
+        </div>
+        <div class="ops-overview-card">
+          <div class="ov-icon orange">📊</div>
+          <div class="ov-info">
+            <div class="ov-value">${dayProgress.toFixed(2)}</div>
+            <div class="ov-label">今日增量</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 提交记录 -->
+      <div class="ops-card">
+        <h3 style="margin:0 0 12px 0;font-size:1rem;">📋 提交记录</h3>
+        ${history.length === 0 ? '<p class="empty-text">今日暂无提交记录</p>' : `
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            ${history.map((h, i) => {
+              const prev = i > 0 ? history[i - 1].progress : startProgress;
+              const delta = h.progress - prev;
+              return `
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;">
+                <div style="width:50px;height:50px;background:var(--color-primary,#6366f1);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:1.1rem;">
+                  ${h.hour}时
+                </div>
+                <div style="flex:1;">
+                  <div style="font-weight:600;font-size:0.95rem;">进度：${h.progress.toFixed(2)} ${i > 0 ? '<span style="color:var(--color-success,#10b981);font-size:0.8rem;">(+' + delta.toFixed(2) + ')</span>' : ''}</div>
+                  ${h.note ? '<div style="font-size:0.8rem;color:var(--text-secondary);">' + h.note + '</div>' : ''}
+                  <div style="font-size:0.75rem;color:var(--text-tertiary);">${new Date(h.submittedAt).toLocaleString('zh-CN')}</div>
+                </div>
+              </div>
+            `}).join('')}
+          </div>
+        `}
+      </div>
+
+      ${isLeader && data.memberProgress && data.memberProgress.length > 0 ? `
+      <!-- 组员进度 -->
+      <div class="ops-card" style="margin-top:16px;">
+        <h3 style="margin:0 0 12px 0;font-size:1rem;">👥 组员进度</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${data.memberProgress.map(m => {
+            const mHistory = m.history ? JSON.parse(m.history) : [];
+            const mStart = m.startProgress || 0;
+            const mCurrent = m.currentProgress || 0;
+            const mDay = m.dayProgress || 0;
+            return `
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;">
+              <div style="width:36px;height:36px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;">
+                ${(m.displayName || m.username || '?')[0].toUpperCase()}
+              </div>
+              <div style="flex:1;">
+                <div style="font-weight:600;">${m.displayName || m.username}</div>
+                <div style="font-size:0.75rem;color:var(--text-secondary);">${mHistory.length} 次提交</div>
+              </div>
+              <div style="text-align:right;">
+                <div style="font-size:1.1rem;font-weight:600;color:var(--color-primary,#6366f1);">${mDay.toFixed(2)}</div>
+                <div style="font-size:0.7rem;color:var(--text-secondary);">今日增量</div>
+              </div>
+            </div>
+          `}).join('')}
+        </div>
+      </div>
+      ` : ''}
+    `;
+
+    document.getElementById('main-content').innerHTML = html;
+  },
+
+  async doSubmitTaskProgress() {
+    const input = document.getElementById('tp-progress-input');
+    const noteInput = document.getElementById('tp-note-input');
+    const progress = parseFloat(input?.value);
+    const note = noteInput?.value?.trim() || '';
+
+    if (isNaN(progress)) {
+      this.notify('请输入有效的进度值', 'warning');
+      return;
+    }
+
+    const result = await API.submitTaskProgress(progress, note);
+    if (result?.success) {
+      this.notify('进度已提交');
+      this.renderTaskProgress();
+    } else {
+      this.notify(result?.error || result?.message || '提交失败', 'error');
+    }
   },
 
   // ==================== TEAM MEMBER DETAIL ====================

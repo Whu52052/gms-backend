@@ -610,6 +610,19 @@ const API = {
     return data || null;
   },
 
+  async submitTaskProgress(progress, note) {
+    if (!this.online) return { success: false, message: '离线模式不支持提交进度' };
+    const data = await this._fetch('POST', '/api/task-progress', { progress, note });
+    return data || { success: false, message: '请求失败' };
+  },
+
+  async getTaskProgress(date) {
+    if (!this.online) return null;
+    const url = date ? '/api/task-progress?date=' + date : '/api/task-progress';
+    const data = await this._fetch('GET', url);
+    return data || null;
+  },
+
   async addUser(userData) {
     if (!this.online) return { success: false, message: '离线模式不支持添加用户' };
     const data = await this._fetch('POST', '/api/users', userData);
