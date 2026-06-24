@@ -6934,7 +6934,13 @@ const App = {
       case 'sn-codes': this.renderSNCodes(); break;
       case 'after-sales': this.renderAfterSales(); break;
       case 'inventory-config': this.renderInventoryConfig(); break;
-      case 'tech-support': this.renderTechSupport(); break;
+      case 'tech-support':
+        if (this._tsDetailId) {
+          this.renderTechSupportDetail(this._tsDetailId);
+        } else {
+          this.renderTechSupport();
+        }
+        break;
       default:
         const matched = invConfig.find(c => tab === c.id || tab === c.id + '_left' || tab === c.id + '_right');
         if (matched) {
