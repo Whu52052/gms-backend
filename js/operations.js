@@ -879,13 +879,14 @@ const OpsApp = {
   },
 
   _renderTaskProgressPage(data) {
+    try {
     const user = API.currentUser;
     const isNormalUser = user && user.role === 'user';
     const myProgress = data.myProgress || {};
-    const history = myProgress.history ? JSON.parse(myProgress.history) : [];
-    const startProgress = myProgress.startProgress || 0;
-    const currentProgress = myProgress.currentProgress || 0;
-    const dayProgress = myProgress.dayProgress || 0;
+    const history = (() => { try { return myProgress.history ? JSON.parse(myProgress.history) : []; } catch { return []; } })();
+    const startProgress = parseFloat(myProgress.startProgress) || 0;
+    const currentProgress = parseFloat(myProgress.currentProgress) || 0;
+    const dayProgress = parseFloat(myProgress.dayProgress) || 0;
     const groupProgress = data.groupProgress || [];
 
     const memberColors = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
@@ -952,15 +953,16 @@ const OpsApp = {
         ${history.length === 0 ? '<p class="empty-text">今日暂无提交记录</p>' : `
           <div style="display:flex;flex-direction:column;gap:8px;">
             ${history.map((h, i) => {
-              const prev = i > 0 ? history[i - 1].progress : startProgress;
-              const delta = h.progress - prev;
+              const prev = i > 0 ? (parseFloat(history[i - 1].progress) || startProgress) : startProgress;
+              const hProgress = parseFloat(h.progress) || 0;
+              const delta = hProgress - prev;
               return `
               <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;">
                 <div style="width:50px;height:50px;background:var(--color-primary,#6366f1);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:1.1rem;">
                   ${h.hour}时
                 </div>
                 <div style="flex:1;">
-                  <div style="font-weight:600;font-size:0.95rem;">进度：${h.progress.toFixed(2)} ${i > 0 ? '<span style="color:var(--color-success,#10b981);font-size:0.8rem;">(+' + delta.toFixed(2) + ')</span>' : ''}</div>
+                  <div style="font-weight:600;font-size:0.95rem;">进度：${hProgress.toFixed(2)} ${i > 0 ? '<span style="color:var(--color-success,#10b981);font-size:0.8rem;">(+' + delta.toFixed(2) + ')</span>' : ''}</div>
                   ${h.note ? '<div style="font-size:0.8rem;color:var(--text-secondary);">' + h.note + '</div>' : ''}
                   <div style="font-size:0.75rem;color:var(--text-tertiary);">${new Date(h.submittedAt).toLocaleString('zh-CN')}</div>
                 </div>
@@ -979,9 +981,9 @@ const OpsApp = {
         <h3 style="margin:0 0 12px 0;font-size:1rem;">👥 同组进度</h3>
         <div style="display:flex;flex-direction:column;gap:8px;">
           ${groupProgress.map((m, idx) => {
-            const mHistory = m.history ? JSON.parse(m.history) : [];
-            const mCurrent = m.currentProgress || 0;
-            const mDay = m.dayProgress || 0;
+            const mHistory = (() => { try { return m.history ? JSON.parse(m.history) : []; } catch { return []; } })();
+            const mCurrent = parseFloat(m.currentProgress) || 0;
+            const mDay = parseFloat(m.dayProgress) || 0;
             const color = memberColors[idx % memberColors.length];
             return `
             <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;cursor:pointer;transition:box-shadow .2s;"
@@ -1010,6 +1012,13 @@ const OpsApp = {
     }
 
     document.getElementById('main-content').innerHTML = html;
+    } catch (e) {
+      console.error('Render task progress error:', e);
+      document.getElementById('main-content').innerHTML = `
+        <div class="page-header"><h2>📊 任务进度</h2></div>
+        <div class="ops-card"><p class="empty-text">加载失败：${e.message}</p></div>
+      `;
+    }
   },
 
   async doSubmitTaskProgress() {
@@ -1062,12 +1071,13 @@ const OpsApp = {
   },
 
   _renderMemberProgressDetail(data) {
+    try {
     const progress = data.progress || {};
     const targetUser = data.targetUser || {};
-    const history = progress.history ? JSON.parse(progress.history) : [];
-    const startProgress = progress.startProgress || 0;
-    const currentProgress = progress.currentProgress || 0;
-    const dayProgress = progress.dayProgress || 0;
+    const history = (() => { try { return progress.history ? JSON.parse(progress.history) : []; } catch { return []; } })();
+    const startProgress = parseFloat(progress.startProgress) || 0;
+    const currentProgress = parseFloat(progress.currentProgress) || 0;
+    const dayProgress = parseFloat(progress.dayProgress) || 0;
 
     const html = `
       <div class="page-header">
@@ -1112,15 +1122,16 @@ const OpsApp = {
         ${history.length === 0 ? '<p class="empty-text">今日暂无提交记录</p>' : `
           <div style="display:flex;flex-direction:column;gap:8px;">
             ${history.map((h, i) => {
-              const prev = i > 0 ? history[i - 1].progress : startProgress;
-              const delta = h.progress - prev;
+              const prev = i > 0 ? (parseFloat(history[i - 1].progress) || startProgress) : startProgress;
+              const hProgress = parseFloat(h.progress) || 0;
+              const delta = hProgress - prev;
               return `
               <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;">
                 <div style="width:50px;height:50px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:1.1rem;">
                   ${h.hour}时
                 </div>
                 <div style="flex:1;">
-                  <div style="font-weight:600;font-size:0.95rem;">进度：${h.progress.toFixed(2)} ${i > 0 ? '<span style="color:var(--color-success,#10b981);font-size:0.8rem;">(+' + delta.toFixed(2) + ')</span>' : ''}</div>
+                  <div style="font-weight:600;font-size:0.95rem;">进度：${hProgress.toFixed(2)} ${i > 0 ? '<span style="color:var(--color-success,#10b981);font-size:0.8rem;">(+' + delta.toFixed(2) + ')</span>' : ''}</div>
                   ${h.note ? '<div style="font-size:0.8rem;color:var(--text-secondary);">' + h.note + '</div>' : ''}
                   <div style="font-size:0.75rem;color:var(--text-tertiary);">${new Date(h.submittedAt).toLocaleString('zh-CN')}</div>
                 </div>
@@ -1132,6 +1143,16 @@ const OpsApp = {
     `;
 
     document.getElementById('main-content').innerHTML = html;
+    } catch (e) {
+      console.error('Render member progress error:', e);
+      document.getElementById('main-content').innerHTML = `
+        <div class="page-header">
+          <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTaskProgress()">← 返回</button>
+          <h2 style="margin:0;">👤 组员进度</h2>
+        </div>
+        <div class="ops-card"><p class="empty-text">加载失败：${e.message}</p></div>
+      `;
+    }
   },
 
   // ==================== TEAM MEMBER DETAIL ====================

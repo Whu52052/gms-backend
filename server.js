@@ -1654,10 +1654,8 @@ async function handleGetGroupTransfers(req, res, authUser) {
 }
 
 async function handleGetGroupMembers(req, res, authUser) {
-  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') {
-    return sendJSON(res, { error: '仅组长可查看组员' }, 403);
-  }
-  // System isolation: admins only see same-system users; superadmin sees all
+  const isLeader = authUser.role === 'admin' || authUser.role === 'superadmin';
+  // System isolation
   let systemFilter = '';
   const params = [];
   if (authUser.role !== 'superadmin') {
@@ -1696,7 +1694,28 @@ async function handleGetGroupMembers(req, res, authUser) {
       if (!groups[gid].adminName) delete groups[gid];
     }
   }
-  sendJSON(res, Object.values(groups));
+
+  const allGroups = Object.values(groups);
+
+  // 普通用户：只返回自己所在的组
+  if (!isLeader) {
+    const myGroups = allGroups.filter(g =>
+      g.adminId === authUser.userId ||
+      g.members.some(m => m.id === authUser.userId)
+    );
+    // 如果没在组里，就查一下自己的组长
+    if (myGroups.length === 0) {
+      const [me] = await pool.execute('SELECT parentId, createdBy FROM users WHERE id = ?', [authUser.userId]);
+      const leaderId = me[0]?.parentId || me[0]?.createdBy;
+      if (leaderId && groups[leaderId]) {
+        myGroups.push(groups[leaderId]);
+      }
+    }
+    sendJSON(res, myGroups);
+    return;
+  }
+
+  sendJSON(res, allGroups);
 }
 
 async function handleLogout(req, res, user) {
