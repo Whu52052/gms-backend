@@ -252,8 +252,8 @@ const OpsApp = {
   renderCurrentTab() {
     const tab = this.currentTab;
     const user = API.currentUser;
-    // Normal users (role='user') can only access tech-support-submit and personal-analysis
-    const allowedTabs = ['personal-analysis', 'tech-support-submit'];
+    // Normal users (role='user') can access: personal-analysis, tech-support-submit, and team-members
+    const allowedTabs = ['personal-analysis', 'tech-support-submit', 'team-members'];
     if (user && user.role === 'user' && !allowedTabs.includes(tab)) {
       document.getElementById('main-content').innerHTML = `<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;">
         <div style="text-align:center;">
