@@ -832,19 +832,22 @@ const OpsApp = {
     `;
 
     const data = await API.getTaskProgress(today);
-    this._renderTaskProgressPage(data || { date: today, myProgress: null, memberProgress: [] });
+    this._renderTaskProgressPage(data || { date: today, myProgress: null, groupProgress: [] });
   },
 
   _renderTaskProgressPage(data) {
     const user = API.currentUser;
-    const isLeader = user && (user.role === 'admin' || user.role === 'superadmin');
+    const isNormalUser = user && user.role === 'user';
     const myProgress = data.myProgress || {};
     const history = myProgress.history ? JSON.parse(myProgress.history) : [];
     const startProgress = myProgress.startProgress || 0;
     const currentProgress = myProgress.currentProgress || 0;
     const dayProgress = myProgress.dayProgress || 0;
+    const groupProgress = data.groupProgress || [];
 
-    const html = `
+    const memberColors = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+
+    let html = `
       <div class="page-header">
         <h2>📊 任务进度</h2>
         <div style="display:flex;gap:8px;align-items:center;">
@@ -852,7 +855,10 @@ const OpsApp = {
           <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTaskProgress()">🔄 刷新</button>
         </div>
       </div>
+    `;
 
+    if (isNormalUser) {
+      html += `
       <!-- 进度提交卡片 -->
       <div class="ops-card" style="margin-bottom:16px;">
         <h3 style="margin:0 0 16px 0;font-size:1rem;">📝 提交进度</h3>
@@ -898,8 +904,8 @@ const OpsApp = {
       </div>
 
       <!-- 提交记录 -->
-      <div class="ops-card">
-        <h3 style="margin:0 0 12px 0;font-size:1rem;">📋 提交记录</h3>
+      <div class="ops-card" style="margin-bottom:16px;">
+        <h3 style="margin:0 0 12px 0;font-size:1rem;">📋 我的提交记录</h3>
         ${history.length === 0 ? '<p class="empty-text">今日暂无提交记录</p>' : `
           <div style="display:flex;flex-direction:column;gap:8px;">
             ${history.map((h, i) => {
@@ -920,36 +926,45 @@ const OpsApp = {
           </div>
         `}
       </div>
+      `;
+    }
 
-      ${isLeader && data.memberProgress && data.memberProgress.length > 0 ? `
-      <!-- 组员进度 -->
-      <div class="ops-card" style="margin-top:16px;">
-        <h3 style="margin:0 0 12px 0;font-size:1rem;">👥 组员进度</h3>
+    if (groupProgress.length > 0) {
+      html += `
+      <!-- 同组进度 -->
+      <div class="ops-card">
+        <h3 style="margin:0 0 12px 0;font-size:1rem;">👥 同组进度</h3>
         <div style="display:flex;flex-direction:column;gap:8px;">
-          ${data.memberProgress.map(m => {
+          ${groupProgress.map((m, idx) => {
             const mHistory = m.history ? JSON.parse(m.history) : [];
-            const mStart = m.startProgress || 0;
             const mCurrent = m.currentProgress || 0;
             const mDay = m.dayProgress || 0;
+            const color = memberColors[idx % memberColors.length];
             return `
-            <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;">
-              <div style="width:36px;height:36px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;">
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;cursor:pointer;transition:box-shadow .2s;"
+                 onclick="OpsApp.viewMemberProgress('${m.userId}')"
+                 onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,.1)'"
+                 onmouseout="this.style.boxShadow=''">
+              <div style="width:40px;height:40px;background:${color};color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:1rem;">
                 ${(m.displayName || m.username || '?')[0].toUpperCase()}
               </div>
               <div style="flex:1;">
                 <div style="font-weight:600;">${m.displayName || m.username}</div>
-                <div style="font-size:0.75rem;color:var(--text-secondary);">${mHistory.length} 次提交</div>
+                <div style="font-size:0.75rem;color:var(--text-secondary);">${mHistory.length} 次提交 · 当前 ${mCurrent.toFixed(2)}</div>
               </div>
               <div style="text-align:right;">
-                <div style="font-size:1.1rem;font-weight:600;color:var(--color-primary,#6366f1);">${mDay.toFixed(2)}</div>
+                <div style="font-size:1.1rem;font-weight:600;color:var(--color-primary,#6366f1);">+${mDay.toFixed(2)}</div>
                 <div style="font-size:0.7rem;color:var(--text-secondary);">今日增量</div>
               </div>
+              <span style="color:var(--text-tertiary);font-size:1.2rem;">›</span>
             </div>
           `}).join('')}
         </div>
       </div>
-      ` : ''}
-    `;
+      `;
+    } else if (!isNormalUser) {
+      html += `<div class="ops-card"><p class="empty-text">暂无可查看的组员进度</p></div>`;
+    }
 
     document.getElementById('main-content').innerHTML = html;
   },
@@ -972,6 +987,108 @@ const OpsApp = {
     } else {
       this.notify(result?.error || result?.message || '提交失败', 'error');
     }
+  },
+
+  async viewMemberProgress(userId) {
+    const today = new Date().toISOString().split('T')[0];
+    const titleEl = document.getElementById('topbar-page-title');
+    if (titleEl) titleEl.textContent = '组员进度详情';
+
+    document.getElementById('main-content').innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;min-height:50vh;">
+        <div style="text-align:center;">
+          <div class="loading-spinner" style="margin:0 auto 16px;"></div>
+          <p style="color:var(--text-secondary);">加载中...</p>
+        </div>
+      </div>
+    `;
+
+    const data = await API.getUserTaskProgress(userId, today);
+    if (!data || data.error) {
+      document.getElementById('main-content').innerHTML = `
+        <div class="page-header">
+          <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTaskProgress()">← 返回任务进度</button>
+        </div>
+        <div class="ops-card">
+          <p class="empty-text">${data?.error || '加载失败'}</p>
+        </div>
+      `;
+      return;
+    }
+    this._renderMemberProgressDetail(data);
+  },
+
+  _renderMemberProgressDetail(data) {
+    const progress = data.progress || {};
+    const targetUser = data.targetUser || {};
+    const history = progress.history ? JSON.parse(progress.history) : [];
+    const startProgress = progress.startProgress || 0;
+    const currentProgress = progress.currentProgress || 0;
+    const dayProgress = progress.dayProgress || 0;
+
+    const html = `
+      <div class="page-header">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTaskProgress()">← 返回</button>
+          <h2 style="margin:0;">👤 ${targetUser.displayName || targetUser.username || '组员'} 的进度</h2>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="font-size:0.85rem;color:var(--text-secondary);">${data.date}</span>
+          <button class="btn btn-outline btn-sm" onclick="OpsApp.viewMemberProgress('${targetUser.id}')">🔄 刷新</button>
+        </div>
+      </div>
+
+      <!-- 今日统计 -->
+      <div class="ops-overview-row" style="margin-bottom:16px;">
+        <div class="ops-overview-card">
+          <div class="ov-icon blue">🚀</div>
+          <div class="ov-info">
+            <div class="ov-value">${startProgress.toFixed(2)}</div>
+            <div class="ov-label">初始进度</div>
+          </div>
+        </div>
+        <div class="ops-overview-card">
+          <div class="ov-icon green">📈</div>
+          <div class="ov-info">
+            <div class="ov-value">${currentProgress.toFixed(2)}</div>
+            <div class="ov-label">当前进度</div>
+          </div>
+        </div>
+        <div class="ops-overview-card">
+          <div class="ov-icon orange">📊</div>
+          <div class="ov-info">
+            <div class="ov-value">${dayProgress.toFixed(2)}</div>
+            <div class="ov-label">今日增量</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 提交记录 -->
+      <div class="ops-card">
+        <h3 style="margin:0 0 12px 0;font-size:1rem;">📋 提交记录</h3>
+        ${history.length === 0 ? '<p class="empty-text">今日暂无提交记录</p>' : `
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            ${history.map((h, i) => {
+              const prev = i > 0 ? history[i - 1].progress : startProgress;
+              const delta = h.progress - prev;
+              return `
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;">
+                <div style="width:50px;height:50px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:1.1rem;">
+                  ${h.hour}时
+                </div>
+                <div style="flex:1;">
+                  <div style="font-weight:600;font-size:0.95rem;">进度：${h.progress.toFixed(2)} ${i > 0 ? '<span style="color:var(--color-success,#10b981);font-size:0.8rem;">(+' + delta.toFixed(2) + ')</span>' : ''}</div>
+                  ${h.note ? '<div style="font-size:0.8rem;color:var(--text-secondary);">' + h.note + '</div>' : ''}
+                  <div style="font-size:0.75rem;color:var(--text-tertiary);">${new Date(h.submittedAt).toLocaleString('zh-CN')}</div>
+                </div>
+              </div>
+            `}).join('')}
+          </div>
+        `}
+      </div>
+    `;
+
+    document.getElementById('main-content').innerHTML = html;
   },
 
   // ==================== TEAM MEMBER DETAIL ====================

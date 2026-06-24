@@ -623,6 +623,14 @@ const API = {
     return data || null;
   },
 
+  async getUserTaskProgress(userId, date) {
+    if (!this.online) return null;
+    let url = '/api/task-progress?userId=' + userId;
+    if (date) url += '&date=' + date;
+    const data = await this._fetch('GET', url);
+    return data || null;
+  },
+
   async addUser(userData) {
     if (!this.online) return { success: false, message: '离线模式不支持添加用户' };
     const data = await this._fetch('POST', '/api/users', userData);

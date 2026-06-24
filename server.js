@@ -1303,17 +1303,21 @@ async function handleGetUserRepairStats(req, res, authUser, userId) {
   }
 }
 
-// ==================== TASK PROGRESS (组长进度) ====================
+// ==================== TASK PROGRESS (任务进度) ====================
 async function handleSubmitTaskProgress(req, res, authUser, body) {
+  // 只有普通用户可以提交任务进度，管理员不行
+  if (authUser.role !== 'user') {
+    return sendJSON(res, { error: '仅普通组员可提交任务进度' }, 403);
+  }
+
   const { progress, note } = body || {};
   if (typeof progress !== 'number' || isNaN(progress)) {
     return sendJSON(res, { error: '进度值无效' }, 400);
   }
 
-  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const today = new Date().toISOString().split('T')[0];
   const hour = new Date().getHours();
 
-  // 获取或创建今日进度记录
   const [existing] = await pool.execute(
     'SELECT * FROM task_progress WHERE userId = ? AND date = ?',
     [authUser.userId, today]
@@ -1324,15 +1328,11 @@ async function handleSubmitTaskProgress(req, res, authUser, body) {
     const history = JSON.parse(record.history || '[]');
     const lastEntry = history[history.length - 1];
 
-    // 检查是否可以提交（距离上次提交至少1小时）
     if (lastEntry && hour - lastEntry.hour < 1) {
       return sendJSON(res, { error: '距离上次提交不足1小时，请稍后再试' }, 400);
     }
 
-    // 计算今日进度增量
     const dayProgress = progress - (record.startProgress || progress);
-
-    // 添加新记录
     history.push({
       hour,
       progress,
@@ -1345,15 +1345,14 @@ async function handleSubmitTaskProgress(req, res, authUser, body) {
       [progress, dayProgress, JSON.stringify(history), new Date().toISOString(), record.id]
     );
   } else {
-    // 新建记录（上班开始）
     await pool.execute(
-      'INSERT INTO task_progress (userId, date, startProgress, currentProgress, dayProgress, history) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO task_progress (userId, date, startProgress, currentProgress, dayProgress, history, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [authUser.userId, today, progress, progress, 0, JSON.stringify([{
         hour,
         progress,
         note: note || '',
         submittedAt: new Date().toISOString()
-      }])]
+      }]), new Date().toISOString()]
     );
   }
 
@@ -1363,37 +1362,80 @@ async function handleSubmitTaskProgress(req, res, authUser, body) {
 async function handleGetTaskProgress(req, res, authUser) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const date = url.searchParams.get('date') || new Date().toISOString().split('T')[0];
+  const targetUserId = url.searchParams.get('userId');
+  const isAdmin = authUser.role === 'admin' || authUser.role === 'superadmin';
 
-  // 获取自己的进度
-  const [myRecord] = await pool.execute(
-    'SELECT * FROM task_progress WHERE userId = ? AND date = ?',
-    [authUser.userId, date]
-  );
+  // 获取同组人员ID列表
+  let groupUserIds = [];
+  let groupUsers = [];
 
-  // 如果是组长，也获取组员进度
-  let memberProgress = [];
-  if (authUser.role === 'admin' || authUser.role === 'superadmin') {
+  if (isAdmin) {
+    // 管理员：获取自己的组员
     const [subs] = await pool.execute(
-      'SELECT id, username, displayName FROM users WHERE parentId = ? OR createdBy = ?',
+      'SELECT id, username, displayName FROM users WHERE parentId = ? OR createdBy = ? ORDER BY username',
       [authUser.userId, authUser.userId]
     );
-    const subIds = subs.map(s => s.id);
-    if (subIds.length > 0) {
-      const placeholders = subIds.map(() => '?').join(',');
-      const [memberRecords] = await pool.execute(
-        `SELECT tp.*, u.username, u.displayName FROM task_progress tp JOIN users u ON tp.userId = u.id WHERE tp.userId IN (${placeholders}) AND tp.date = ?`,
-        [...subIds, date]
+    groupUsers = subs;
+    groupUserIds = subs.map(s => s.id);
+  } else {
+    // 普通组员：找到自己的组长，然后获取同组所有人
+    const [me] = await pool.execute('SELECT parentId, createdBy FROM users WHERE id = ?', [authUser.userId]);
+    const leaderId = me[0]?.parentId || me[0]?.createdBy;
+    if (leaderId) {
+      // 获取组长信息
+      const [leader] = await pool.execute('SELECT id, username, displayName FROM users WHERE id = ?', [leaderId]);
+      // 获取同组组员
+      const [subs] = await pool.execute(
+        'SELECT id, username, displayName FROM users WHERE parentId = ? OR createdBy = ? ORDER BY username',
+        [leaderId, leaderId]
       );
-      memberProgress = memberRecords;
+      groupUsers = [...leader, ...subs];
+      groupUserIds = groupUsers.map(u => u.id);
     }
   }
+
+  // 如果指定了userId，只返回该用户的进度（有权限检查）
+  if (targetUserId) {
+    if (targetUserId !== authUser.userId && !groupUserIds.includes(targetUserId)) {
+      return sendJSON(res, { error: '无权限查看该用户进度' }, 403);
+    }
+    const [record] = await pool.execute(
+      'SELECT tp.*, u.username, u.displayName FROM task_progress tp JOIN users u ON tp.userId = u.id WHERE tp.userId = ? AND tp.date = ?',
+      [targetUserId, date]
+    );
+    return sendJSON(res, {
+      date,
+      targetUser: groupUsers.find(u => u.id === targetUserId) || { id: targetUserId },
+      progress: record[0] || null,
+      groupUsers,
+    });
+  }
+
+  // 返回自己和同组所有人的进度
+  let myProgress = null;
+  let groupProgress = [];
+
+  if (groupUserIds.length > 0) {
+    const placeholders = groupUserIds.map(() => '?').join(',');
+    const [records] = await pool.execute(
+      `SELECT tp.*, u.username, u.displayName FROM task_progress tp JOIN users u ON tp.userId = u.id WHERE tp.userId IN (${placeholders}) AND tp.date = ?`,
+      [...groupUserIds, date]
+    );
+    groupProgress = records;
+  }
+
+  // 找出自己的进度
+  const myRecord = groupProgress.find(r => r.userId === authUser.userId);
+  myProgress = myRecord || null;
 
   const result = {
     userId: authUser.userId,
     username: authUser.username,
     date,
-    myProgress: myRecord[0] || null,
-    memberProgress
+    myProgress,
+    groupProgress: groupProgress.filter(r => r.userId !== authUser.userId),
+    groupUsers,
+    isAdmin,
   };
 
   sendJSON(res, result);
