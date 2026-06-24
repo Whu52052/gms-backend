@@ -777,7 +777,7 @@ const OpsApp = {
       <!-- 组长信息卡片 -->
       <div class="ops-card" style="margin-bottom:16px;">
         <div style="display:flex;align-items:center;gap:16px;">
-          <div class="member-avatar-lg" style="width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#6366f1,#8b5cf6);">
+          <div class="member-avatar" style="width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#6366f1,#8b5cf6);">
             ${(user.username || user.displayName || '?')[0].toUpperCase()}
           </div>
           <div style="flex:1;">
@@ -1186,7 +1186,7 @@ const OpsApp = {
       <!-- User Info Card -->
       <div class="ops-card" style="margin-bottom:16px;">
         <div style="display:flex;align-items:center;gap:16px;">
-          <div class="member-avatar-lg" style="width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#6366f1,#8b5cf6);">
+          <div class="member-avatar" style="width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#6366f1,#8b5cf6);">
             ${(user.username || user.displayName || '?')[0].toUpperCase()}
           </div>
           <div style="flex:1;">
