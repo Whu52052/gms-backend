@@ -701,13 +701,10 @@ const OpsApp = {
       <!-- User Info Card -->
       <div class="ops-card" style="margin-bottom:16px;">
         <div style="display:flex;align-items:center;gap:16px;">
-          <div class="member-avatar-lg" style="width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#6366f1,#8b5cf6);">
-            ${(user.displayName || user.username || '?')[0].toUpperCase()}
-          </div>
           <div style="flex:1;">
             <h3 style="margin:0 0 4px 0;font-size:1.2rem;">${user.displayName || user.username}</h3>
             <p style="margin:0;color:var(--text-secondary);font-size:0.85rem;">
-              账号：${user.username} · 角色：${user.role === 'admin' ? '组长' : '组员'} · 系统：${user.system === 'operations' ? '运营' : '运维'}
+              账号：${user.username} · 系统：${user.system === 'operations' ? '运营' : '运维'}
             </p>
             <p style="margin:4px 0 0;color:var(--text-tertiary);font-size:0.78rem;">
               加入时间：${user.createdAt ? new Date(user.createdAt).toLocaleDateString('zh-CN') : '-'}
