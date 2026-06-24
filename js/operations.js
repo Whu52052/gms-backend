@@ -735,7 +735,7 @@ const OpsApp = {
       <div class="ops-card" style="margin-bottom:16px;">
         <div style="display:flex;align-items:center;gap:16px;">
           <div class="member-avatar-lg" style="width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#6366f1,#8b5cf6);">
-            ${(user.displayName || user.username || '?')[0].toUpperCase()}
+            ${(user.username || user.displayName || '?')[0].toUpperCase()}
           </div>
           <div style="flex:1;">
             <h3 style="margin:0 0 4px 0;font-size:1.2rem;">${user.displayName || user.username} <span style="font-size:0.8rem;color:var(--text-secondary);">（组长）</span></h3>
@@ -761,7 +761,7 @@ const OpsApp = {
           <div class="ops-card" style="padding:16px;cursor:pointer;transition:box-shadow .2s;" onclick="OpsApp.showTeamMemberDetail('${m.user.id}')" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,.1)'" onmouseout="this.style.boxShadow=''">
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
               <div class="member-avatar" style="width:40px;height:40px;font-size:18px;background:${['#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4'][i % 6]};">
-                ${(m.user.displayName || m.user.username || '?')[0].toUpperCase()}
+                ${(m.user.username || m.user.displayName || '?')[0].toUpperCase()}
               </div>
               <div style="flex:1;">
                 <div style="font-weight:600;">${m.user.displayName || m.user.username}</div>
@@ -946,7 +946,7 @@ const OpsApp = {
                  onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,.1)'"
                  onmouseout="this.style.boxShadow=''">
               <div style="width:40px;height:40px;background:${color};color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:1rem;">
-                ${(m.displayName || m.username || '?')[0].toUpperCase()}
+                ${(m.username || m.displayName || '?')[0].toUpperCase()}
               </div>
               <div style="flex:1;">
                 <div style="font-weight:600;">${m.displayName || m.username}</div>
@@ -1144,7 +1144,7 @@ const OpsApp = {
       <div class="ops-card" style="margin-bottom:16px;">
         <div style="display:flex;align-items:center;gap:16px;">
           <div class="member-avatar-lg" style="width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#6366f1,#8b5cf6);">
-            ${(user.displayName || user.username || '?')[0].toUpperCase()}
+            ${(user.username || user.displayName || '?')[0].toUpperCase()}
           </div>
           <div style="flex:1;">
             <h3 style="margin:0 0 4px 0;font-size:1.2rem;">${user.displayName || user.username}</h3>
