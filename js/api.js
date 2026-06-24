@@ -604,6 +604,12 @@ const API = {
     return Array.isArray(data) ? data : [];
   },
 
+  async getUserRepairStats(userId) {
+    if (!this.online) return null;
+    const data = await this._fetch('GET', '/api/users/' + userId + '/repair-stats');
+    return data || null;
+  },
+
   async addUser(userData) {
     if (!this.online) return { success: false, message: '离线模式不支持添加用户' };
     const data = await this._fetch('POST', '/api/users', userData);

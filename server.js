@@ -1168,6 +1168,87 @@ async function handleDeleteTechSupport(req, res, authUser, id) {
   setImmediate(() => feishu.deleteFromFeishu(id).catch(e => console.error("[Feishu] Delete err:", e.message)));
 }
 
+async function handleGetUserRepairStats(req, res, authUser, userId) {
+  if (authUser.role !== 'admin' && authUser.role !== 'superadmin') {
+    return sendJSON(res, { error: '仅组长和管理员可查看' }, 403);
+  }
+  // Verify the user is a subordinate (or superadmin)
+  if (authUser.role !== 'superadmin') {
+    const [sub] = await pool.execute('SELECT id FROM users WHERE id = ? AND parentId = ?', [userId, authUser.userId]);
+    if (sub.length === 0) {
+      return sendJSON(res, { error: '无权限查看该用户数据' }, 403);
+    }
+  }
+  // Get user info
+  const [userRows] = await pool.execute('SELECT id, username, displayName, role, system, createdAt FROM users WHERE id = ?', [userId]);
+  if (userRows.length === 0) return sendJSON(res, { error: '用户不存在' }, 404);
+  const userInfo = userRows[0];
+  // Get all tech support items submitted by this user
+  const items = await _cached('tech_support', async () => {
+    const [rows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC');
+    return rows.map(r => JSON.parse(r.data));
+  });
+  const userItems = items.filter(item => item.submitterId === userId);
+  // Calculate date ranges
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStart = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate()).toISOString();
+  const yesterdayEnd = todayStart;
+  const weekAgo = new Date(now);
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  const weekStart = weekAgo.toISOString();
+  // Helper: get completed items within a date range
+  const getCompletedInRange = (list, start, end) => list.filter(item => {
+    if (item.status !== 'completed' || !item.completedAt) return false;
+    const t = item.completedAt;
+    return t >= start && (!end || t < end);
+  });
+  // Calculate stats
+  const weekItems = getCompletedInRange(userItems, weekStart, null);
+  const weekTechSupportSeconds = weekItems.reduce((sum, item) => sum + (item.totalSeconds || 0), 0);
+  const yesterdayItems = getCompletedInRange(userItems, yesterdayStart, yesterdayEnd);
+  const yesterdayRepairSeconds = yesterdayItems.reduce((sum, item) => sum + (item.repairSeconds || 0), 0);
+  const todayItems = getCompletedInRange(userItems, todayStart, null);
+  const todayRepairSeconds = todayItems.reduce((sum, item) => sum + (item.repairSeconds || 0), 0);
+  // Repair logs (all items, latest first, limited to 50)
+  const repairLogs = userItems.slice(0, 50).map(item => ({
+    id: item.id,
+    machineNumber: item.machineNumber,
+    equipmentTypeName: item.equipmentTypeName,
+    faultType: item.faultType,
+    faultDescription: item.faultDescription,
+    status: item.status,
+    result: item.result,
+    submittedAt: item.submittedAt,
+    respondedAt: item.respondedAt,
+    completedAt: item.completedAt,
+    responderName: item.responderName,
+    waitSeconds: item.waitSeconds,
+    repairSeconds: item.repairSeconds,
+    totalSeconds: item.totalSeconds,
+  }));
+  sendJSON(res, {
+    user: {
+      id: userInfo.id,
+      username: userInfo.username,
+      displayName: userInfo.displayName || userInfo.username,
+      role: userInfo.role,
+      system: userInfo.system,
+      createdAt: userInfo.createdAt,
+    },
+    stats: {
+      weekTechSupportSeconds,
+      yesterdayRepairSeconds,
+      todayRepairSeconds,
+      totalSubmitted: userItems.length,
+      totalCompleted: userItems.filter(i => i.status === 'completed').length,
+    },
+    repairLogs,
+  });
+}
+
 // Helper: Update the latest machine record's status by machineNumber
 async function _updateMachineStatusByNumber(machineNumber, newStatus) {
   if (!machineNumber) return;
@@ -2554,6 +2635,10 @@ const server = http.createServer(async (req, res) => {
 
     // Subordinates
     if (url.pathname === '/api/users/subordinates' && req.method === 'GET') return handleGetSubordinates(req, res, authUser);
+
+    // User repair stats
+    const userStatsMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/repair-stats$/);
+    if (userStatsMatch && req.method === 'GET') return handleGetUserRepairStats(req, res, authUser, userStatsMatch[1]);
 
     // Promote/demote user
     const promoteMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/promote$/);

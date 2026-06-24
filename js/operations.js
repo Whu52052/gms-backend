@@ -5,6 +5,7 @@ const OpsApp = {
   currentTab: 'personal-analysis',
   _tasks: [],
   _requirements: [],
+  _memberDetailId: null,
 
   // ==================== INITIALIZATION ====================
   async init() {
@@ -549,16 +550,17 @@ const OpsApp = {
         <div class="team-grid">
           ${myGroup.members.length === 0 ? '<p class="empty-text" style="grid-column:1/-1;">暂无组员。通过"添加用户"功能创建用户后自动加入此组。</p>' : ''}
           ${myGroup.members.map((m, i) => `
-            <div class="team-member-card">
+            <div class="team-member-card" style="cursor:pointer;" onclick="OpsApp.showTeamMemberDetail('${m.id}')">
               <div class="member-avatar" style="background:${['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899'][i % 6]};">
                 ${(m.username || '?')[0].toUpperCase()}
               </div>
-              <div class="member-info">
-                <div class="member-name">${m.username}</div>
+              <div class="member-info" style="flex:1;">
+                <div class="member-name">${m.displayName || m.username}</div>
                 <div class="member-role">${m.role === 'admin' ? '组长' : '组员'}</div>
               </div>
+              <span style="color:var(--text-tertiary);font-size:1.2rem;">›</span>
               ${isLeader ? `<button class="btn btn-xs btn-outline" style="margin-left:4px;"
-                onclick="OpsApp._startOutTransfer('${m.id}','${m.username}')"
+                onclick="event.stopPropagation();OpsApp._startOutTransfer('${m.id}','${m.username}')"
                 title="调出到其他组">📤 调出</button>` : ''}
             </div>
           `).join('')}
@@ -647,6 +649,156 @@ const OpsApp = {
       ` : ''}
     `;
     document.getElementById('main-content').innerHTML = html;
+  },
+
+  // ==================== TEAM MEMBER DETAIL ====================
+  async showTeamMemberDetail(userId) {
+    this._memberDetailId = userId;
+    const titleEl = document.getElementById('topbar-page-title');
+    if (titleEl) titleEl.textContent = '组员详情';
+    document.getElementById('main-content').innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;min-height:50vh;">
+        <div style="text-align:center;">
+          <div class="loading-spinner" style="margin:0 auto 16px;"></div>
+          <p style="color:var(--text-secondary);">加载中...</p>
+        </div>
+      </div>
+    `;
+    const data = await API.getUserRepairStats(userId);
+    if (!data || data.error) {
+      document.getElementById('main-content').innerHTML = `
+        <div class="page-header">
+          <button class="btn btn-outline btn-sm" onclick="OpsApp.backToTeamMembers()">← 返回组员列表</button>
+        </div>
+        <div class="ops-card">
+          <p class="empty-text">${data?.error || '加载失败'}</p>
+        </div>
+      `;
+      return;
+    }
+    this._renderTeamMemberDetail(data);
+  },
+
+  _renderTeamMemberDetail(data) {
+    const user = data.user;
+    const stats = data.stats;
+    const logs = data.repairLogs || [];
+    const fmt = (s) => this._fmtDuration(s);
+    const statusMap = {
+      pending: { label: '待响应', cls: 'pending' },
+      responded: { label: '处理中', cls: 'responded' },
+      completed: { label: '已完成', cls: 'completed' },
+      closed: { label: '已关闭', cls: 'closed' },
+    };
+    const html = `
+      <div class="page-header">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <button class="btn btn-outline btn-sm" onclick="OpsApp.backToTeamMembers()">← 返回</button>
+          <h2 style="margin:0;">👤 组员详情</h2>
+        </div>
+      </div>
+
+      <!-- User Info Card -->
+      <div class="ops-card" style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div class="member-avatar-lg" style="width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#6366f1,#8b5cf6);">
+            ${(user.displayName || user.username || '?')[0].toUpperCase()}
+          </div>
+          <div style="flex:1;">
+            <h3 style="margin:0 0 4px 0;font-size:1.2rem;">${user.displayName || user.username}</h3>
+            <p style="margin:0;color:var(--text-secondary);font-size:0.85rem;">
+              账号：${user.username} · 角色：${user.role === 'admin' ? '组长' : '组员'} · 系统：${user.system === 'operations' ? '运营' : '运维'}
+            </p>
+            <p style="margin:4px 0 0;color:var(--text-tertiary);font-size:0.78rem;">
+              加入时间：${user.createdAt ? new Date(user.createdAt).toLocaleDateString('zh-CN') : '-'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats Cards -->
+      <div class="ops-overview-row" style="margin-bottom:16px;">
+        <div class="ops-overview-card">
+          <div class="ov-icon blue">📊</div>
+          <div class="ov-info">
+            <div class="ov-value">${fmt(stats.weekTechSupportSeconds)}</div>
+            <div class="ov-label">近7天技术支持时长</div>
+          </div>
+        </div>
+        <div class="ops-overview-card">
+          <div class="ov-icon green">⏱️</div>
+          <div class="ov-info">
+            <div class="ov-value">${fmt(stats.yesterdayRepairSeconds)}</div>
+            <div class="ov-label">昨日维修时长</div>
+          </div>
+        </div>
+        <div class="ops-overview-card">
+          <div class="ov-icon orange">🔧</div>
+          <div class="ov-info">
+            <div class="ov-value">${fmt(stats.todayRepairSeconds)}</div>
+            <div class="ov-label">今日维修时长</div>
+          </div>
+        </div>
+        <div class="ops-overview-card">
+          <div class="ov-icon purple">📋</div>
+          <div class="ov-info">
+            <div class="ov-value">${stats.totalCompleted}/${stats.totalSubmitted}</div>
+            <div class="ov-label">已完成/总提交</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Repair Logs -->
+      <div class="ops-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <h3 style="margin:0;font-size:1rem;">📝 维修日志 (${logs.length})</h3>
+        </div>
+        ${logs.length === 0 ? '<p class="empty-text">暂无维修日志</p>' : `
+          <div class="ts-list">
+            ${logs.map(log => {
+              const st = statusMap[log.status] || { label: log.status, cls: '' };
+              return `
+                <div class="ts-item">
+                  <div class="ts-item-header">
+                    <div class="ts-item-title">
+                      <span class="ts-machine">${log.machineNumber || log.machineId || '-'}</span>
+                      <span class="ts-status-badge ${st.cls}">${st.label}</span>
+                    </div>
+                    <div class="ts-item-time">${log.submittedAt ? new Date(log.submittedAt).toLocaleString('zh-CN') : '-'}</div>
+                  </div>
+                  <div class="ts-item-body">
+                    <div style="margin-bottom:6px;">
+                      <span style="color:var(--text-secondary);font-size:0.8rem;">设备类型：</span>
+                      <span style="font-size:0.85rem;">${log.equipmentTypeName || '-'}</span>
+                      <span style="color:var(--text-secondary);font-size:0.8rem;margin-left:12px;">故障类型：</span>
+                      <span style="font-size:0.85rem;">${log.faultType || '-'}</span>
+                    </div>
+                    ${log.faultDescription ? `<div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:6px;">故障描述：${log.faultDescription}</div>` : ''}
+                    ${log.responderName ? `<div style="font-size:0.8rem;color:var(--text-tertiary);">运维人员：${log.responderName}</div>` : ''}
+                    ${log.status === 'completed' ? `
+                      <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-light);">
+                        <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">
+                          <span>等待时长：${fmt(log.waitSeconds)}</span>
+                          <span style="margin-left:12px;">维修时长：${fmt(log.repairSeconds)}</span>
+                          <span style="margin-left:12px;">总时长：${fmt(log.totalSeconds)}</span>
+                        </div>
+                        ${log.result ? `<div style="font-size:0.85rem;"><strong>维修结果：</strong>${log.result}</div>` : ''}
+                      </div>
+                    ` : ''}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `}
+      </div>
+    `;
+    document.getElementById('main-content').innerHTML = html;
+  },
+
+  backToTeamMembers() {
+    this._memberDetailId = null;
+    this.switchTab('team-members');
   },
 
   // Cross-group transfer actions
@@ -1617,6 +1769,7 @@ const OpsApp = {
   // 无感刷新当前视图 — 仅更新数据，不闪屏不打断操作
   // data-analysis(含图表)/team-members/requirements 跳过定时刷新，避免图表重绘闪烁
   refreshCurrentTab() {
+    if (this._memberDetailId) return;
     const tab = this.currentTab;
     if (tab === 'personal-analysis') {
       this.renderPersonalAnalysis();
