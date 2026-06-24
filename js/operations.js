@@ -563,19 +563,33 @@ const OpsApp = {
     const transfers = this._groupTransfers || [];
     const myUsers = this._mySubordinates || [];
 
-    const myGroup = groups.find(g => g.adminId === user.id) || { adminName: user.username, members: myUsers };
-
-    // 普通用户显示组长概览页面（无维修日志）
-    if (!isLeader) {
-      await this._renderLeaderOverview(user, myGroup.members);
-      return;
+    let myGroup = null;
+    if (isLeader) {
+      myGroup = groups.find(g => g.adminId === user.id) || { adminName: user.username, members: myUsers };
+    } else {
+      // 普通用户：找到自己的组，显示同组所有成员
+      for (const g of groups) {
+        const memberIds = g.members.map(m => m.id);
+        if (memberIds.includes(user.id) || g.adminId === user.id) {
+          myGroup = g;
+          break;
+        }
+      }
+      // 如果没找到，就用空数据
+      if (!myGroup) {
+        myGroup = { adminName: '未知', members: [] };
+      }
     }
 
-    // 组长显示完整的管理页面
-    const pendingTransfers = transfers.filter(t => t.status === 'pending');
-    const historyTransfers = transfers.filter(t => t.status !== 'pending');
+    const members = myGroup.members || [];
+    const adminInfo = groups.find(g => g.adminId === myGroup.adminId)?.adminName || myGroup.adminName;
 
-    const html = `
+    // 组长显示完整的管理页面
+    if (isLeader) {
+      const pendingTransfers = transfers.filter(t => t.status === 'pending');
+      const historyTransfers = transfers.filter(t => t.status !== 'pending');
+
+      const html = `
       <div class="page-header">
         <h2>👥 组员管理</h2>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -586,10 +600,10 @@ const OpsApp = {
 
       <!-- My Group -->
       <div style="margin-bottom:24px;">
-        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📋 我的组员 <span style="color:var(--text-secondary);font-size:0.8rem;">（组长：${myGroup.adminName || user.username}）</span></h3>
+        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📋 我的组员 <span style="color:var(--text-secondary);font-size:0.8rem;">（组长：${adminInfo || user.username}）</span></h3>
         <div class="team-grid">
-          ${myGroup.members.length === 0 ? '<p class="empty-text" style="grid-column:1/-1;">暂无组员。通过"添加用户"功能创建用户后自动加入此组。</p>' : ''}
-          ${myGroup.members.map((m, i) => `
+          ${members.length === 0 ? '<p class="empty-text" style="grid-column:1/-1;">暂无组员。通过"添加用户"功能创建用户后自动加入此组。</p>' : ''}
+          ${members.map((m, i) => `
             <div class="team-member-card" style="cursor:pointer;" onclick="OpsApp.showTeamMemberDetail('${m.id}')">
               <div class="member-avatar" style="background:${['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899'][i % 6]};">
                 ${(m.username || '?')[0].toUpperCase()}
@@ -687,6 +701,36 @@ const OpsApp = {
         `).join('')}
       </div>
       ` : ''}
+    `;
+      document.getElementById('main-content').innerHTML = html;
+      return;
+    }
+
+    // 普通用户显示组员列表页面（可点击查看详情）
+    const html = `
+      <div class="page-header">
+        <h2>👥 组员</h2>
+        <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTeamMembers()">🔄 刷新</button>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📋 同组成员 <span style="color:var(--text-secondary);font-size:0.8rem;">（组长：${adminInfo}）</span></h3>
+        <div class="team-grid">
+          ${members.length === 0 ? '<p class="empty-text" style="grid-column:1/-1;">暂无同组成员</p>' : ''}
+          ${members.map((m, i) => `
+            <div class="team-member-card" style="cursor:pointer;" onclick="OpsApp.showTeamMemberDetail('${m.id}')">
+              <div class="member-avatar" style="background:${['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899'][i % 6]};">
+                ${(m.username || '?')[0].toUpperCase()}
+              </div>
+              <div class="member-info" style="flex:1;">
+                <div class="member-name">${m.displayName || m.username} ${m.id === user.id ? '<span style="color:var(--text-tertiary);font-size:0.75rem;">（我）</span>' : ''}</div>
+                <div class="member-role">${m.role === 'admin' ? '组长' : '组员'}</div>
+              </div>
+              <span style="color:var(--text-tertiary);font-size:1.2rem;">›</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
     `;
     document.getElementById('main-content').innerHTML = html;
   },
