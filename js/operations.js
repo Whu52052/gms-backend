@@ -1161,35 +1161,44 @@ const OpsApp = {
     const titleEl = document.getElementById('topbar-page-title');
     if (titleEl) titleEl.textContent = '组员详情';
     document.getElementById('main-content').innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:center;min-height:50vh;">
+      <div style="display:flex;align-items:center;justify:center;min-height:50vh;">
         <div style="text-align:center;">
           <div class="loading-spinner" style="margin:0 auto 16px;"></div>
           <p style="color:var(--text-secondary);">加载中...</p>
         </div>
       </div>
     `;
-    const data = await API.getUserRepairStats(userId);
-    if (!data || data.error) {
+    const [statsData, progressData] = await Promise.all([
+      API.getUserRepairStats(userId),
+      API.getUserTaskProgress(userId)
+    ]);
+    if (!statsData || statsData.error) {
       document.getElementById('main-content').innerHTML = `
         <div class="page-header">
           <button class="btn btn-outline btn-sm" onclick="OpsApp.backToTeamMembers()">← 返回组员列表</button>
         </div>
         <div class="ops-card">
-          <p class="empty-text">${data?.error || '加载失败'}</p>
+          <p class="empty-text">${statsData?.error || '加载失败'}</p>
         </div>
       `;
       return;
     }
-    this._renderTeamMemberDetail(data);
+    this._renderTeamMemberDetail(statsData, progressData);
   },
 
-  _renderTeamMemberDetail(data) {
+  _renderTeamMemberDetail(data, progressData) {
     const user = data.user;
     const stats = data.stats;
     const logs = data.repairLogs || [];
     const fmt = (s) => this._fmtDuration(s);
     const currentUser = API.currentUser;
     const isLeader = currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin');
+    // 处理进度数据
+    const progress = progressData?.progress || {};
+    const pStart = parseFloat(progress.startProgress) || 0;
+    const pCurrent = parseFloat(progress.currentProgress) || 0;
+    const pDay = parseFloat(progress.dayProgress) || 0;
+    const pHistory = (() => { try { return progress.history ? JSON.parse(progress.history) : []; } catch { return []; } })();
     const statusMap = {
       pending: { label: '待响应', cls: 'pending' },
       responded: { label: '处理中', cls: 'responded' },
@@ -1252,6 +1261,51 @@ const OpsApp = {
             <div class="ov-label">已完成/总提交</div>
           </div>
         </div>
+      </div>
+
+      <!-- 今日进度 -->
+      <div class="ops-card" style="margin-bottom:16px;">
+        <h3 style="margin:0 0 12px 0;font-size:1rem;">📊 今日进度</h3>
+        <div class="ops-overview-row">
+          <div class="ops-overview-card">
+            <div class="ov-icon blue">🚀</div>
+            <div class="ov-info">
+              <div class="ov-value">${pStart.toFixed(2)}</div>
+              <div class="ov-label">初始进度</div>
+            </div>
+          </div>
+          <div class="ops-overview-card">
+            <div class="ov-icon green">📈</div>
+            <div class="ov-info">
+              <div class="ov-value">${pCurrent.toFixed(2)}</div>
+              <div class="ov-label">当前进度</div>
+            </div>
+          </div>
+          <div class="ops-overview-card">
+            <div class="ov-icon orange">📊</div>
+            <div class="ov-info">
+              <div class="ov-value">${pDay.toFixed(2)}</div>
+              <div class="ov-label">今日增量</div>
+            </div>
+          </div>
+        </div>
+        ${pHistory.length > 0 ? `
+        <div style="margin-top:12px;padding:10px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;font-size:0.8rem;">
+          <div style="font-weight:600;margin-bottom:8px;">📋 提交记录（${pHistory.length}次）</div>
+          ${pHistory.map((h, i) => {
+            const prev = i > 0 ? (parseFloat(pHistory[i-1].progress) || pStart) : pStart;
+            const hProgress = parseFloat(h.progress) || 0;
+            const delta = hProgress - prev;
+            return `
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <span style="font-weight:600;min-width:40px;">${h.hour}时</span>
+              <span>进度：${hProgress.toFixed(2)}</span>
+              ${i > 0 ? `<span style="color:var(--color-success,#10b981);">(+${delta.toFixed(2)})</span>` : ''}
+              ${h.note ? `<span style="color:var(--text-secondary);">· ${h.note}</span>` : ''}
+            </div>
+          `}).join('')}
+        </div>
+        ` : '<p style="margin:8px 0 0;color:var(--text-tertiary);font-size:0.8rem;">今日暂无提交记录</p>'}
       </div>
 
       ${isLeader ? `
