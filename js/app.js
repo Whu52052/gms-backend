@@ -4000,6 +4000,7 @@ const App = {
   async renderTechSupport(viewMode) {
     if (!viewMode) viewMode = this._tsViewMode || 'card';
     this._tsViewMode = viewMode;
+    this._tsDetailId = null;
     let items = [];
     try { items = await API.getTechSupportList(); } catch {}
     this._tsItems = items;
@@ -4153,6 +4154,7 @@ const App = {
   },
 
   async renderTechSupportDetail(id) {
+    this._tsDetailId = id;
     let item;
     try { item = await API.getTechSupportDetail(id); } catch {}
     if (!item) { this.notify('无法获取请求详情', 'error'); return; }
@@ -6963,6 +6965,9 @@ const App = {
       // 跳过正在输入的
       const activeEl = document.activeElement;
       if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) return;
+      // 跳过弹窗打开时
+      const modal = document.getElementById('modal-overlay');
+      if (modal && modal.style.display !== 'none' && !modal.classList.contains('hidden')) return;
       this.refreshCurrentView();
     }, 15000);
   },
@@ -6979,8 +6984,12 @@ const App = {
     } else if (tab === 'machines') {
       this.renderMachines();
     } else if (tab === 'tech-support') {
-      // 技术支持页面需要实时显示新消息
-      this.renderTechSupport(this._tsViewMode);
+      // 技术支持页面：如果正在查看详情，则刷新详情；否则刷新列表
+      if (this._tsDetailId) {
+        this.renderTechSupportDetail(this._tsDetailId);
+      } else {
+        this.renderTechSupport(this._tsViewMode);
+      }
     }
     // reports/audit/after-sales — 含图表，跳过定时刷新，用户可手动点刷新按钮
   },

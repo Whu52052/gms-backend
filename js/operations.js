@@ -1605,6 +1605,9 @@ const OpsApp = {
       if (!API.online) return;
       const activeEl = document.activeElement;
       if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) return;
+      // 跳过弹窗打开时
+      const modal = document.getElementById('modal-overlay');
+      if (modal && modal.style.display !== 'none' && !modal.classList.contains('hidden')) return;
       this.refreshCurrentTab();
     }, 15000);
   },
