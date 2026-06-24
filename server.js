@@ -1181,6 +1181,7 @@ async function handleDeleteTechSupport(req, res, authUser, id) {
 }
 
 async function handleGetUserRepairStats(req, res, authUser, userId) {
+  try {
   const isOps = authUser.system === 'operations';
   const isSuper = authUser.role === 'superadmin';
   const isAdmin = authUser.role === 'admin';
@@ -1217,16 +1218,27 @@ async function handleGetUserRepairStats(req, res, authUser, userId) {
   } else {
     return sendJSON(res, { error: '无权限查看' }, 403);
   }
+
   // Get user info
   const [userRows] = await pool.execute('SELECT id, username, displayName, role, system, createdAt FROM users WHERE id = ?', [userId]);
   if (userRows.length === 0) return sendJSON(res, { error: '用户不存在' }, 404);
   const userInfo = userRows[0];
-  // Get all tech support items submitted by this user
-  const items = await _cached('tech_support', async () => {
-    const [rows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC');
-    return rows.map(r => JSON.parse(r.data));
-  });
-  const userItems = items.filter(item => item.submitterId === userId);
+
+  // Get tech support items (from cache with error handling)
+  let userItems = [];
+  try {
+    const items = await _cached('tech_support', async () => {
+      const [rows] = await pool.execute('SELECT data FROM tech_support ORDER BY id DESC');
+      return rows.map(r => {
+        try { return JSON.parse(r.data); } catch (e) { return null; }
+      }).filter(Boolean);
+    });
+    userItems = items.filter(item => item.submitterId === userId);
+  } catch (e) {
+    console.error('[UserStats] Query tech_support error:', e.message);
+    userItems = [];
+  }
+
   // Calculate date ranges
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
@@ -1285,6 +1297,10 @@ async function handleGetUserRepairStats(req, res, authUser, userId) {
     },
     repairLogs,
   });
+  } catch (e) {
+    console.error('[UserStats] Unexpected error:', e);
+    sendJSON(res, { error: '加载失败：' + e.message }, 500);
+  }
 }
 
 // ==================== TASK PROGRESS (组长进度) ====================
