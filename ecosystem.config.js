@@ -1,4 +1,4 @@
-// PM2 Ecosystem Configuration — 3-Instance Load Balanced
+// PM2 Ecosystem Configuration — 3-Instance Load Balanced + Watcher
 // 使用方法: pm2 start ecosystem.config.js
 module.exports = {
   apps: [
@@ -69,6 +69,32 @@ module.exports = {
       },
       error_file: '/tmp/yunwei-3-error.log',
       out_file: '/tmp/yunwei-3-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    },
+    {
+      name: 'gms-watcher',
+      script: 'watcher.js',
+      instances: 1,
+      exec_mode: 'fork',
+      max_memory_restart: '512M',
+      kill_timeout: 5000,
+      env: {
+        NODE_ENV: 'production',
+        TZ: 'Asia/Shanghai',
+        WATCHER_TARGETS: 'http://127.0.0.1:8765,http://127.0.0.1:8766,http://127.0.0.1:8767',
+        WATCHER_PM2_APPS: 'yunwei-1,yunwei-2,yunwei-3',
+        WATCHER_AUTO_RESTART: 'true',
+        WATCHER_MYSQL_CHECK: 'true',
+        WATCHER_TEST_USER: 'admin',
+        WATCHER_TEST_PASS: '',
+        DB_HOST: '127.0.0.1',
+        DB_PORT: '3306',
+        DB_USER: 'root',
+        DB_PASSWORD: 'Wh111852',
+        DB_NAME: 'gms',
+      },
+      error_file: '/tmp/gms-watcher-error.log',
+      out_file: '/tmp/gms-watcher-out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     },
   ],

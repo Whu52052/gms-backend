@@ -99,12 +99,50 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 let pool;
+let poolStats = {
+  acquired: 0,
+  leaked: 0,
+  totalQueries: 0,
+  slowQueries: 0,
+  lastReset: Date.now(),
+};
+const activeConnections = new Map();
+const LEAK_DETECTION_THRESHOLD = 30000;
+const QUERY_TIMEOUT = 15000;
+const SLOW_QUERY_THRESHOLD = 5000;
+
+function getPoolInfo() {
+  if (!pool) return { connected: false };
+  try {
+    return {
+      connected: true,
+      totalConnections: pool.totalConnections || 0,
+      activeConnections: pool.activeConnections || 0,
+      idleConnections: pool.idleConnections || 0,
+      waitingRequests: pool.waitingConnections || 0,
+      connectionLimit: pool.config.connectionLimit,
+      queueLimit: pool.config.queueLimit,
+      trackedActive: activeConnections.size,
+      leaked: poolStats.leaked,
+      totalQueries: poolStats.totalQueries,
+      slowQueries: poolStats.slowQueries,
+    };
+  } catch {
+    return { connected: false };
+  }
+}
 
 async function initPool() {
-  // Connect without database first to ensure it exists
+  if (pool) {
+    try { await pool.end(); } catch {}
+    pool = null;
+  }
+  activeConnections.clear();
+
   const initConn = await mysql.createConnection({
     host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD,
     charset: 'utf8mb4',
+    connectTimeout: 10000,
   });
   await initConn.execute(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   await initConn.end();
@@ -114,15 +152,15 @@ async function initPool() {
     database: DB_NAME,
     charset: 'utf8mb4',
     waitForConnections: true,
-    connectionLimit: 80,      // per worker; with 4+ workers, total ~320+ connections
-    queueLimit: 200,           // queue pending requests instead of erroring
+    connectionLimit: 80,
+    queueLimit: 200,
     enableKeepAlive: true,
     keepAliveInitialDelay: 10000,
     connectTimeout: 10000,
     idleTimeout: 60000,
+    maxIdle: 20,
   });
 
-  // 确保每个连接都正确设置 utf8mb4 编码（避免中文乱码）
   pool.on('connection', async (conn) => {
     try {
       await conn.execute("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
@@ -130,45 +168,129 @@ async function initPool() {
     } catch {}
   });
 
-  // Handle pool errors — don't let them crash the server
+  pool.on('acquire', (conn) => {
+    poolStats.acquired++;
+    const connId = conn.threadId || Math.random().toString(36).slice(2);
+    activeConnections.set(connId, {
+      acquiredAt: Date.now(),
+      stack: new Error().stack,
+      threadId: conn.threadId,
+    });
+    (conn).__trackId = connId;
+  });
+
+  pool.on('release', (conn) => {
+    const connId = conn.__trackId;
+    if (connId) activeConnections.delete(connId);
+  });
+
   pool.on('error', (err) => {
     console.error('[DB] Pool error (non-fatal):', err.message);
   });
 
-  // Store original execute for auto-recovery wrapper
   const _origExecute = pool.execute.bind(pool);
+  const _origQuery = pool.query.bind(pool);
+
+  function withTimeout(promise, timeoutMs, sql) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Query timeout after ${timeoutMs}ms: ${String(sql).slice(0, 100)}`));
+      }, timeoutMs);
+      promise.then(
+        (result) => { clearTimeout(timer); resolve(result); },
+        (err) => { clearTimeout(timer); reject(err); }
+      );
+    });
+  }
+
   pool.execute = async function(...args) {
+    const startTime = Date.now();
+    poolStats.totalQueries++;
     try {
-      return await _origExecute(...args);
+      const result = await withTimeout(_origExecute(...args), QUERY_TIMEOUT, args[0]);
+      const elapsed = Date.now() - startTime;
+      if (elapsed > SLOW_QUERY_THRESHOLD) {
+        poolStats.slowQueries++;
+        console.warn(`[DB] Slow query (${elapsed}ms): ${String(args[0]).slice(0, 100)}`);
+      }
+      return result;
     } catch (e) {
-      if (e.message && e.message.includes('Pool is closed')) {
-        console.warn('[DB] Pool closed, reinitializing...');
-        await initPool();
-        return _origExecute(...args);
+      if (e.message && (e.message.includes('Pool is closed') || e.message.includes('ECONNRESET') || e.message.includes('ETIMEDOUT') || e.message.includes('PROTOCOL_CONNECTION_LOST'))) {
+        console.warn('[DB] Connection issue detected, reinitializing pool...', e.message);
+        try { await initPool(); } catch(e2) { console.error('[DB] Reconnect failed:', e2.message); }
+        throw e;
       }
       throw e;
     }
   };
 
-  // Periodic health check — keep pool alive
+  pool.query = async function(...args) {
+    const startTime = Date.now();
+    poolStats.totalQueries++;
+    try {
+      const result = await withTimeout(_origQuery(...args), QUERY_TIMEOUT, args[0]);
+      const elapsed = Date.now() - startTime;
+      if (elapsed > SLOW_QUERY_THRESHOLD) {
+        poolStats.slowQueries++;
+        console.warn(`[DB] Slow query (${elapsed}ms): ${String(args[0]).slice(0, 100)}`);
+      }
+      return result;
+    } catch (e) {
+      if (e.message && (e.message.includes('Pool is closed') || e.message.includes('ECONNRESET') || e.message.includes('ETIMEDOUT') || e.message.includes('PROTOCOL_CONNECTION_LOST'))) {
+        console.warn('[DB] Connection issue detected, reinitializing pool...', e.message);
+        try { await initPool(); } catch(e2) { console.error('[DB] Reconnect failed:', e2.message); }
+        throw e;
+      }
+      throw e;
+    }
+  };
+
+  const _leakDetector = setInterval(() => {
+    const now = Date.now();
+    let leaked = 0;
+    for (const [connId, info] of activeConnections) {
+      const held = now - info.acquiredAt;
+      if (held > LEAK_DETECTION_THRESHOLD) {
+        leaked++;
+        if (leaked <= 3) {
+          console.warn(`[DB] Potential connection leak: held for ${held}ms, threadId=${info.threadId}`);
+        }
+      }
+    }
+    if (leaked > 0) {
+      poolStats.leaked = leaked;
+      console.warn(`[DB] Leak detector: ${leaked} connections held > ${LEAK_DETECTION_THRESHOLD}ms`);
+    } else {
+      poolStats.leaked = 0;
+    }
+
+    const info = getPoolInfo();
+    if (info.connected) {
+      const usagePercent = info.activeConnections / info.connectionLimit * 100;
+      if (usagePercent > 80) {
+        console.warn(`[DB] Pool usage high: ${info.activeConnections}/${info.connectionLimit} (${usagePercent.toFixed(1)}%), waiting=${info.waitingRequests}`);
+      }
+    }
+  }, 10000);
+  if (_leakDetector.unref) _leakDetector.unref();
+
   const _healthCheck = setInterval(async () => {
     try {
-      const conn = await _origExecute('SELECT 1');
+      await _origExecute('SELECT 1');
     } catch (e) {
-      if (e.message && e.message.includes('Pool is closed')) {
-        console.warn('[DB] Health check found closed pool, reconnecting...');
+      if (e.message && (e.message.includes('Pool is closed') || e.message.includes('ECONNRESET') || e.message.includes('ETIMEDOUT') || e.message.includes('PROTOCOL_CONNECTION_LOST'))) {
+        console.warn('[DB] Health check failed, reconnecting...', e.message);
         try { await initPool(); } catch(e2) { console.error('[DB] Reconnect failed:', e2.message); }
       }
     }
   }, 30000);
-  // Allow event loop to exit if server stops
   if (_healthCheck.unref) _healthCheck.unref();
 
-  // Test connection
   const conn = await pool.getConnection();
   await conn.ping();
   conn.release();
   console.log('[DB] MySQL connected:', DB_HOST + ':' + DB_PORT + '/' + DB_NAME);
+  console.log('[DB] Pool config: limit=80, queueLimit=200, queryTimeout=' + QUERY_TIMEOUT + 'ms, leakThreshold=' + LEAK_DETECTION_THRESHOLD + 'ms');
 }
 
 function initDB() {
@@ -2724,7 +2846,18 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.url === '/api/health' && req.method === 'GET') {
-      return sendJSON(res, { status: 'ok', uptime: process.uptime() });
+      const dbInfo = getPoolInfo();
+      return sendJSON(res, {
+        status: dbInfo.connected ? 'ok' : 'degraded',
+        uptime: process.uptime(),
+        timestamp: Date.now(),
+        database: dbInfo,
+        memory: {
+          rss: process.memoryUsage().rss,
+          heapUsed: process.memoryUsage().heapUsed,
+          heapTotal: process.memoryUsage().heapTotal,
+        },
+      });
     }
 
     if (req.url === '/api/status' && req.method === 'GET') {
