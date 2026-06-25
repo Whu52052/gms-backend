@@ -43,10 +43,10 @@ const OpsApp = {
       this.startAutoRefresh();
       this.startHealthCheck();
       this.initStatusBar();
-      // 普通用户刷新页面后，如果没有选择设备则提示选择
+      // 普通用户刷新页面后，如果没有选择设备则提示选择（非强制）
       const user = API.currentUser;
-      if (user && user.role === 'user' && !this._currentMachine) {
-        setTimeout(() => this._showMachineSelector(), 500);
+      if (user && user.role === 'user' && user.system === 'operations' && !this._currentMachine) {
+        setTimeout(() => this._showMachineSelector(false), 500);
       }
     }
   },
@@ -149,9 +149,9 @@ const OpsApp = {
     this._updateTechSupportNav();
     this._updateUserManagementNav();
     this.notify('欢迎，' + result.user.username + '！');
-    // 普通用户登录后选择当前设备
-    if (result.user.role === 'user') {
-      setTimeout(() => this._showMachineSelector(), 500);
+    // 普通用户每次登录后必须选择当前设备
+    if (result.user.role === 'user' && result.user.system === 'operations') {
+      setTimeout(() => this._showMachineSelector(true), 500);
     }
   },
 
@@ -1912,7 +1912,7 @@ const OpsApp = {
   },
 
   // ==================== CURRENT MACHINE SELECTOR ====================
-  async _showMachineSelector() {
+  async _showMachineSelector(forceSelect = false) {
     let machines = [];
     try {
       const list = await API.getMachines();
@@ -1929,8 +1929,8 @@ const OpsApp = {
       <div style="display:flex;flex-direction:column;gap:16px;">
         <div style="text-align:center;padding:8px 0;">
           <div style="font-size:2rem;margin-bottom:8px;">🖥️</div>
-          <p style="margin:0;font-size:1rem;font-weight:500;">请选择您正在使用的设备</p>
-          <p style="margin:4px 0 0;font-size:0.8rem;color:var(--text-secondary);">选择后提交技术支持时将自动填充设备编号</p>
+          <p style="margin:0;font-size:1rem;font-weight:500;">${forceSelect ? '请选择您正在使用的设备' : '选择当前设备'}</p>
+          ${forceSelect ? '<p style="margin:4px 0 0;font-size:0.85rem;color:var(--color-warning);">⚠️ 登录后必须选择设备编号才能正常使用</p>' : '<p style="margin:4px 0 0;font-size:0.8rem;color:var(--text-secondary);">选择后提交技术支持时将自动填充设备编号</p>'}
         </div>
         <div class="form-group">
           <label>设备编号 <span class="required">*</span></label>
@@ -1939,10 +1939,10 @@ const OpsApp = {
             ${machines.map(m => `<option value="${m}" ${m === current ? 'selected' : ''}>${m}</option>`).join('')}
           </select>
         </div>
-        ${current ? `<p style="font-size:0.8rem;color:var(--text-secondary);text-align:center;margin:0;">当前设备：<strong>${current}</strong></p>` : ''}
+        ${current && !forceSelect ? `<p style="font-size:0.8rem;color:var(--text-secondary);text-align:center;margin:0;">当前设备：<strong>${current}</strong></p>` : ''}
       </div>
     `;
-    this.showModal('选择当前设备', html, () => {
+    this.showModal(forceSelect ? '登录 - 选择设备' : '选择当前设备', html, () => {
       const select = document.getElementById('machine-select-dropdown');
       const val = select?.value?.trim();
       if (!val) {
@@ -1957,9 +1957,15 @@ const OpsApp = {
       }
       return true;
     });
-    // 去掉取消按钮文字，改成"稍后选择"
+    // 强制选择模式下隐藏取消按钮，必须选择设备
     const closeBtn = document.getElementById('modal-close-btn');
-    if (closeBtn) closeBtn.textContent = '稍后选择';
+    if (closeBtn) {
+      if (forceSelect) {
+        closeBtn.style.display = 'none';
+      } else {
+        closeBtn.textContent = '稍后选择';
+      }
+    }
   },
 
   // ==================== TECH SUPPORT ====================
