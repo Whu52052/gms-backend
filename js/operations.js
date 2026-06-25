@@ -758,7 +758,7 @@ const OpsApp = {
       if (!userId) { this.notify('请选择要调入的组员', 'warning'); return false; }
       const user = members.find(m => m.id == userId);
       const result = await API.createGroupTransfer({
-        toAdminId: adminId, userId, username: user?.username || '',
+        toAdminId: API.currentUser.id, userId, username: user?.username || '',
         direction: 'in', reason
       });
       if (result?.success) {
@@ -1468,7 +1468,7 @@ const OpsApp = {
     this.showModal('📥 调入组员', html, async () => {
       const reason = document.getElementById('transfer-reason')?.value?.trim() || '';
       const result = await API.createGroupTransfer({
-        toAdminId: fromAdminId, userId, username, direction: 'in', reason
+        toAdminId: API.currentUser.id, userId, username, direction: 'in', reason
       });
       if (result?.success) {
         this.notify('调配请求已发送，等待对方组长审批');
@@ -1589,7 +1589,7 @@ const OpsApp = {
         const g = otherGroups.find(g => g.adminId == fromAdminId);
         const u = g?.members?.find(m => m.id == userId);
         const result = await API.createGroupTransfer({
-          toAdminId: fromAdminId, userId, username: u?.username || '', direction: 'in', reason
+          toAdminId: API.currentUser.id, userId, username: u?.username || '', direction: 'in', reason
         });
         if (result?.success) {
           this.notify('调入请求已发送，等待对方组长审批');

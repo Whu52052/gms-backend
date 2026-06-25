@@ -1835,9 +1835,7 @@ async function handleApproveGroupTransfer(req, res, authUser, transferId) {
     if (item.toAdminId !== authUser.userId && item.fromAdminId !== authUser.userId) {
       await conn.rollback(); conn.release(); return sendJSON(res, { error: '您不是该调配的相关组长，无权审批' }, 403);
     }
-    const isSender = (item.fromAdminId === authUser.userId);
-    const newParentId = isSender ? item.toAdminId : item.fromAdminId;
-    await conn.execute('UPDATE users SET parentId = ? WHERE id = ?', [newParentId, item.userId]);
+    await conn.execute('UPDATE users SET parentId = ? WHERE id = ?', [item.toAdminId, item.userId]);
     item.status = 'completed';
     item.completedAt = new Date().toISOString();
     item.updatedAt = new Date().toISOString();
