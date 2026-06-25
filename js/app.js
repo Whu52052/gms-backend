@@ -6020,69 +6020,99 @@ const App = {
 
     const html = `
       <div class="page-header"><h2>⚙️ 系统设置</h2></div>
-      <div class="settings-grid">
-        <div class="settings-card">
-          <h3>🎨 外观</h3>
-          <div class="form-group">
-            <label>深色模式</label>
-            <label class="switch">
-              <input type="checkbox" ${settings.darkMode ? 'checked' : ''} onchange="App.toggleTheme()">
-              <span class="slider"></span>
-            </label>
+
+      <div style="display:flex;gap:12px;margin-bottom:20px;">
+        <div style="flex:1;background:var(--bg-card);border-radius:var(--radius-md);padding:14px 16px;border:1px solid var(--border-color);">
+          <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">数据大小</div>
+          <div style="font-size:1.4rem;font-weight:700;color:var(--text-primary);">${dataSize} <span style="font-size:0.8rem;font-weight:normal;color:var(--text-tertiary);">KB</span></div>
+        </div>
+        <div style="flex:1;background:var(--bg-card);border-radius:var(--radius-md);padding:14px 16px;border:1px solid var(--border-color);">
+          <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">最近备份</div>
+          <div style="font-size:1.4rem;font-weight:700;color:var(--text-primary);">${lastBackup ? '✓' : '-'}</div>
+          <div style="font-size:0.75rem;color:var(--text-tertiary);margin-top:2px;">${lastBackup ? this._formatTime(lastBackup) : '未备份'}</div>
+        </div>
+        <div style="flex:1;background:var(--bg-card);border-radius:var(--radius-md);padding:14px 16px;border:1px solid var(--border-color);">
+          <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">系统版本</div>
+          <div style="font-size:1.4rem;font-weight:700;color:var(--text-primary);">v3.9</div>
+          <div style="font-size:0.75rem;color:var(--text-tertiary);margin-top:2px;">2026-06-04</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;">
+        <div class="ts-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <span style="font-size:1.3rem;">🎨</span>
+            <h3 style="margin:0;font-size:1rem;">外观设置</h3>
           </div>
-          <p class="form-hint">系统会自动跟随设备主题，手动切换后将固定主题</p>
+          <div class="ts-form-group">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <label class="ts-form-label" style="margin-bottom:0;">深色模式</label>
+              <label style="display:flex;align-items:center;cursor:pointer;">
+                <input type="checkbox" ${settings.darkMode ? 'checked' : ''} onchange="App.toggleTheme()" style="width:18px;height:18px;accent-color:var(--color-primary);">
+                <span style="margin-left:8px;font-size:0.85rem;color:var(--text-secondary);">${settings.darkMode ? '已开启' : '跟随系统'}</span>
+              </label>
+            </div>
+            <div class="ts-form-hint" style="margin-top:8px;">系统会自动跟随设备主题，手动切换后将固定主题</div>
+          </div>
         </div>
-        <div class="settings-card">
-          <h3>📊 仪表板卡片配置</h3>
-          <p class="form-hint">选择要在系统总览中显示的库存卡片</p>
-          <div id="dashboard-cards-checklist">${this._renderDashboardCardsChecklist(settings)}</div>
-          <button class="btn btn-primary btn-sm" onclick="App.saveDashboardCards()">保存卡片配置</button>
+        <div class="ts-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <span style="font-size:1.3rem;">📊</span>
+            <h3 style="margin:0;font-size:1rem;">仪表板卡片配置</h3>
+          </div>
+          <div class="ts-form-hint" style="margin-bottom:12px;">选择要在系统总览中显示的库存卡片</div>
+          <div id="dashboard-cards-checklist" style="max-height:200px;overflow-y:auto;">${this._renderDashboardCardsChecklist(settings)}</div>
+          <button class="btn btn-primary" style="margin-top:12px;width:100%;" onclick="App.saveDashboardCards()">保存卡片配置</button>
         </div>
-        <div class="settings-card">
-          <h3>💾 数据管理</h3>
-          <p>当前数据大小: <strong>${dataSize} KB</strong></p>
-          ${lastBackup ? `<p class="form-hint">最近备份: ${this._formatTime(lastBackup)}</p>` : '<p class="form-hint">尚未备份</p>'}
-          <p class="form-hint">备份包含全部数据（含附件图片），恢复将覆盖当前数据</p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-primary" onclick="App._backupData()">📤 备份数据 (含图片)</button>
+        <div class="ts-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <span style="font-size:1.3rem;">💾</span>
+            <h3 style="margin:0;font-size:1rem;">数据管理</h3>
+          </div>
+          <div class="ts-form-hint" style="margin-bottom:12px;">备份包含全部数据（含附件图片），恢复将覆盖当前数据</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <button class="btn" style="width:100%;" onclick="App._backupData()">📤 备份数据 (含图片)</button>
             <input type="file" id="restore-file-input" accept=".zip,.json" style="display:none;" onchange="App._restoreData(this)">
-            <button class="btn btn-outline" onclick="document.getElementById('restore-file-input').click()">📥 恢复数据</button>
-            ${API.currentUser && (API.currentUser.role === 'admin' || API.currentUser.role === 'superadmin') ? '<button class="btn btn-danger" onclick="App.resetAllData()">🗑️ 清空所有数据</button>' : ''}
+            <button class="btn btn-outline" style="width:100%;" onclick="document.getElementById('restore-file-input').click()">📥 恢复数据</button>
+            ${API.currentUser && (API.currentUser.role === 'admin' || API.currentUser.role === 'superadmin') ? '<button class="btn btn-danger" style="width:100%;" onclick="App.resetAllData()">🗑️ 清空所有数据</button>' : ''}
           </div>
-          <div id="restore-result" style="margin-top:8px;font-size:0.8rem;"></div>
+          <div id="restore-result" style="margin-top:12px;font-size:0.85rem;"></div>
         </div>
-        <div class="settings-card">
-          <h3>🔍 数据完整性</h3>
-          <p class="form-hint">检查库存、机器、交易记录的一致性</p>
-          <button class="btn btn-outline" onclick="App.checkDataIntegrity()">执行检查</button>
+        <div class="ts-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <span style="font-size:1.3rem;">🔍</span>
+            <h3 style="margin:0;font-size:1rem;">数据完整性</h3>
+          </div>
+          <div class="ts-form-hint" style="margin-bottom:12px;">检查库存、机器、交易记录的一致性</div>
+          <button class="btn btn-outline" style="width:100%;" onclick="App.checkDataIntegrity()">执行检查</button>
           <div id="integrity-result" style="margin-top:12px;"></div>
         </div>
-        <div class="settings-card">
-          <h3>ℹ️ 关于</h3>
-          <p><strong>手套管理系统 v3.9</strong> <span style="font-size:0.75rem;color:var(--text-tertiary);">2026-06-04</span></p>
-          <p style="font-size:0.8rem;color:var(--text-secondary);">设备库存与机器管理系统 · 支持长期稳定运行</p>
-          <div style="margin-top:8px;font-size:0.75rem;line-height:1.8;">
-            <select id="version-select" onchange="App._showVersionDetail(this.value)" style="width:100%;padding:6px;border-radius:6px;border:1px solid var(--border-color);margin-bottom:8px;">
+        <div class="ts-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <span style="font-size:1.3rem;">ℹ️</span>
+            <h3 style="margin:0;font-size:1rem;">关于</h3>
+          </div>
+          <div style="font-size:0.9rem;color:var(--text-secondary);line-height:1.6;">
+            <div style="font-weight:600;color:var(--text-primary);">手套管理系统 v3.9</div>
+            <div style="font-size:0.8rem;margin-top:4px;">设备库存与机器管理系统 · 支持长期稳定运行</div>
+          </div>
+          <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border-color);">
+            <select id="version-select" onchange="App._showVersionDetail(this.value)" style="width:100%;padding:8px 10px;border:1.5px solid var(--border-color);border-radius:var(--radius-md);background:var(--bg-card);font-size:0.85rem;margin-bottom:12px;">
               <option value="">-- 选择版本查看更新内容 --</option>
               <option value="v3.7">v3.7 — 2026-06-03</option>
               <option value="v3.6">v3.6 — 2026-06-03</option>
               <option value="v3.5">v3.5 — 2026-06-02</option>
               <option value="v3.0">v3.0 — 2026-05-29</option>
             </select>
-            <div id="version-detail" style="color:var(--text-tertiary);">
+            <div id="version-detail" style="font-size:0.8rem;color:var(--text-tertiary);line-height:1.6;">
               <strong>v3.7 (2026-06-03)：</strong><br>
-              · 修复空闲库存计算公式（available = inv.quantity）<br>
-              · 修复全部库存计数公式（库存量+使用中+损坏）<br>
-              · 注册表更新改为无条件执行（消除数据不一致）<br>
+              · 修复空闲库存计算公式<br>
+              · 修复全部库存计数公式<br>
               · SN码页面可点击📷按钮上传/更换照片<br>
-              · 出库输入SN码自动显示已有附件缩略图<br>
               · 批量发货给厂家（多选+全选+快递单号选填）<br>
               · 仪表盘卡片支持拖拽排序<br>
-              · 服务器长期运行保护（崩溃恢复、自动备份、WAL检查点）<br>
-              · 优雅关闭（SIGTERM→检查点→关闭数据库）<br>
-              · 新增启动脚本（Windows .bat + Linux .sh + systemd服务）<br>
+              · 服务器长期运行保护（崩溃恢复、自动备份）<br>
               · 审计日志操作类型中文显示<br>
-              · 仪表板卡片配置支持新的汇总卡片<br>
             </div>
           </div>
         </div>
