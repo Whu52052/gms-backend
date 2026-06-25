@@ -229,6 +229,10 @@ const API = {
             if (Array.isArray(data) && typeof Storage !== 'undefined') {
               localStorage.setItem('gms_tech_support', JSON.stringify(data));
               console.log('[SSE] tech_support data updated, count:', data.length);
+              // 通知运营系统刷新技术支持页面（保持筛选状态）
+              if (typeof OpsApp !== 'undefined' && OpsApp.currentTab === 'tech-support-my') {
+                OpsApp.renderTechSupportMy(OpsApp._tsViewMode);
+              }
             }
           } catch (err) {
             console.error('[SSE] Failed to fetch tech_support:', err);

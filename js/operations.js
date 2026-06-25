@@ -279,8 +279,6 @@ const OpsApp = {
     }
   },
 
-  refreshCurrentTab() { this.renderCurrentTab(); },
-
   // ==================== PERSONAL ANALYSIS ====================
   renderPersonalAnalysis() {
     const user = API.currentUser || {};
@@ -2612,6 +2610,11 @@ const OpsApp = {
       this.renderPersonalAnalysis();
     } else if (tab === 'task-list') {
       this.renderTaskList();
+    } else if (tab === 'tech-support-my') {
+      // 技术支持页面：保持筛选和视图状态
+      this.renderTechSupportMy(this._tsViewMode);
+    } else if (tab === 'team-members') {
+      this.renderTeamMembers();
     }
     // data-analysis/team-members/requirements — 含图表或静态内容，跳过1秒刷新
   },
