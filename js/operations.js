@@ -567,7 +567,6 @@ const OpsApp = {
     if (isLeader) {
       myGroup = groups.find(g => g.adminId === user.id) || { adminName: user.username, members: myUsers };
     } else {
-      // 普通用户：找到自己的组，显示同组所有成员
       for (const g of groups) {
         const memberIds = g.members.map(m => m.id);
         if (memberIds.includes(user.id) || g.adminId === user.id) {
@@ -575,7 +574,6 @@ const OpsApp = {
           break;
         }
       }
-      // 如果没找到，就用空数据
       if (!myGroup) {
         myGroup = { adminName: '未知', members: [] };
       }
@@ -583,155 +581,97 @@ const OpsApp = {
 
     const members = myGroup.members || [];
     const adminInfo = groups.find(g => g.adminId === myGroup.adminId)?.adminName || myGroup.adminName;
+    const pendingTransfers = transfers.filter(t => t.status === 'pending');
+    const historyTransfers = transfers.filter(t => t.status !== 'pending');
 
-    // 组长显示完整的管理页面
-    if (isLeader) {
-      const pendingTransfers = transfers.filter(t => t.status === 'pending');
-      const historyTransfers = transfers.filter(t => t.status !== 'pending');
+    const counts = {
+      all: members.length,
+      members: members.filter(m => m.role !== 'admin').length,
+      admins: members.filter(m => m.role === 'admin').length,
+      pending: pendingTransfers.length,
+      otherGroups: groups.filter(g => g.adminId !== user.id).length
+    };
 
-      const html = `
-      <div class="page-header">
-        <h2>👥 组员管理</h2>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-primary btn-sm" onclick="OpsApp._showTransferForm()">🔄 跨组调配</button>
-          <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTeamMembers()">🔄 刷新</button>
+    const fm = t => t ? new Date(t).toLocaleString('zh-CN') : '-';
+    const avatarColors = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899'];
+
+    // 统计卡片
+    const statsHtml = `<div class="ts-stats-row">
+      <div class="ts-stat-card total"><div class="ts-stat-icon">👥</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.all}</div><div class="ts-stat-label">组内成员</div></div></div>
+      ${isLeader ? `<div class="ts-stat-card responded"><div class="ts-stat-icon">⏳</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.pending}</div><div class="ts-stat-label">待处理调配</div></div></div>` : ''}
+      ${isLeader && counts.otherGroups > 0 ? `<div class="ts-stat-card"><div class="ts-stat-icon">🌐</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.otherGroups}</div><div class="ts-stat-label">其他组</div></div></div>` : ''}
+    </div>`;
+
+    const filterMap = isLeader ? { my: '我的组', pending: '待调配', history: '历史', all: '全部' } : { my: '我的组', all: '全部' };
+    const currentFilter = this._teamFilter || 'my';
+
+    const toolbar = `<div class="ts-toolbar">
+      <div class="ts-filter-bar">
+        ${(isLeader ? ['my','pending','history','all'] : ['my','all']).map(s => `<button class="ts-filter-btn ${s===currentFilter?'active':''}" onclick="OpsApp._setTeamFilter('${s}')" id="team-filter-${s}">${filterMap[s]}</button>`).join('')}
+      </div>
+      <div style="display:flex;gap:6px;">
+        ${isLeader ? `<button class="btn btn-sm btn-primary" onclick="OpsApp._showTransferForm()">🔄 跨组调配</button>` : ''}
+        <button class="btn btn-sm btn-outline" onclick="OpsApp.renderTeamMembers()">🔄 刷新</button>
+      </div>
+    </div>`;
+
+    const emptyHtml = `<div class="ts-empty"><div class="ts-empty-icon">👥</div><div class="ts-empty-text">暂无成员</div><div class="ts-empty-sub">${isLeader ? '通过"添加用户"功能创建用户后自动加入此组' : '暂未分配到组'}</div></div>`;
+
+    // 组员卡片
+    const memberCardHtml = (m, i) => `<div class="ts-card" data-member-role="${m.role}">
+      <div class="ts-card-icon" style="background:${avatarColors[i % 6]};color:white;font-size:1.2rem;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;">${(m.username || '?')[0].toUpperCase()}</div>
+      <div class="ts-card-title">${m.displayName || m.username}</div>
+      <div class="ts-card-sub">${m.role === 'admin' ? '👑 组长' : '👤 组员'}</div>
+      <div class="ts-card-footer">
+        <span>🕐 ${fm(m.createdAt)}</span>
+        <span style="margin-left:auto;"><button class="btn btn-xs btn-primary" onclick="event.stopPropagation();OpsApp.showTeamMemberDetail('${m.id}')">查看</button></span>
+      </div>
+    </div>`;
+
+    // 调配卡片
+    const transferCardHtml = (t) => {
+      const isFromMe = t.fromAdminId === user.id;
+      const statusMap = { pending: 'ts-status-pending', completed: 'ts-status-completed', rejected: 'ts-status-pending', cancelled: 'ts-status-responded' };
+      const statusLabel = { pending: '⏳ 待审批', completed: '✅ 已完成', rejected: '❌ 已拒绝', cancelled: '⊗ 已取消' };
+      return `<div class="ts-card">
+        <div class="ts-card-icon">${t.direction === 'out' ? '📤' : '📥'}</div>
+        <div class="ts-card-title">${t.username}</div>
+        <div class="ts-card-sub">${t.direction === 'out' ? `${t.fromAdminName} → ${t.toAdminName}` : `${t.fromAdminName} ← ${t.toAdminName}`}</div>
+        ${t.reason ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:2px;">原因：${t.reason}</div>` : ''}
+        <div class="ts-card-footer">
+          <span>🕐 ${fm(t.createdAt)}</span>
+          <span style="margin-left:auto;"><span class="ts-status-badge ${statusMap[t.status] || 'ts-status-pending'}">${statusLabel[t.status] || t.status}</span></span>
         </div>
-      </div>
+        ${t.status === 'pending' && !isFromMe ? `
+        <div style="display:flex;gap:6px;margin-top:8px;">
+          <button class="btn btn-sm btn-primary" onclick="OpsApp._approveTransfer('${t.id}')">✅ 同意</button>
+          <button class="btn btn-sm btn-danger" onclick="OpsApp._rejectTransfer('${t.id}')">❌ 拒绝</button>
+        </div>` : ''}
+      </div>`;
+    };
 
-      <!-- My Group -->
-      <div style="margin-bottom:24px;">
-        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📋 我的组员 <span style="color:var(--text-secondary);font-size:0.8rem;">（组长：${adminInfo || user.username}）</span></h3>
-        <div class="team-grid">
-          ${members.length === 0 ? '<p class="empty-text" style="grid-column:1/-1;">暂无组员。通过"添加用户"功能创建用户后自动加入此组。</p>' : ''}
-          ${members.map((m, i) => `
-            <div class="team-member-card" style="cursor:pointer;" onclick="OpsApp.showTeamMemberDetail('${m.id}')">
-              <div class="member-avatar" style="background:${['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899'][i % 6]};">
-                ${(m.username || '?')[0].toUpperCase()}
-              </div>
-              <div class="member-info" style="flex:1;">
-                <div class="member-name">${m.displayName || m.username}</div>
-                <div class="member-role">${m.role === 'admin' ? '组长' : '组员'}</div>
-              </div>
-              <span style="color:var(--text-tertiary);font-size:1.2rem;">›</span>
-              ${isLeader ? `<button class="btn btn-xs btn-outline" style="margin-left:4px;"
-                onclick="event.stopPropagation();OpsApp._startOutTransfer('${m.id}','${m.username}')"
-                title="调出到其他组">📤 调出</button>` : ''}
-            </div>
-          `).join('')}
-        </div>
-      </div>
-
-      <!-- Other Groups (for cross-group visibility) -->
-      ${isLeader && groups.length > 0 ? `
-      <div style="margin-bottom:24px;">
-        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">🌐 其他组 <span style="color:var(--text-secondary);font-size:0.8rem;">（可申请调入）</span></h3>
-        ${groups.filter(g => g.adminId !== user.id).map(g => `
-          <div class="transfer-card" style="margin-bottom:10px;">
-            <div class="transfer-header">
-              <strong>👤 ${g.adminName || g.adminId}</strong>
-              <span style="color:var(--text-secondary);font-size:0.8rem;">${g.members.length} 名组员</span>
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;">
-              ${g.members.map(m => `
-                <span class="transfer-card" style="padding:4px 10px;font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;">
-                  ${m.username}
-                  <button class="btn btn-xs btn-primary" style="padding:1px 6px;font-size:0.7rem;"
-                    onclick="OpsApp._startInTransfer('${m.id}','${m.username}','${g.adminId}','${g.adminName || g.adminId}')">
-                    📥 调入
-                  </button>
-                </span>
-              `).join('')}
-              ${g.members.length === 0 ? '<span style="color:var(--text-secondary);font-size:0.8rem;">暂无组员</span>' : ''}
-            </div>
-          </div>
-        `).join('')}
-      </div>
-      ` : ''}
-
-      <!-- Pending Transfers -->
-      ${pendingTransfers.length > 0 ? `
-      <div style="margin-bottom:24px;">
-        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">⏳ 待处理调配</h3>
-        ${pendingTransfers.map(t => {
-          const isFromMe = t.fromAdminId === user.id;
-          const needsMyApproval = (isFromMe && t.status === 'pending') || (!isFromMe && t.toAdminId === user.id);
-          return `
-          <div class="transfer-card">
-            <div class="transfer-header">
-              <span class="transfer-type ${t.direction}">${t.direction === 'out' ? '📤 调出' : '📥 调入'}</span>
-              <span class="transfer-status pending">⏳ 待审批</span>
-              <span style="font-size:0.75rem;color:var(--text-secondary);">${new Date(t.createdAt).toLocaleString('zh-CN')}</span>
-            </div>
-            <div class="transfer-body">
-              <strong>${t.username}</strong>：
-              ${t.direction === 'out' ? `从 <strong>${t.fromAdminName}</strong> 调出至 <strong>${t.toAdminName}</strong>` : `从 <strong>${t.toAdminName}</strong> 调入至 <strong>${t.fromAdminName}</strong>`}
-              ${t.reason ? `<br>原因：${t.reason}` : ''}
-            </div>
-            ${!isFromMe ? `
-            <div class="transfer-actions">
-              <button class="btn btn-sm btn-primary" onclick="OpsApp._approveTransfer('${t.id}')">✅ 同意</button>
-              <button class="btn btn-sm btn-danger" onclick="OpsApp._rejectTransfer('${t.id}')">❌ 拒绝</button>
-            </div>
-            ` : `
-            <div class="transfer-actions">
-              <button class="btn btn-xs btn-outline" onclick="OpsApp._cancelTransfer('${t.id}')">取消请求</button>
-            </div>`}
-          </div>`;
-        }).join('')}
-      </div>
-      ` : ''}
-
-      <!-- Transfer History -->
-      ${historyTransfers.length > 0 ? `
-      <div>
-        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📜 调配记录</h3>
-        ${historyTransfers.slice(0, 20).map(t => `
-          <div class="transfer-card" style="opacity:0.7;">
-            <div class="transfer-header">
-              <span class="transfer-type ${t.direction}">${t.direction === 'out' ? '📤 调出' : '📥 调入'}</span>
-              <span class="transfer-status ${t.status}">${t.status === 'completed' ? '✅ 已完成' : t.status === 'rejected' ? '❌ 已拒绝' : '⊗ 已取消'}</span>
-              <span style="font-size:0.75rem;color:var(--text-secondary);">${new Date(t.updatedAt).toLocaleString('zh-CN')}</span>
-            </div>
-            <div class="transfer-body">
-              <strong>${t.username}</strong>：
-              ${t.direction === 'out' ? `从 <strong>${t.fromAdminName}</strong> → <strong>${t.toAdminName}</strong>` : `从 <strong>${t.toAdminName}</strong> → <strong>${t.fromAdminName}</strong>`}
-              ${t.status === 'completed' ? ' — 调配已完成' : t.rejectedByName ? ` — 被 ${t.rejectedByName} 拒绝` : ''}
-            </div>
-          </div>
-        `).join('')}
-      </div>
-      ` : ''}
-    `;
-      document.getElementById('main-content').innerHTML = html;
-      return;
+    let body = '';
+    if (currentFilter === 'my' || currentFilter === 'all') {
+      const list = members;
+      body += `<div class="ts-list" id="team-my-list">${list.length === 0 ? emptyHtml : list.map((m, i) => memberCardHtml(m, i)).join('')}</div>`;
+    }
+    if (isLeader && (currentFilter === 'pending' || currentFilter === 'all')) {
+      body += `<div id="team-pending-list"><h3 style="margin:16px 0 8px 0;font-size:0.9rem;">⏳ 待处理调配</h3><div class="ts-list">${pendingTransfers.length === 0 ? '<div class="ts-empty" style="padding:20px;"><div class="ts-empty-text">暂无待处理调配</div></div>' : pendingTransfers.map(t => transferCardHtml(t)).join('')}</div></div>`;
+    }
+    if (isLeader && (currentFilter === 'history' || currentFilter === 'all')) {
+      body += `<div id="team-history-list"><h3 style="margin:16px 0 8px 0;font-size:0.9rem;">📜 调配历史</h3><div class="ts-list">${historyTransfers.length === 0 ? '<div class="ts-empty" style="padding:20px;"><div class="ts-empty-text">暂无调配历史</div></div>' : historyTransfers.slice(0, 20).map(t => transferCardHtml(t)).join('')}</div></div>`;
     }
 
-    // 普通用户显示组员列表页面（可点击查看详情）
-    const html = `
-      <div class="page-header">
-        <h2>👥 组员</h2>
-        <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTeamMembers()">🔄 刷新</button>
-      </div>
-
-      <div style="margin-bottom:16px;">
-        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📋 同组成员 <span style="color:var(--text-secondary);font-size:0.8rem;">（组长：${adminInfo}）</span></h3>
-        <div class="team-grid">
-          ${members.length === 0 ? '<p class="empty-text" style="grid-column:1/-1;">暂无同组成员</p>' : ''}
-          ${members.map((m, i) => `
-            <div class="team-member-card" style="cursor:pointer;" onclick="OpsApp.showTeamMemberDetail('${m.id}')">
-              <div class="member-avatar" style="background:${['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899'][i % 6]};">
-                ${(m.username || '?')[0].toUpperCase()}
-              </div>
-              <div class="member-info" style="flex:1;">
-                <div class="member-name">${m.displayName || m.username} ${m.id === user.id ? '<span style="color:var(--text-tertiary);font-size:0.75rem;">（我）</span>' : ''}</div>
-              </div>
-              <span style="color:var(--text-tertiary);font-size:1.2rem;">›</span>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `;
+    const headerSub = isLeader ? `组长：${adminInfo || user.username}` : `组长：${adminInfo}`;
+    const html = `<div class="page-header"><h2>👥 组员管理</h2><span style="color:var(--text-secondary);font-size:0.85rem;">${headerSub}</span></div>${statsHtml}${toolbar}${body}`;
     document.getElementById('main-content').innerHTML = html;
+  },
+
+  _setTeamFilter(filter) {
+    this._teamFilter = filter;
+    document.querySelectorAll('.ts-filter-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('team-filter-' + filter);
+    if (btn) btn.classList.add('active');
   },
 
   // 普通用户显示的组长概览页面（无维修日志）

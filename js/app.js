@@ -2151,11 +2151,12 @@ const App = {
   },
 
   // ==================== MACHINE MANAGEMENT ====================
-  renderMachines() {
+  renderMachines(viewMode) {
+    if (!viewMode) viewMode = this._machineViewMode || 'card';
+    this._machineViewMode = viewMode;
     const machines = Storage.getMachines();
     const onlineCount = Storage.getOnlineMachineCount();
 
-    // Build latest-status-per-machine map
     const latestByMachine = {};
     machines.forEach(m => {
       const existing = latestByMachine[m.machineNumber];
@@ -2176,68 +2177,99 @@ const App = {
     const typeLabel = {};
     eqConfig.forEach(c => { typeIcon[c.id] = c.icon || '🖥️'; typeLabel[c.id] = c.name; });
 
+    const currentFilter = this._machineFilter || 'all';
+    const counts = { all: allMachineNumbers.length, online: onlineCount, offline: allMachineNumbers.length - onlineCount };
+
+    // 统计卡片
+    const statsHtml = `<div class="ts-stats-row">
+      <div class="ts-stat-card total"><div class="ts-stat-icon">🖥️</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.all}</div><div class="ts-stat-label">机器总数</div></div></div>
+      <div class="ts-stat-card responded"><div class="ts-stat-icon">🟢</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.online}</div><div class="ts-stat-label">在线</div></div></div>
+      <div class="ts-stat-card pending"><div class="ts-stat-icon">🔴</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.offline}</div><div class="ts-stat-label">离线</div></div></div>
+    </div>`;
+
+    const filterMap = { all: '全部', online: '在线', offline: '离线' };
+    const toolbar = `<div class="ts-toolbar">
+      <div class="ts-filter-bar">
+        ${['all','online','offline'].map(s => `<button class="ts-filter-btn ${s===currentFilter?'active':''}" onclick="App.filterMachines('${s}')" id="machine-filter-${s}">${filterMap[s]} (${counts[s]})</button>`).join('')}
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="text" id="machine-search" placeholder="🔍 搜索机器编号..." oninput="App._filterMachines()" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;font-size:0.85rem;width:180px;">
+        <button class="btn btn-sm ${viewMode==='card'?'btn-primary':'btn-outline'}" onclick="App.renderMachines('card')">🃏 卡片</button>
+        <button class="btn btn-sm ${viewMode==='table'?'btn-primary':'btn-outline'}" onclick="App.renderMachines('table')">📋 表格</button>
+      </div>
+    </div>`;
+
+    const emptyCardHtml = `<div class="ts-empty"><div class="ts-empty-icon">🖥️</div><div class="ts-empty-text">暂无机器记录</div><div class="ts-empty-sub">添加上/下线记录后在此显示</div></div>`;
+
+    const stMap = {
+      online: { cls: 'responded', label: '🟢 在线' },
+      offline: { cls: 'pending', label: '🔴 离线' },
+      waiting_repair: { cls: 'pending', label: '🔴 等待维修' },
+      repairing: { cls: 'responded', label: '🟡 维修中' },
+    };
+
+    const machineCards = allMachineNumbers.map(num => {
+      const m = latestByMachine[num];
+      const st = m.status || 'offline';
+      const s = stMap[st] || stMap.offline;
+      return `<div class="ts-card ${s.cls}" data-machine-status="${st}" onclick="App.showMachineDetail('${num}')">
+        <div class="ts-card-icon">${typeIcon[m.deviceType] || '🖥️'}</div>
+        <div class="ts-card-title">#${num}</div>
+        <div class="ts-card-sub">${typeLabel[m.deviceType] || '未知类型'}</div>
+        <div class="ts-card-footer">
+          <span>🕐 ${this._formatTime(m.updatedAt)}</span>
+          <span style="margin-left:auto;"><span class="ts-status-badge ts-status-${s.cls}">${s.label}</span></span>
+        </div>
+      </div>`;
+    }).join('');
+
+    let body;
+    if (viewMode === 'table') {
+      const fm = t => t ? new Date(t).toLocaleString('zh-CN') : '-';
+      body = `<div class="ts-table-wrap"><table class="ts-log-table"><thead><tr><th>机器编号</th><th>设备类型</th><th>状态</th><th>上线时间</th><th>下线时间</th><th>原因</th><th>更新人</th><th>操作</th></tr></thead><tbody>
+        ${machines.length===0?`<tr><td colspan="8">${emptyCardHtml}</td></tr>`:''}
+        ${machines.sort((a, b) => new Date(b.updatedAt || b.id) - new Date(a.updatedAt || a.id)).map(m => {
+          const s = stMap[m.status] || stMap.offline;
+          return `<tr data-machine-status="${m.status || 'offline'}">
+            <td><strong>${m.machineNumber}</strong></td>
+            <td>${typeIcon[m.deviceType] || ''} ${typeLabel[m.deviceType] || '-'}</td>
+            <td><span class="ts-status-badge ts-status-${s.cls}">${s.label}</span></td>
+            <td style="font-size:0.8rem;white-space:nowrap;">${fm(m.onlineTime)}</td>
+            <td style="font-size:0.8rem;white-space:nowrap;">${fm(m.offlineTime)}</td>
+            <td>${m.status === 'online' ? (m.onlineReason || '-') : (m.offlineReason || '-')}</td>
+            <td>${m.updatedBy || '-'}</td>
+            <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteMachine('${m.id}')">删除</button>` : ''}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table></div>`;
+    } else {
+      body = `<div class="ts-list">${machineCards || emptyCardHtml}</div>`;
+    }
+
     const html = `
       <div class="page-header">
         <h2>🖥️ 机器管理</h2>
-        <div class="header-actions">
-          <span class="online-badge">在线机器: <strong>${onlineCount}</strong> 台</span>
-          <button class="btn btn-primary" onclick="App.showMachineForm()">+ 添加上/下线记录</button>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-primary" onclick="App.showMachineForm()">+ 添加记录</button>
           <button class="btn btn-outline" onclick="App.showBulkMachineImport()">📦 批量导入</button>
         </div>
       </div>
-      <div class="machine-summary">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">
-          <input type="text" id="machine-search" placeholder="🔍 搜索机器编号..." oninput="App._filterMachines()" style="flex:1;min-width:150px;padding:8px 12px;border:1px solid var(--border-color);border-radius:8px;font-size:0.9rem;">
-          <button class="btn btn-sm btn-primary machine-tab active" onclick="App._filterMachineTab('all',this)">全部(${allMachineNumbers.length})</button>
-          <button class="btn btn-sm btn-outline machine-tab" onclick="App._filterMachineTab('online',this)">在线(${onlineCount})</button>
-          <button class="btn btn-sm btn-outline machine-tab" onclick="App._filterMachineTab('offline',this)">离线(${allMachineNumbers.length-onlineCount})</button>
-        </div>
-        <div class="summary-row">
-          <span>全部机器编号: ${allMachineNumbers.length > 0 ? allMachineNumbers.join(', ') : '暂无'}</span>
-        </div>
-        <div class="machine-status-grid" id="machine-card-grid">
-          ${allMachineNumbers.map(num => {
-            const m = latestByMachine[num];
-            const st = m.status || 'offline';
-            const stMap = {
-              online: { cls: 'online', label: '🟢 在线' },
-              offline: { cls: 'offline', label: '🔴 离线' },
-              waiting_repair: { cls: 'waiting-repair', label: '🔴 等待维修' },
-              repairing: { cls: 'repairing', label: '🟡 维修中' },
-            };
-            const s = stMap[st] || stMap.offline;
-            return `
-            <div class="machine-card ${s.cls}" onclick="App.showMachineDetail('${num}')" style="cursor:pointer;" title="点击查看详情">
-              <div class="machine-number">${typeIcon[m.deviceType] || '🖥️'} #${num}</div>
-              <div class="machine-type">${typeLabel[m.deviceType] || '未知类型'}</div>
-              <div class="machine-status">${s.label}</div>
-            </div>
-          `}).join('')}
-        </div>
-      </div>
-      <div class="section-header"><h3>机器上下线记录</h3></div>
-      <div class="table-container">
-        <table class="data-table">
-          <thead><tr><th>操作时间</th><th>机器编号</th><th>设备类型</th><th>上/下线</th><th>原因</th><th>上线时间</th><th>下线时间</th><th>更新人</th><th>操作</th></tr></thead>
-          <tbody>${machines.length === 0 ? '<tr><td colspan="9" class="empty-text">暂无机器记录</td></tr>' :
-            machines.sort((a, b) => new Date(b.updatedAt || b.id) - new Date(a.updatedAt || a.id)).map(m => `
-              <tr>
-                <td><span title="${this._formatTime(m.updatedAt)}">${this._formatTime(m.updatedAt)}</span></td>
-                <td><strong>${m.machineNumber}</strong></td>
-                <td>${typeIcon[m.deviceType] || ''} ${typeLabel[m.deviceType] || '-'}</td>
-                <td><span class="badge ${m.status === 'online' ? 'badge-online' : 'badge-offline'}">${m.status === 'online' ? '上线' : '下线'}</span></td>
-                <td>${m.status === 'online' ? (m.onlineReason || '-') : (m.offlineReason || '-')}</td>
-                <td>${this._formatTime(m.onlineTime)}</td>
-                <td>${this._formatTime(m.offlineTime)}</td>
-                <td>${m.updatedBy || '-'}</td>
-                <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteMachine('${m.id}')">删除</button>` : ''}</td>
-              </tr>
-            `).join('')
-          }</tbody>
-        </table>
-      </div>
+      ${statsHtml}
+      ${toolbar}
+      ${body}
     `;
     document.getElementById('main-content').innerHTML = html;
+  },
+
+  filterMachines(status) {
+    this._machineFilter = status;
+    document.querySelectorAll('.ts-filter-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('machine-filter-' + status);
+    if (btn) btn.classList.add('active');
+    document.querySelectorAll('.ts-card[data-machine-status], tr[data-machine-status]').forEach(el => {
+      if (status === 'all') { el.style.display = ''; }
+      else { el.style.display = el.dataset.machineStatus === status || el.dataset.machineStatus === (status === 'online' ? 'online' : 'offline') ? '' : 'none'; }
+    });
   },
 
   showMachineForm(presetNumber, presetStatus) {
