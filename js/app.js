@@ -2030,19 +2030,61 @@ const App = {
   _showShipDialog() {
     const damaged = Storage.getSNRegistry().filter(r => r.status === 'damaged');
     if (damaged.length === 0) { this.notify('没有待发货的损坏手套', 'warning'); return; }
+
+    const eqCounts = {};
+    damaged.forEach(r => {
+      const key = this._equipmentLabel(r.equipmentType, r.handType);
+      eqCounts[key] = (eqCounts[key] || 0) + 1;
+    });
+    const statsHtml = Object.entries(eqCounts).map(([k, v]) =>
+      `<span class="ts-status-badge ts-status-pending">${k}: ${v}只</span>`
+    ).join('');
+
     const checkboxes = damaged.map(r => `
-      <label style="display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;">
-        <input type="checkbox" class="ship-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" data-reason="${r.damageReason||''}">
-        <code>${r.snCode}</code> ${r.equipmentType} ${r.handType==='left'?'左手':r.handType==='right'?'右手':''} ${r.damageReason?'- '+r.damageReason:''}
+      <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-radius:8px;transition:all var(--transition);" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
+        <input type="checkbox" class="ship-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" data-reason="${r.damageReason||''}" style="width:18px;height:18px;accent-color:var(--color-primary);">
+        <div style="flex:1;">
+          <div style="font-weight:600;color:var(--text-primary);font-size:0.9rem;">${r.snCode}</div>
+          <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:2px;">
+            ${this._equipmentLabel(r.equipmentType, r.handType)}
+            ${r.handType==='left'?' · 左手':r.handType==='right'?' · 右手':''}
+            ${r.damageReason?' · 损坏原因: '+r.damageReason:''}
+          </div>
+        </div>
       </label>`).join('');
-    const btnSelectAll = `<button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.ship-sn-check').forEach(c=>c.checked=true)">全选</button>`;
+
     const html = `
-      <div class="form-group"><label>选择SN码 <span class="required">*</span> ${btnSelectAll}</label>
-        <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border-color);border-radius:6px;padding:4px 8px;">${checkboxes}</div>
+      <div style="margin-bottom:16px;padding:14px 16px;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:var(--radius-md);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="font-size:1.5rem;">📦</span>
+          <div>
+            <div style="font-weight:700;color:#92400e;font-size:1rem;">发货给厂家</div>
+            <div style="font-size:0.8rem;color:#b45309;">共 ${damaged.length} 只损坏设备待发货</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">${statsHtml}</div>
       </div>
-      <div class="form-group"><label>快递单号 <span style="font-weight:normal;color:var(--text-tertiary);">(选填)</span></label><input type="text" id="ship-tracking" placeholder="多只一起寄时选填"></div>
+
+      <div class="ts-form-group">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <label class="ts-form-label" style="margin-bottom:0;">选择SN码 <span class="req">*</span></label>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.ship-sn-check').forEach(c=>c.checked=true)">全选</button>
+            <button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.ship-sn-check').forEach(c=>c.checked=false)">取消</button>
+          </div>
+        </div>
+        <div style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border-color);border-radius:var(--radius-md);padding:4px;background:var(--bg-card);">
+          ${checkboxes}
+        </div>
+      </div>
+
+      <div class="ts-form-group">
+        <label class="ts-form-label">快递单号 <span style="font-weight:normal;color:var(--text-tertiary);">(选填)</span></label>
+        <input type="text" id="ship-tracking" class="ts-form-input" placeholder="多只一起寄时可填写快递单号">
+        <div class="ts-form-hint">💡 填写快递单号后便于后续追踪物流信息</div>
+      </div>
     `;
-    this.showModal('发货给厂家', html, () => {
+    this.showModal('📦 发货给厂家', html, () => {
       const checked = document.querySelectorAll('.ship-sn-check:checked');
       if (checked.length === 0) { this.notify('请至少选择一个SN码', 'error'); return false; }
       const tracking = document.getElementById('ship-tracking').value.trim();
@@ -2057,7 +2099,6 @@ const App = {
           snCode: sn, updatedBy: user,
           note: `售后发货给厂家${tracking ? '，快递单号: ' + tracking : ''}`,
         });
-        // Consolidate: single server call with all fields, preserve damageReason
         const entry = { snCode: sn, equipmentType: eqType, handType: hand, status: 'in_repair', machineNumber: '', damageReason: reason, trackingNumber: tracking || '无单号', shippedAt: new Date().toISOString() };
         Storage.upsertSNRegistry(entry);
         if (API.online) { API.upsertSNRegistry(entry).catch(() => {}); }
@@ -2071,14 +2112,64 @@ const App = {
   _showRepairCompleteDialog() {
     const inRepair = Storage.getSNRegistry().filter(r => r.status === 'in_repair');
     if (inRepair.length === 0) { this.notify('没有售后中的手套', 'warning'); return; }
-    const opts = inRepair.map(r => `<option value="${r.snCode}">${r.snCode} (${r.equipmentType} ${r.handType === 'left' ? '左手' : '右手'}) 📦${r.trackingNumber || ''}</option>`).join('');
+
+    const eqCounts = {};
+    inRepair.forEach(r => {
+      const key = this._equipmentLabel(r.equipmentType, r.handType);
+      eqCounts[key] = (eqCounts[key] || 0) + 1;
+    });
+    const statsHtml = Object.entries(eqCounts).map(([k, v]) =>
+      `<span class="ts-status-badge ts-status-responded">${k}: ${v}只</span>`
+    ).join('');
+
+    const checkboxes = inRepair.map(r => `
+      <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-radius:8px;transition:all var(--transition);" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
+        <input type="checkbox" class="repair-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" style="width:18px;height:18px;accent-color:var(--color-success);">
+        <div style="flex:1;">
+          <div style="font-weight:600;color:var(--text-primary);font-size:0.9rem;">${r.snCode}</div>
+          <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:2px;">
+            ${this._equipmentLabel(r.equipmentType, r.handType)}
+            ${r.handType==='left'?' · 左手':r.handType==='right'?' · 右手':''}
+            ${r.trackingNumber?' 📦'+r.trackingNumber:''}
+          </div>
+        </div>
+      </label>`).join('');
+
     const html = `
-      <div class="form-group"><label>选择SN码 <span class="required">*</span> <button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.repair-sn-check').forEach(c=>c.checked=true)">全选</button></label>
-        <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border-color);border-radius:6px;padding:4px 8px;">${inRepair.map(r => `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;"><input type="checkbox" class="repair-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}"><code>${r.snCode}</code> ${r.equipmentType} ${r.handType==='left'?'左手':r.handType==='right'?'右手':''} ${r.trackingNumber?'📦'+r.trackingNumber:''}</label>`).join('')}</div>
+      <div style="margin-bottom:16px;padding:14px 16px;background:linear-gradient(135deg,#d1fae5,#a7f3d0);border-radius:var(--radius-md);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="font-size:1.5rem;">✅</span>
+          <div>
+            <div style="font-weight:700;color:#065f46;font-size:1rem;">维修完成</div>
+            <div style="font-size:0.8rem;color:#047857;">共 ${inRepair.length} 只设备正在售后维修中</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">${statsHtml}</div>
       </div>
-      <p class="form-hint">维修完成后，手套将回到空闲库存</p>
+
+      <div class="ts-form-group">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <label class="ts-form-label" style="margin-bottom:0;">选择SN码 <span class="req">*</span></label>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.repair-sn-check').forEach(c=>c.checked=true)">全选</button>
+            <button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.repair-sn-check').forEach(c=>c.checked=false)">取消</button>
+          </div>
+        </div>
+        <div style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border-color);border-radius:var(--radius-md);padding:4px;background:var(--bg-card);">
+          ${checkboxes}
+        </div>
+      </div>
+
+      <div style="padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);border-left:4px solid var(--color-success);">
+        <div style="display:flex;align-items:flex-start;gap:8px;">
+          <span style="font-size:1.1rem;">💡</span>
+          <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.5;">
+            维修完成后，选中的设备将从售后状态恢复为<span style="color:var(--color-success);font-weight:600;">空闲库存</span>，并自动生成入库流水记录。
+          </div>
+        </div>
+      </div>
     `;
-    this.showModal('维修完成', html, () => {
+    this.showModal('✅ 维修完成', html, () => {
       const checked = document.querySelectorAll('.repair-sn-check:checked');
       if (checked.length === 0) { this.notify('请至少选择一个SN码', 'error'); return false; }
       const user = API.currentUser?.username || '系统';
@@ -2090,14 +2181,12 @@ const App = {
         if (eqType === 'glove') invType = hand === 'left' ? 'left_glove' : 'right_glove';
         else if (eqType === 'dexterous_hand') invType = hand === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
         else invType = eqType;
-        // 仅本地更新库存（服务器端 handleRepairCompleteSN 会同步更新服务端库存）
         const current = Storage.getInventory(invType);
         Storage.setInventory(invType, current.quantity + 1, user);
         Storage.addTransaction({
           equipmentType: eqType, handType: hand, direction: 'in', quantity: 1,
           snCode: sn, updatedBy: user, note: '【售后完成】维修完成，回到空闲库存',
         });
-        // Consolidate: single server call with all fields
         const entry = { snCode: sn, equipmentType: eqType, handType: hand, status: 'available', machineNumber: '', damageReason: '', trackingNumber: '', repairedAt: new Date().toISOString() };
         Storage.upsertSNRegistry(entry);
         if (API.online) { API.repairCompleteSN(sn).catch(() => {}); }
