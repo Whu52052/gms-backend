@@ -1679,7 +1679,8 @@ const App = {
           if (snTx) attachment = snTx.attachment;
         }
         if (attachment) {
-          preview.innerHTML = '<a href="' + attachment + '" target="_blank" title="查看附件"><img src="' + attachment + '" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid var(--border-color);" onerror="this.outerHTML=\'📎\'"></a>';
+          const isDataUrl = attachment.startsWith('data:');
+          preview.innerHTML = '<a href="' + attachment + '" target="_blank" title="查看附件" style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--border-color);border-radius:6px;font-size:0.8rem;color:var(--text-secondary);text-decoration:none;">📎 附件</a>';
         } else {
           preview.innerHTML = '';
         }
