@@ -674,6 +674,37 @@ async function invalidateUserTokens(userId) {
   saveTokens();
 }
 
+// 获取在线用户ID集合（从Redis或内存）
+async function getOnlineUserIds() {
+  const onlineIds = new Set();
+  if (redisClient) {
+    try {
+      // 扫描所有 tk:* key，获取在线用户
+      const keys = [];
+      for await (const key of redisClient.scanIterator({ MATCH: 'tk:*', COUNT: 100 })) {
+        keys.push(key);
+      }
+      for (const key of keys) {
+        try {
+          const raw = await redisClient.get(key);
+          if (raw) {
+            const t = JSON.parse(raw);
+            if (t.expires > Date.now()) {
+              onlineIds.add(t.userId);
+            }
+          }
+        } catch {}
+      }
+      return onlineIds;
+    } catch (e) {
+      console.warn('[Redis] getOnlineUserIds failed, fallback to memory:', e.message);
+    }
+  }
+  // 内存降级方案
+  Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
+  return onlineIds;
+}
+
 // ==================== REALTIME (SSE + WebSocket 双通道) ====================
 // realtime 引擎统一管理 SSE 和 WebSocket 连接
 // SSE 客户端通过 realtime.addSSEClient/res 添加
@@ -971,8 +1002,7 @@ async function handleGetUsers(req, res, user) {
     users = users.filter(u => u.id === user.userId || u.parentId === user.userId || u.createdBy === user.userId);
   }
   // Superadmin sees all users within their own system
-  const onlineIds = new Set();
-  Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
+  const onlineIds = await getOnlineUserIds();
   sendJSON(res, users.map(u => ({ id: u.id, username: u.username, displayName: u.displayName || u.username, role: u.role, system: u.system || 'maintenance', status: u.status || 'active', parentId: u.parentId || null, createdAt: u.createdAt, online: onlineIds.has(u.id) })));
 }
 
@@ -1063,20 +1093,41 @@ async function handleUpdateUser(req, res, user, userId, body) {
   sendJSON(res, { success: true, message: '修改成功' });
 }
 
-function handleGetOnlineUsers(req, res, user) {
+async function handleGetOnlineUsers(req, res, user) {
   if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限' }, 403);
-  const online = [], seen = new Set();
-  Object.values(tokens).forEach(t => {
-    if (t.expires > Date.now() && !seen.has(t.userId)) { seen.add(t.userId); online.push({ userId: t.userId, username: t.username, role: t.role }); }
-  });
+  const onlineIds = await getOnlineUserIds();
+  // 从Redis获取用户详细信息（需要遍历所有token获取username/role）
+  const online = [];
+  if (redisClient) {
+    try {
+      for await (const key of redisClient.scanIterator({ MATCH: 'tk:*', COUNT: 100 })) {
+        const raw = await redisClient.get(key);
+        if (raw) {
+          const t = JSON.parse(raw);
+          if (t.expires > Date.now() && onlineIds.has(t.userId)) {
+            online.push({ userId: t.userId, username: t.username, role: t.role });
+          }
+        }
+      }
+    } catch {}
+  }
+  // 如果Redis失败，使用内存降级
+  if (online.length === 0) {
+    const seen = new Set();
+    Object.values(tokens).forEach(t => {
+      if (t.expires > Date.now() && !seen.has(t.userId)) {
+        seen.add(t.userId);
+        online.push({ userId: t.userId, username: t.username, role: t.role });
+      }
+    });
+  }
   sendJSON(res, online);
 }
 
 async function handleGetSubordinates(req, res, user) {
   if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限' }, 403);
   const [allUsers] = await pool.execute('SELECT * FROM users WHERE parentId = ? OR createdBy = ?', [user.userId, user.userId]);
-  const onlineIds = new Set();
-  Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
+  const onlineIds = await getOnlineUserIds();
   sendJSON(res, allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, system: u.system || 'maintenance', parentId: u.parentId || null, createdAt: u.createdAt, online: onlineIds.has(u.id) })));
 }
 
@@ -2936,21 +2987,34 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.url === '/api/status' && req.method === 'GET') {
-      const onlineIds = new Set();
-      Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
-      const count = onlineIds.size;
-      // Load level: idle(0) / smooth(1-99) / busy(100-199) / full(200+)
-      let level = 'idle', label = '空闲';
-      if (count >= 200) { level = 'full'; label = '爆满'; }
-      else if (count >= 100) { level = 'busy'; label = '拥挤'; }
-      else if (count >= 1) { level = 'smooth'; label = '畅通'; }
-      return sendJSON(res, {
-        status: 'ok',
-        onlineUsers: count,
-        loadLevel: level,
-        loadLabel: label,
-        version: '3.9.0',
+      // 异步获取在线用户数（从Redis或内存）
+      getOnlineUserIds().then(onlineIds => {
+        const count = onlineIds.size;
+        // Load level: idle(0) / smooth(1-99) / busy(100-199) / full(200+)
+        let level = 'idle', label = '空闲';
+        if (count >= 200) { level = 'full'; label = '爆满'; }
+        else if (count >= 100) { level = 'busy'; label = '拥挤'; }
+        else if (count >= 1) { level = 'smooth'; label = '畅通'; }
+        sendJSON(res, {
+          status: 'ok',
+          onlineUsers: count,
+          loadLevel: level,
+          loadLabel: label,
+          version: '3.9.0',
+        });
+      }).catch(e => {
+        // 降级：使用内存统计
+        const onlineIds = new Set();
+        Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
+        sendJSON(res, {
+          status: 'ok',
+          onlineUsers: onlineIds.size,
+          loadLevel: 'idle',
+          loadLabel: '空闲',
+          version: '3.9.0',
+        });
       });
+      return;
     }
 
     if (req.url === '/api/events' && req.method === 'GET') {
