@@ -1578,21 +1578,14 @@ const App = {
         ${filteredList.length===0?emptyHtml:''}
         ${filteredList.map(sn => {
           const s = SN_ST[sn.status] || SN_ST['可用'];
-          const hasImg = sn.attachment && sn.attachment.length > 0;
-          return `<div class="ts-card ${sn.status==='在用'?'responded':sn.status==='损坏'||sn.status==='售后中'?'pending':'idle'}" data-sn-status="${sn.status==='在用'?'inuse':sn.status==='损坏'||sn.status==='售后中'?'damaged':'idle'}" style="padding:16px;">
-            <div style="display:flex;gap:14px;align-items:flex-start;">
-              <div style="width:64px;height:64px;border-radius:10px;overflow:hidden;flex-shrink:0;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;font-size:2rem;border:1px solid var(--border-color);">
-                ${hasImg ? '<img src="'+sn.attachment+'" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="this.style.display=\'none\';this.parentElement.innerHTML=\''+s.icon+'\';">' : s.icon}
-              </div>
-              <div style="flex:1;min-width:0;">
-                <div style="font-size:1rem;font-weight:700;color:var(--text-primary);margin-bottom:4px;"><code style="font-size:0.95rem;">${sn.snCode}</code></div>
-                <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">${sn.type}${sn.handLabel?' · '+sn.handLabel:''}</div>
-                ${sn.machine?`<div style="font-size:0.8rem;color:var(--text-secondary);">🖥 ${sn.machine}</div>`:''}
-              </div>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:10px;border-top:1px solid var(--border-color);font-size:0.78rem;">
-              <span style="color:var(--text-tertiary);">🕐 ${fm(sn.latest.timestamp)}</span>
-              <span class="ts-status-badge ${s.c}">${sn.status}</span>
+          return `<div class="ts-card ${sn.status==='在用'?'responded':sn.status==='损坏'||sn.status==='售后中'?'pending':'idle'}" data-sn-status="${sn.status==='在用'?'inuse':sn.status==='损坏'||sn.status==='售后中'?'damaged':'idle'}">
+            <div class="ts-card-icon">${s.icon}</div>
+            <div class="ts-card-title"><code>${sn.snCode}</code></div>
+            <div class="ts-card-sub">${sn.type}${sn.handLabel?' · '+sn.handLabel:''}</div>
+            ${sn.machine?`<div style="font-size:0.85rem;color:var(--text-secondary);margin-top:2px;">🖥 ${sn.machine}</div>`:''}
+            <div class="ts-card-footer">
+              <span>🕐 ${fm(sn.latest.timestamp)}</span>
+              <span style="margin-left:auto;"><span class="ts-status-badge ${s.c}">${sn.status}</span></span>
             </div>
           </div>`;
         }).join('')}
