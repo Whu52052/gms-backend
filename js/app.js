@@ -4764,117 +4764,115 @@ const App = {
 
       ${undoHtml}
 
-      <!-- Filter toggle button (mobile only) -->
-      <div class="filter-toggle-bar">
-        <button class="btn btn-outline" onclick="App.toggleFilterBar()">
-          🔍 筛选${activeFilterCount > 0 ? '<span class="filter-count">'+activeFilterCount+'</span>' : ''}
-        </button>
+      <!-- Stats cards -->
+      <div class="ts-stats-row">
+        <div class="ts-stat-card total"><div class="ts-stat-icon">📝</div><div class="ts-stat-content"><div class="ts-stat-value">${transactions.length}</div><div class="ts-stat-label">总记录数</div></div></div>
+        <div class="ts-stat-card"><div class="ts-stat-icon">📥</div><div class="ts-stat-content"><div class="ts-stat-value">${transactions.filter(t => t.direction === 'in').length}</div><div class="ts-stat-label">入库</div></div></div>
+        <div class="ts-stat-card"><div class="ts-stat-icon">📤</div><div class="ts-stat-content"><div class="ts-stat-value">${transactions.filter(t => t.direction === 'out').length}</div><div class="ts-stat-label">出库</div></div></div>
       </div>
 
-      <!-- Filter bar (collapsible on mobile) -->
-      <div class="filter-bar collapsible" id="tx-filter-bar">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;flex:1;">
-          <select id="filter-equipment" onchange="App.applyFilter('equipmentType', this.value)">
-            <option value="all">全部设备</option>
-            <option value="glove">手套</option>
-            <option value="dexterous_hand">灵巧手</option>
-            <option value="gripper">夹爪(Pika)</option>
-          </select>
-          <select id="filter-direction" onchange="App.applyFilter('direction', this.value)">
-            <option value="all">全部操作</option>
-            <option value="in">入库</option>
-            <option value="out">出库</option>
-          </select>
-          <input type="date" id="filter-date-from" onchange="App.applyFilter('dateFrom', this.value)" placeholder="开始">
-          <input type="date" id="filter-date-to" onchange="App.applyFilter('dateTo', this.value)" placeholder="结束">
-          <input type="text" id="filter-search" onkeydown="if(event.key==='Enter')App.applyFilter('search',this.value)" placeholder="🔍 搜索...(回车执行)" style="min-width:120px;">
+      <!-- Toolbar -->
+      <div class="ts-toolbar">
+        <div class="ts-filter-bar">
+          <button class="ts-filter-btn ${this.filters.equipmentType === 'all' ? 'active' : ''}" onclick="App.applyFilter('equipmentType','all')">全部设备</button>
+          <button class="ts-filter-btn ${this.filters.equipmentType === 'glove' ? 'active' : ''}" onclick="App.applyFilter('equipmentType','glove')">手套</button>
+          <button class="ts-filter-btn ${this.filters.equipmentType === 'dexterous_hand' ? 'active' : ''}" onclick="App.applyFilter('equipmentType','dexterous_hand')">灵巧手</button>
+          <button class="ts-filter-btn ${this.filters.equipmentType === 'gripper' ? 'active' : ''}" onclick="App.applyFilter('equipmentType','gripper')">夹爪</button>
         </div>
-        <div class="quick-row" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+        <div style="display:flex;gap:6px;">
+          <select id="filter-direction" onchange="App.applyFilter('direction', this.value)" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);">
+            <option value="all" ${this.filters.direction === 'all' ? 'selected' : ''}>全部操作</option>
+            <option value="in" ${this.filters.direction === 'in' ? 'selected' : ''}>入库</option>
+            <option value="out" ${this.filters.direction === 'out' ? 'selected' : ''}>出库</option>
+          </select>
+          <input type="text" id="filter-search" onkeydown="if(event.key==='Enter')App.applyFilter('search',this.value)" placeholder="🔍 搜索..." style="padding:6px 10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);min-width:120px;">
+          <button class="btn btn-sm btn-outline" onclick="App.clearFilters()">清除</button>
+          <button class="btn btn-sm btn-outline" onclick="App.toggleTxViewMode()">
+            ${this._txViewMode === 'card' ? '📋 表格' : '🃏 卡片'}
+          </button>
+        </div>
+      </div>
+
+      <!-- Date filter bar -->
+      <div class="ts-toolbar" style="margin-top:8px;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input type="date" id="filter-date-from" onchange="App.applyFilter('dateFrom', this.value)" placeholder="开始" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);">
+          <span style="display:flex;align-items:center;color:var(--text-secondary);">-</span>
+          <input type="date" id="filter-date-to" onchange="App.applyFilter('dateTo', this.value)" placeholder="结束" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);">
           <button class="btn btn-sm" onclick="App.setQuickTxRange('today')">今天</button>
           <button class="btn btn-sm" onclick="App.setQuickTxRange('week')">本周</button>
           <button class="btn btn-sm" onclick="App.setQuickTxRange('month')">本月</button>
-          <button class="btn btn-sm btn-outline" onclick="App.clearFilters()">清除</button>
         </div>
       </div>
 
-      <!-- Desktop table view -->
-      <div class="desktop-only">
-        <div class="table-container">
-          <table class="data-table">
-            <thead><tr>${sortableHeader('timestamp','时间')}${sortableHeader('equipmentType','设备类型')}${sortableHeader('handType','左右手')}${sortableHeader('direction','操作')}${sortableHeader('quantity','数量')}<th>SN码</th><th>机器编号</th>${sortableHeader('updatedBy','更新人')}<th>备注</th><th>操作</th></tr></thead>
-            <tbody>${empty ? '<tr><td colspan="10" class="empty-text">暂无流水记录</td></tr>' :
-              paged.map(t => `
-                <tr class="tx-row clickable" onclick="App.toggleTxDetail('${t.id}')" title="点击查看详情">
-                  <td title="${this._formatTime(t.timestamp)}">${this._formatTime(t.timestamp)}</td>
-                  <td>${this._equipmentLabel(t.equipmentType, t.handType)}</td>
-                  <td>${t.handType === 'left' ? '左手' : t.handType === 'right' ? '右手' : '-'}</td>
-                  <td><span class="badge ${t.direction === 'in' ? 'badge-in' : 'badge-out'}">${t.direction === 'in' ? '入库' : '出库'}</span></td>
-                  <td>${t.quantity}</td>
-                  <td>${t.snCode || '-'} ${t.attachment ? '<a href="'+t.attachment+'" target="_blank" title="查看附件">📎</a>' : ''}</td>
-                  <td>${t.machineNumber || '-'}</td>
-                  <td>${t.updatedBy || '-'}</td>
-                  <td>${t.note || '-'}</td>
-                  <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="event.stopPropagation();App.deleteTransaction('${t.id}')">删除</button>` : ''}</td>
-                </tr>
-                <tr class="tx-detail" id="tx-detail-${t.id}" style="display:none;">
-                  <td colspan="10">
-                    <div class="tx-detail-content">
-                      <div class="tx-detail-row"><span>时间:</span><strong>${this._formatTime(t.timestamp)}</strong></div>
-                      <div class="tx-detail-row"><span>设备:</span><strong>${this._equipmentLabel(t.equipmentType, t.handType)}</strong></div>
-                      <div class="tx-detail-row"><span>操作:</span><span class="badge ${t.direction === 'in' ? 'badge-in' : 'badge-out'}">${t.direction === 'in' ? '入库' : '出库'}</span></div>
-                      <div class="tx-detail-row"><span>数量:</span><strong>${t.quantity}</strong></div>
-                      <div class="tx-detail-row"><span>SN码:</span><strong>${t.snCode || '-'}</strong></div>
-                      <div class="tx-detail-row"><span>机器编号:</span><strong>${t.machineNumber || '-'}</strong></div>
-                      <div class="tx-detail-row"><span>更新人:</span><strong>${t.updatedBy || '-'}</strong></div>
-                      <div class="tx-detail-row"><span>备注:</span><strong>${t.note || '-'}</strong></div>
-                      <div class="tx-detail-row"><span>记录ID:</span><code style="font-size:0.7rem;">${t.id}</code></div>
-                    </div>
-                  </td>
-                </tr>
-              `).join('')
-            }</tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Mobile card view -->
-      <div class="mobile-only">
-        ${empty ? '<div class="empty-text">暂无流水记录</div>' : `
-        <div class="tx-mobile-list">
-          ${paged.map(t => {
-            const label = this._equipmentLabel(t.equipmentType, t.handType);
-            const handLabel = t.handType === 'left' ? '左手' : t.handType === 'right' ? '右手' : '';
-            return '<div class="tx-mobile-card' + (t.direction === 'out' ? ' tx-out' : '') + '" onclick="App.toggleTxCard(this,\'' + t.id + '\')">'
-              + '<div class="tx-card-main">'
-              + '<div class="tx-card-body">'
-              + '<div class="tx-card-equip">' + label + (handLabel ? ' (' + handLabel + ')' : '') + '</div>'
-              + '<div class="tx-card-sub">'
-              + (t.snCode ? '<span>SN:' + t.snCode + '</span>' : '')
-              + (t.machineNumber ? '<span>机器:' + t.machineNumber + '</span>' : '')
-              + '</div>'
-              + '</div>'
-              + '<div class="tx-card-qty" style="color:' + (t.direction === 'in' ? 'var(--color-success)' : 'var(--color-danger)') + '">' + (t.direction === 'in' ? '+' : '-') + t.quantity + '</div>'
-              + '</div>'
-              + '<div class="tx-card-meta">'
-              + '<span>' + this._formatTime(t.timestamp) + ' · ' + (t.updatedBy || '-') + '</span>'
-              + '<span class="tx-expand-hint">详情 ▸</span>'
-              + '</div>'
-              + '<div class="tx-card-expand">'
-              + '<div class="tx-expand-row"><span class="lbl">时间</span><span class="val">' + this._formatTime(t.timestamp) + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">设备</span><span class="val">' + label + (handLabel ? ' (' + handLabel + ')' : '') + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">操作</span><span class="val" style="color:' + (t.direction === 'in' ? 'var(--color-success)' : 'var(--color-danger)') + '">' + (t.direction === 'in' ? '入库' : '出库') + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">数量</span><span class="val">' + t.quantity + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">SN码</span><span class="val">' + (t.snCode || '-') + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">机器编号</span><span class="val">' + (t.machineNumber || '-') + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">更新人</span><span class="val">' + (t.updatedBy || '-') + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">备注</span><span class="val">' + (t.note || '-') + '</span></div>'
-              + (this._isPrivileged() ? '<button class="btn btn-xs btn-danger" onclick="event.stopPropagation();App.deleteTransaction(\'' + t.id + '\')" style="width:100%;">删除</button>' : '')
-              + '</div>'
-              + '</div>';
-          }).join('')}
-        </div>
+      <!-- Content area -->
+      ${empty ? '<div class="ts-empty" style="margin-top:24px;"><div class="ts-empty-icon">📝</div><div class="ts-empty-text">暂无流水记录</div><div class="ts-empty-sub">进行库存操作后会在这里记录</div></div>' : `
+        ${this._txViewMode === 'card' ? `
+          <!-- Card view -->
+          <div class="ts-list">
+            ${paged.map(t => {
+              const label = this._equipmentLabel(t.equipmentType, t.handType);
+              const handLabel = t.handType === 'left' ? '左手' : t.handType === 'right' ? '右手' : '';
+              const isIn = t.direction === 'in';
+              return `<div class="ts-card">
+                <div class="ts-card-icon" style="background:${isIn ? 'var(--color-success)' : 'var(--color-danger)'};color:white;">${isIn ? '📥' : '📤'}</div>
+                <div class="ts-card-title">${label}${handLabel ? ' (' + handLabel + ')' : ''}</div>
+                <div class="ts-card-sub">${t.snCode || '无SN码'} · ${t.machineNumber || '无机器编号'}</div>
+                <div style="font-size:0.85rem;color:var(--text-secondary);margin-top:4px;">数量：<span style="font-weight:600;color:${isIn ? 'var(--color-success)' : 'var(--color-danger)'}">${isIn ? '+' : '-'}${t.quantity}</span></div>
+                ${t.note ? `<div style="font-size:0.8rem;color:var(--text-tertiary);margin-top:2px;">备注：${t.note}</div>` : ''}
+                <div class="ts-card-footer">
+                  <span>${this._formatTime(t.timestamp)}</span>
+                  <span style="margin-left:auto;">
+                    ${t.updatedBy || '-'}
+                    ${t.attachment ? ' <a href="'+t.attachment+'" target="_blank" title="查看附件">📎</a>' : ''}
+                    ${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')" style="margin-left:8px;">删除</button>` : ''}
+                  </span>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        ` : `
+          <!-- Table view -->
+          <div class="desktop-only">
+            <div class="table-container">
+              <table class="ts-log-table">
+                <thead><tr>${sortableHeader('timestamp','时间')}${sortableHeader('equipmentType','设备类型')}${sortableHeader('handType','左右手')}${sortableHeader('direction','操作')}${sortableHeader('quantity','数量')}<th>SN码</th><th>机器编号</th>${sortableHeader('updatedBy','更新人')}<th>备注</th><th>操作</th></tr></thead>
+                <tbody>${
+                  paged.map(t => `
+                    <tr class="clickable" onclick="App.toggleTxDetail('${t.id}')" title="点击查看详情">
+                      <td title="${this._formatTime(t.timestamp)}">${this._formatTime(t.timestamp)}</td>
+                      <td>${this._equipmentLabel(t.equipmentType, t.handType)}</td>
+                      <td>${t.handType === 'left' ? '左手' : t.handType === 'right' ? '右手' : '-'}</td>
+                      <td><span class="ts-status-badge ${t.direction === 'in' ? 'ts-status-completed' : 'ts-status-pending'}">${t.direction === 'in' ? '入库' : '出库'}</span></td>
+                      <td>${t.direction === 'in' ? '+' : '-'}${t.quantity}</td>
+                      <td>${t.snCode || '-'} ${t.attachment ? '<a href="'+t.attachment+'" target="_blank" title="查看附件">📎</a>' : ''}</td>
+                      <td>${t.machineNumber || '-'}</td>
+                      <td>${t.updatedBy || '-'}</td>
+                      <td>${t.note || '-'}</td>
+                      <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="event.stopPropagation();App.deleteTransaction('${t.id}')">删除</button>` : ''}</td>
+                    </tr>
+                    <tr class="tx-detail" id="tx-detail-${t.id}" style="display:none;">
+                      <td colspan="10">
+                        <div class="tx-detail-content">
+                          <div class="tx-detail-row"><span>时间:</span><strong>${this._formatTime(t.timestamp)}</strong></div>
+                          <div class="tx-detail-row"><span>设备:</span><strong>${this._equipmentLabel(t.equipmentType, t.handType)}</strong></div>
+                          <div class="tx-detail-row"><span>操作:</span><span class="ts-status-badge ${t.direction === 'in' ? 'ts-status-completed' : 'ts-status-pending'}">${t.direction === 'in' ? '入库' : '出库'}</span></div>
+                          <div class="tx-detail-row"><span>数量:</span><strong>${t.quantity}</strong></div>
+                          <div class="tx-detail-row"><span>SN码:</span><strong>${t.snCode || '-'}</strong></div>
+                          <div class="tx-detail-row"><span>机器编号:</span><strong>${t.machineNumber || '-'}</strong></div>
+                          <div class="tx-detail-row"><span>更新人:</span><strong>${t.updatedBy || '-'}</strong></div>
+                          <div class="tx-detail-row"><span>备注:</span><strong>${t.note || '-'}</strong></div>
+                          <div class="tx-detail-row"><span>记录ID:</span><code style="font-size:0.7rem;">${t.id}</code></div>
+                        </div>
+                      </td>
+                    </tr>
+                  `).join('')
+                }</tbody>
+              </table>
+            </div>
+          </div>
         `}
-      </div>
+      `}
 
       <!-- Pagination -->
       <div class="pagination" style="${empty ? 'display:none;' : ''}">
