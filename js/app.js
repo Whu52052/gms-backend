@@ -1426,14 +1426,12 @@ const App = {
       return '';
     }
 
-    // 以注册表为主要数据源，流水记录为补充
     const snMap = {};
 
     // 第一步：从注册表构建基础条目
     registry.forEach(r => {
       if (!r.snCode) return;
       if (r.status === '_deleted') return;
-      // Determine type label from registry
       let typeLabel = r.equipmentType || '';
       let handLabel = '';
       if (r.equipmentType === 'glove') {
@@ -1455,25 +1453,21 @@ const App = {
       };
     });
 
-    // 第二步：从流水记录补充/更新信息（附件、最近操作时间等），排除已删除的SN
+    // 第二步：从流水记录补充/更新信息
     const deletedSns = new Set(JSON.parse(localStorage.getItem('gms_deleted_sns') || '[]'));
     allSnTxs.forEach(t => {
       const key = t.snCode;
-      if (deletedSns.has(key)) return; // 已删除的SN不从流水复活
+      if (deletedSns.has(key)) return;
       if (!snMap[key]) {
         snMap[key] = { snCode: key, type: getLabel(t), handLabel: getHandLabel(t), attachment: '', latest: t };
       } else {
-        // 用流水中的附件补充注册表中没有的
         if (t.attachment && !snMap[key].attachment) snMap[key].attachment = t.attachment;
-        // 用最近的流水时间更新
         if (new Date(t.timestamp).getTime() > new Date(snMap[key].latest.timestamp).getTime()) {
           snMap[key].latest = t;
         }
       }
     });
 
-    // 合并注册表SN集合，只有注册表中存在的SN才允许显示
-    // 在线时以服务端为准（跨设备删除同步），离线时以本地为准
     const registrySnSet = new Set(registry.map(r => r.snCode).filter(Boolean));
     if (!API.online) {
       const localReg = Storage.getSNRegistry();
@@ -1482,7 +1476,6 @@ const App = {
 
     const snList = Object.values(snMap).filter(sn => registrySnSet.has(sn.snCode));
     snList.forEach(sn => {
-      // Check SN registry first for authoritative status
       const regEntry = Storage.getSNByCode(sn.snCode);
       if (regEntry && regEntry.status === 'damaged') {
         sn.status = '损坏';
@@ -1501,7 +1494,6 @@ const App = {
         sn.machine = '';
         sn.statusClass = 'badge-in';
       } else {
-        // Fallback: derive from transactions
         const txsForSn = allSnTxs.filter(t => t.snCode === sn.snCode).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         const latestTx = txsForSn[0];
         if (latestTx && latestTx.direction === 'out' && latestTx.machineNumber) {
@@ -1517,7 +1509,7 @@ const App = {
     });
     snList.sort((a, b) => new Date(b.latest.timestamp).getTime() - new Date(a.latest.timestamp).getTime());
 
-    // Split into three groups based on registry status
+    // 状态分组
     const inUseList = [], idleList = [], damagedList = [];
     snList.forEach(sn => {
       const reg = Storage.getSNByCode(sn.snCode);
@@ -1528,50 +1520,102 @@ const App = {
     });
 
     const self = this;
-    const snCard = (sn) => `
-      <div class="sn-card" data-status="${sn.status === '在用' ? 'inuse' : sn.status === '损坏' || sn.status === '售后中' ? 'damaged' : 'idle'}">
-        <div class="sn-card-thumb" style="position:relative;">
-          ${sn.attachment
-            ? `<a href="${sn.attachment}" target="_blank"><img src="${sn.attachment}" onerror="this.style.display='none';this.parentElement.innerHTML='<span style=font-size:2.5rem>📷</span>'"></a>`
-            : `<span style="font-size:2.5rem;">📷</span>`}
-          <span class="sn-upload-btn" onclick="event.stopPropagation();App._uploadSNPhoto('${sn.snCode}')" title="上传/更换照片">📷</span>
-        </div>
-        <div class="sn-card-body">
-          <code class="sn-card-code">${sn.snCode}</code>
-          <div class="sn-card-type">${sn.type}${sn.handLabel ? ' · ' + sn.handLabel : ''}</div>
-          <div class="sn-card-footer">
-            <span class="badge ${sn.statusClass || (sn.status === '可用' ? 'badge-in' : 'badge-out')}">${sn.status}${sn.machine ? ' · ' + sn.machine : ''}</span>
-            <span class="sn-card-time">${self._formatTime(sn.latest.timestamp)}</span>
-            ${sn.status === '可用' ? `<button class="btn btn-xs btn-warning" onclick="event.stopPropagation();App._markAsDamaged('${sn.snCode}')" title="标记为损坏" style="margin-left:4px;padding:1px 5px;font-size:0.65rem;">⚠</button><button class="btn btn-xs btn-outline" onclick="event.stopPropagation();App._transferOutSN('${sn.snCode}')" title="调出到外部场地" style="margin-left:2px;padding:1px 5px;font-size:0.65rem;">📤</button>` : ''}
-            ${self._isPrivileged() ? `<button class="btn btn-xs btn-danger sn-delete-btn" data-sn="${sn.snCode.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}" title="删除此SN码" style="margin-left:auto;">🗑</button>` : ''}
-          </div>
-        </div>
-      </div>`;
+    const viewMode = this._snViewMode || 'card';
+    const currentFilter = this._snFilter || 'all';
+    const counts = { all: snList.length, inuse: inUseList.length, idle: idleList.length, damaged: damagedList.length };
 
-    const html = `
-      <div class="page-header">
-        <h2>🏷️ SN码管理 <span style="font-size:0.5em;color:var(--text-tertiary);">v4.3</span></h2>
-        <span class="page-subtitle">共 ${snList.length} 个SN码${API.online ? ' · 已同步服务端' : ' · 离线模式'}</span>
+    const fm = t => t ? new Date(t).toLocaleString('zh-CN') : '-';
+
+    // 统计卡片行
+    const statsHtml = `<div class="ts-stats-row">
+      <div class="ts-stat-card total"><div class="ts-stat-icon">🏷️</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.all}</div><div class="ts-stat-label">SN总数</div></div></div>
+      <div class="ts-stat-card responded"><div class="ts-stat-icon">🟢</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.inuse}</div><div class="ts-stat-label">使用中</div></div></div>
+      <div class="ts-stat-card pending"><div class="ts-stat-icon">🟡</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.idle}</div><div class="ts-stat-label">闲置可用</div></div></div>
+      <div class="ts-stat-card"><div class="ts-stat-icon">🔴</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.damaged}</div><div class="ts-stat-label">售后/损坏</div></div></div>
+    </div>`;
+
+    const filterMap = { all: '全部', inuse: '使用中', idle: '闲置', damaged: '售后' };
+    const toolbar = `<div class="ts-toolbar">
+      <div class="ts-filter-bar">
+        ${['all','inuse','idle','damaged'].map(s => `<button class="ts-filter-btn ${s===currentFilter?'active':''}" onclick="App.filterSNList('${s}')" id="sn-filter-${s}">${filterMap[s]} (${counts[s]})</button>`).join('')}
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
-        <input type="text" id="sn-filter-input" placeholder="🔍 搜索SN码/类型..." oninput="App._filterSNCards()" style="flex:1;min-width:150px;padding:8px 12px;border:1px solid var(--border-color);border-radius:8px;font-size:0.9rem;">
-        <button class="btn btn-sm btn-primary sn-tab active" onclick="App._switchSNTab('all',this)">全部(${snList.length})</button>
-        <button class="btn btn-sm btn-outline sn-tab" onclick="App._switchSNTab('inuse',this)">使用中(${inUseList.length})</button>
-        <button class="btn btn-sm btn-outline sn-tab" onclick="App._switchSNTab('idle',this)">闲置(${idleList.length})</button>
-        <button class="btn btn-sm btn-outline sn-tab" onclick="App._switchSNTab('damaged',this)">售后(${damagedList.length})</button>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="text" id="sn-filter-input" placeholder="🔍 搜索SN码/类型..." oninput="App._filterSNCards()" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;font-size:0.85rem;width:180px;">
+        <button class="btn btn-sm ${viewMode==='card'?'btn-primary':'btn-outline'}" onclick="App.renderSNCodesView('card')">🃏 卡片</button>
+        <button class="btn btn-sm ${viewMode==='table'?'btn-primary':'btn-outline'}" onclick="App.renderSNCodesView('table')">📋 表格</button>
       </div>
-      <div class="sn-grid" id="sn-card-grid">
-        ${[...inUseList, ...idleList, ...damagedList].map(s => snCard(s)).join('')}
-      </div>
-      ${snList.length === 0 ? '<p class="empty-text">暂无SN码记录</p>' : ''}
-    `;
-    document.getElementById('main-content').innerHTML = html;
-    // 绑定删除按钮事件
-    document.querySelectorAll('.sn-delete-btn').forEach(btn => {
-      btn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        App._deleteSNCode(this.dataset.sn);
-      });
+    </div>`;
+
+    const emptyHtml = `<div class="ts-empty"><div class="ts-empty-icon">🏷️</div><div class="ts-empty-text">暂无SN码记录</div><div class="ts-empty-sub">${API.online ? '已同步服务端' : '离线模式'}</div></div>`;
+
+    const filteredList = currentFilter === 'all' ? snList : currentFilter === 'inuse' ? inUseList : currentFilter === 'idle' ? idleList : damagedList;
+
+    const SN_ST = { '在用': { c: 'ts-status-responded', icon: '🟢' }, '可用': { c: 'ts-status-pending', icon: '🟡' }, '损坏': { c: 'ts-status-pending', icon: '🔴' }, '售后中': { c: 'ts-status-responded', icon: '🚚' } };
+
+    let body;
+    if (viewMode === 'table') {
+      body = `<div class="ts-table-wrap"><table class="ts-log-table"><thead><tr><th>SN码</th><th>设备类型</th><th>状态</th><th>所属机器</th><th>最后操作</th><th>附件</th><th>操作</th></tr></thead><tbody>
+        ${filteredList.length===0?`<tr><td colspan="7">${emptyHtml}</td></tr>`:''}
+        ${filteredList.map(sn => {
+          const s = SN_ST[sn.status] || SN_ST['可用'];
+          return `<tr data-sn-status="${sn.status==='在用'?'inuse':sn.status==='损坏'||sn.status==='售后中'?'damaged':'idle'}">
+            <td><code>${sn.snCode}</code></td>
+            <td>${sn.type}${sn.handLabel?' · '+sn.handLabel:''}</td>
+            <td><span class="ts-status-badge ${s.c}">${s.icon} ${sn.status}</span></td>
+            <td>${sn.machine||'-'}</td>
+            <td style="font-size:0.8rem;white-space:nowrap;">${fm(sn.latest.timestamp)}</td>
+            <td>${sn.attachment?'<a href="'+sn.attachment+'" target="_blank">📷</a>':'-'}</td>
+            <td>
+              ${sn.status === '可用' ? `<button class="btn btn-xs btn-warning" onclick="App._markAsDamaged('${sn.snCode}')" title="标记损坏">⚠</button>` : ''}
+              ${self._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App._deleteSNCode('${sn.snCode.replace(/'/g,"\\'")}')" title="删除">🗑</button>` : ''}
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody></table></div>`;
+    } else {
+      body = `<div class="ts-list" id="sn-card-grid">
+        ${filteredList.length===0?emptyHtml:''}
+        ${filteredList.map(sn => {
+          const s = SN_ST[sn.status] || SN_ST['可用'];
+          return `<div class="ts-card ${sn.status==='在用'?'responded':sn.status==='损坏'||sn.status==='售后中'?'pending':'idle'}" data-sn-status="${sn.status==='在用'?'inuse':sn.status==='损坏'||sn.status==='售后中'?'damaged':'idle'}">
+            <div class="ts-card-icon">${s.icon}</div>
+            <div class="ts-card-title"><code>${sn.snCode}</code></div>
+            <div class="ts-card-sub">${sn.type}${sn.handLabel?' · '+sn.handLabel:''}</div>
+            ${sn.machine?`<div style="font-size:0.85rem;color:var(--text-secondary);margin-top:2px;">🖥 ${sn.machine}</div>`:''}
+            <div class="ts-card-footer">
+              <span>🕐 ${fm(sn.latest.timestamp)}</span>
+              <span style="margin-left:auto;"><span class="ts-status-badge ${s.c}">${sn.status}</span></span>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    }
+
+    const syncLabel = API.online ? '<span style="color:var(--color-success);">● 已同步</span>' : '<span style="color:var(--color-warning);">○ 离线</span>';
+    document.getElementById('main-content').innerHTML = `<div class="page-header"><h2>🏷️ SN码管理 <span style="font-size:0.5em;color:var(--text-tertiary);">v4.3</span></h2>${syncLabel}</div>${statsHtml}${toolbar}${body}`;
+  },
+
+  renderSNCodesView(viewMode) {
+    this._snViewMode = viewMode;
+    this._doRenderSNCodes();
+  },
+
+  filterSNList(status) {
+    this._snFilter = status;
+    document.querySelectorAll('.ts-filter-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('sn-filter-' + status);
+    if (btn) btn.classList.add('active');
+    document.querySelectorAll('.ts-card[data-sn-status], tr[data-sn-status]').forEach(el => {
+      if (status === 'all') { el.style.display = ''; }
+      else { el.style.display = el.dataset.snStatus === status ? '' : 'none'; }
+    });
+  },
+
+  _filterSNCards() {
+    const q = (document.getElementById('sn-filter-input')?.value || '').toLowerCase();
+    document.querySelectorAll('.ts-card[data-sn-status], tr[data-sn-status]').forEach(el => {
+      const text = el.textContent.toLowerCase();
+      el.style.display = text.includes(q) ? '' : 'none';
     });
   },
 
