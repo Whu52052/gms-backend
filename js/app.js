@@ -1578,14 +1578,18 @@ const App = {
         ${filteredList.length===0?emptyHtml:''}
         ${filteredList.map(sn => {
           const s = SN_ST[sn.status] || SN_ST['可用'];
-          return `<div class="ts-card ${sn.status==='在用'?'responded':sn.status==='损坏'||sn.status==='售后中'?'pending':'idle'}" data-sn-status="${sn.status==='在用'?'inuse':sn.status==='损坏'||sn.status==='售后中'?'damaged':'idle'}">
+          const hasImg = sn.attachment && sn.attachment.length > 0 && (sn.attachment.startsWith('data:') || sn.attachment.startsWith('http'));
+          return `<div class="ts-card ${sn.status==='在用'?'responded':sn.status==='损坏'||sn.status==='售后中'?'pending':'idle'}" data-sn-status="${sn.status==='在用'?'inuse':sn.status==='损坏'||sn.status==='售后中'?'damaged':'idle'}" data-sn-code="${sn.snCode}" style="cursor:pointer;position:relative;">
             <div class="ts-card-icon">${s.icon}</div>
             <div class="ts-card-title"><code>${sn.snCode}</code></div>
             <div class="ts-card-sub">${sn.type}${sn.handLabel?' · '+sn.handLabel:''}</div>
             ${sn.machine?`<div style="font-size:0.85rem;color:var(--text-secondary);margin-top:2px;">🖥 ${sn.machine}</div>`:''}
             <div class="ts-card-footer">
               <span>🕐 ${fm(sn.latest.timestamp)}</span>
-              <span style="margin-left:auto;"><span class="ts-status-badge ${s.c}">${sn.status}</span></span>
+              <span style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+                <a href="javascript:void(0)" onclick="event.stopPropagation();App._showSNAttachment('${sn.snCode}')" title="${hasImg ? '查看附件' : '点击上传附件'}" style="padding:3px 8px;border-radius:6px;background:${hasImg ? 'var(--color-success-bg, #dcfce7)' : 'var(--bg-secondary)'};color:${hasImg ? 'var(--color-success, #16a34a)' : 'var(--text-secondary)'};font-size:0.75rem;text-decoration:none;display:inline-flex;align-items:center;gap:3px;">📎 ${hasImg ? '查看' : '上传'}</a>
+                <span class="ts-status-badge ${s.c}">${sn.status}</span>
+              </span>
             </div>
           </div>`;
         }).join('')}
@@ -4173,13 +4177,87 @@ const App = {
 
   _showSNAttachment(snCode) {
     const reg = Storage.getSNByCode(snCode);
-    if (!reg || !reg.attachment) return;
-    const ext = reg.attachment.split('.').pop().toLowerCase();
-    const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
-    const contentHtml = isImage
-      ? `<div style="text-align:center;"><img src="${reg.attachment}" style="max-width:100%;max-height:70vh;border-radius:8px;" alt="${snCode} 附件"></div>`
-      : `<div style="text-align:center;"><a href="${reg.attachment}" target="_blank" class="btn btn-primary">📥 打开附件</a></div>`;
-    this._showInfoModal(`📎 ${snCode} 附件`, contentHtml);
+    const currentAttachment = reg && reg.attachment;
+    const isImage = currentAttachment && (currentAttachment.startsWith('data:image/') || /\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(currentAttachment));
+    
+    const canEdit = this._isPrivileged();
+    const contentHtml = `
+      <div style="text-align:center;">
+        ${currentAttachment ? `
+          ${isImage 
+            ? `<img src="${currentAttachment}" style="max-width:100%;max-height:60vh;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);" alt="${snCode} 附件">`
+            : `<a href="${currentAttachment}" target="_blank" class="btn btn-primary">📥 打开附件</a>`
+          }
+        ` : `
+          <div style="padding:40px 20px;color:var(--text-tertiary);">
+            <div style="font-size:3rem;margin-bottom:8px;">📎</div>
+            <div>暂无附件</div>
+          </div>
+        `}
+      </div>
+      ${canEdit ? `
+        <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+          <label class="btn btn-primary" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
+            📤 ${currentAttachment ? '重新上传' : '上传附件'}
+            <input type="file" accept="image/*" style="display:none;" onchange="App._uploadSNAttachment('${snCode}', this)">
+          </label>
+          ${currentAttachment ? `<button class="btn btn-danger" onclick="App._deleteSNAttachment('${snCode}')">🗑️ 删除附件</button>` : ''}
+        </div>
+      ` : ''}
+    `;
+    this._showInfoModal(`📎 ${snCode} 附件管理`, contentHtml);
+  },
+
+  async _uploadSNAttachment(snCode, fileInput) {
+    const file = fileInput.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('只支持图片文件');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      alert('文件大小超过限制(最大10MB)');
+      return;
+    }
+    
+    // 压缩图片
+    const compressed = await this._compressImage(file);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target.result;
+      try {
+        // 1. 上传到服务器
+        const uploadRes = await API._fetch('POST', '/api/upload', { filename: file.name, data: dataUrl });
+        // 2. 更新 SN 码记录的 attachment 字段
+        await API.upsertSNRegistry({
+          snCode,
+          attachment: uploadRes.path
+        });
+        alert('上传成功！');
+        this._showSNAttachment(snCode);
+        if (typeof this._doRenderSNCodes === 'function') this._doRenderSNCodes();
+      } catch (err) {
+        console.error('上传失败:', err);
+        alert('上传失败: ' + (err.message || '未知错误'));
+      }
+    };
+    reader.readAsDataURL(compressed);
+  },
+
+  async _deleteSNAttachment(snCode) {
+    if (!confirm(`确定要删除 ${snCode} 的附件吗？`)) return;
+    try {
+      await API.upsertSNRegistry({
+        snCode,
+        attachment: null
+      });
+      alert('删除成功！');
+      this._showSNAttachment(snCode);
+      if (typeof this._doRenderSNCodes === 'function') this._doRenderSNCodes();
+    } catch (err) {
+      console.error('删除失败:', err);
+      alert('删除失败: ' + (err.message || '未知错误'));
+    }
   },
 
   // ==================== DURATION FORMATTER ====================
