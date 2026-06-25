@@ -583,13 +583,13 @@ const OpsApp = {
     const adminInfo = groups.find(g => g.adminId === myGroup.adminId)?.adminName || myGroup.adminName;
     const pendingTransfers = transfers.filter(t => t.status === 'pending');
     const historyTransfers = transfers.filter(t => t.status !== 'pending');
+    const otherGroups = groups.filter(g => g.adminId !== user.id);
 
     const counts = {
       all: members.length,
-      members: members.filter(m => m.role !== 'admin').length,
-      admins: members.filter(m => m.role === 'admin').length,
       pending: pendingTransfers.length,
-      otherGroups: groups.filter(g => g.adminId !== user.id).length
+      otherGroups: otherGroups.length,
+      history: historyTransfers.length,
     };
 
     const fm = t => t ? new Date(t).toLocaleString('zh-CN') : '-';
@@ -602,12 +602,12 @@ const OpsApp = {
       ${isLeader && counts.otherGroups > 0 ? `<div class="ts-stat-card"><div class="ts-stat-icon">🌐</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.otherGroups}</div><div class="ts-stat-label">其他组</div></div></div>` : ''}
     </div>`;
 
-    const filterMap = isLeader ? { my: '我的组', pending: '待调配', history: '历史', all: '全部' } : { my: '我的组', all: '全部' };
+    const filterMap = isLeader ? { my: '我的组', pending: '待调配', other: '其他组', history: '历史', all: '全部' } : { my: '我的组', all: '全部' };
     const currentFilter = this._teamFilter || 'my';
 
     const toolbar = `<div class="ts-toolbar">
       <div class="ts-filter-bar">
-        ${(isLeader ? ['my','pending','history','all'] : ['my','all']).map(s => `<button class="ts-filter-btn ${s===currentFilter?'active':''}" onclick="OpsApp._setTeamFilter('${s}')" id="team-filter-${s}">${filterMap[s]}</button>`).join('')}
+        ${(isLeader ? ['my','pending','other','history','all'] : ['my','all']).map(s => `<button class="ts-filter-btn ${s===currentFilter?'active':''}" onclick="OpsApp._setTeamFilter('${s}')" id="team-filter-${s}">${filterMap[s]}</button>`).join('')}
       </div>
       <div style="display:flex;gap:6px;">
         ${isLeader ? `<button class="btn btn-sm btn-primary" onclick="OpsApp._showTransferForm()">🔄 跨组调配</button>` : ''}
@@ -615,25 +615,29 @@ const OpsApp = {
       </div>
     </div>`;
 
-    const emptyHtml = `<div class="ts-empty"><div class="ts-empty-icon">👥</div><div class="ts-empty-text">暂无成员</div><div class="ts-empty-sub">${isLeader ? '通过"添加用户"功能创建用户后自动加入此组' : '暂未分配到组'}</div></div>`;
+    const emptyHtml = (icon, text, sub) => `<div class="ts-empty"><div class="ts-empty-icon">${icon}</div><div class="ts-empty-text">${text}</div><div class="ts-empty-sub">${sub}</div></div>`;
 
     // 组员卡片
-    const memberCardHtml = (m, i) => `<div class="ts-card" data-member-role="${m.role}">
-      <div class="ts-card-icon" style="background:${avatarColors[i % 6]};color:white;font-size:1.2rem;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;">${(m.username || '?')[0].toUpperCase()}</div>
-      <div class="ts-card-title">${m.displayName || m.username}</div>
+    const memberCardHtml = (m, i) => `<div class="ts-card team-member-item" style="cursor:pointer;" onclick="OpsApp.showTeamMemberDetail('${m.id}')">
+      <div class="ts-card-icon" style="background:${avatarColors[i % 6]};color:white;font-size:1.2rem;width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;">${(m.username || '?')[0].toUpperCase()}</div>
+      <div class="ts-card-title">${m.displayName || m.username}${m.id === user.id ? ' <span style="color:var(--text-tertiary);font-size:0.75rem;">（我）</span>' : ''}</div>
       <div class="ts-card-sub">${m.role === 'admin' ? '👑 组长' : '👤 组员'}</div>
       <div class="ts-card-footer">
         <span>🕐 ${fm(m.createdAt)}</span>
-        <span style="margin-left:auto;"><button class="btn btn-xs btn-primary" onclick="event.stopPropagation();OpsApp.showTeamMemberDetail('${m.id}')">查看</button></span>
+        <span style="display:flex;gap:4px;margin-left:auto;">
+          ${isLeader && m.role !== 'admin' ? `<button class="btn btn-xs btn-outline" onclick="event.stopPropagation();OpsApp._startOutTransfer('${m.id}','${m.username}')" title="调出到其他组">📤 调出</button>` : ''}
+          <button class="btn btn-xs btn-primary" onclick="event.stopPropagation();OpsApp.showTeamMemberDetail('${m.id}')">查看</button>
+        </span>
       </div>
     </div>`;
 
     // 调配卡片
     const transferCardHtml = (t) => {
       const isFromMe = t.fromAdminId === user.id;
+      const needsMyAction = t.status === 'pending' && !isFromMe && t.toAdminId === user.id;
       const statusMap = { pending: 'ts-status-pending', completed: 'ts-status-completed', rejected: 'ts-status-pending', cancelled: 'ts-status-responded' };
       const statusLabel = { pending: '⏳ 待审批', completed: '✅ 已完成', rejected: '❌ 已拒绝', cancelled: '⊗ 已取消' };
-      return `<div class="ts-card">
+      return `<div class="ts-card team-transfer-item">
         <div class="ts-card-icon">${t.direction === 'out' ? '📤' : '📥'}</div>
         <div class="ts-card-title">${t.username}</div>
         <div class="ts-card-sub">${t.direction === 'out' ? `${t.fromAdminName} → ${t.toAdminName}` : `${t.fromAdminName} ← ${t.toAdminName}`}</div>
@@ -642,24 +646,65 @@ const OpsApp = {
           <span>🕐 ${fm(t.createdAt)}</span>
           <span style="margin-left:auto;"><span class="ts-status-badge ${statusMap[t.status] || 'ts-status-pending'}">${statusLabel[t.status] || t.status}</span></span>
         </div>
-        ${t.status === 'pending' && !isFromMe ? `
+        ${needsMyAction ? `
         <div style="display:flex;gap:6px;margin-top:8px;">
           <button class="btn btn-sm btn-primary" onclick="OpsApp._approveTransfer('${t.id}')">✅ 同意</button>
           <button class="btn btn-sm btn-danger" onclick="OpsApp._rejectTransfer('${t.id}')">❌ 拒绝</button>
         </div>` : ''}
+        ${isFromMe && t.status === 'pending' ? `
+        <div style="margin-top:8px;">
+          <button class="btn btn-xs btn-outline" onclick="OpsApp._cancelTransfer('${t.id}')">取消请求</button>
+        </div>` : ''}
       </div>`;
     };
 
+    // 其他组卡片
+    const otherGroupHtml = (g) => `<div class="ts-card team-other-group">
+      <div class="ts-card-icon">👤</div>
+      <div class="ts-card-title">${g.adminName || g.adminId}</div>
+      <div class="ts-card-sub">${g.members.length} 名组员</div>
+      ${g.members.length > 0 ? `
+      <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px;">
+        ${g.members.slice(0, 5).map(m => `<span class="ts-memory-tag">${m.username}</span>`).join('')}
+        ${g.members.length > 5 ? `<span class="ts-memory-tag">+${g.members.length - 5} 更多</span>` : ''}
+      </div>` : ''}
+      <div class="ts-card-footer">
+        <span>
+          ${g.members.length > 0 ? `<button class="btn btn-xs btn-primary" onclick="OpsApp._showInTransferModal('${g.adminId}','${g.adminName || g.adminId}')">📥 申请调入</button>` : ''}
+        </span>
+      </div>
+    </div>`;
+
+    // 主体内容
     let body = '';
-    if (currentFilter === 'my' || currentFilter === 'all') {
-      const list = members;
-      body += `<div class="ts-list" id="team-my-list">${list.length === 0 ? emptyHtml : list.map((m, i) => memberCardHtml(m, i)).join('')}</div>`;
+    const showMy = currentFilter === 'my' || currentFilter === 'all';
+    const showPending = isLeader && (currentFilter === 'pending' || currentFilter === 'all');
+    const showOther = isLeader && (currentFilter === 'other' || currentFilter === 'all');
+    const showHistory = isLeader && (currentFilter === 'history' || currentFilter === 'all');
+
+    if (showMy) {
+      body += `<div class="team-section" data-team-section="my">
+        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📋 我的组员 <span style="color:var(--text-secondary);font-size:0.8rem;">（组长：${adminInfo || user.username}）</span></h3>
+        <div class="ts-list">${members.length === 0 ? emptyHtml('👥','暂无组员','通过"添加用户"功能创建用户后自动加入此组') : members.map((m, i) => memberCardHtml(m, i)).join('')}</div>
+      </div>`;
     }
-    if (isLeader && (currentFilter === 'pending' || currentFilter === 'all')) {
-      body += `<div id="team-pending-list"><h3 style="margin:16px 0 8px 0;font-size:0.9rem;">⏳ 待处理调配</h3><div class="ts-list">${pendingTransfers.length === 0 ? '<div class="ts-empty" style="padding:20px;"><div class="ts-empty-text">暂无待处理调配</div></div>' : pendingTransfers.map(t => transferCardHtml(t)).join('')}</div></div>`;
+    if (showPending) {
+      body += `<div class="team-section" data-team-section="pending" style="margin-top:24px;">
+        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">⏳ 待处理调配</h3>
+        <div class="ts-list">${pendingTransfers.length === 0 ? emptyHtml('⏳','暂无待处理调配','等待其他组的调配请求') : pendingTransfers.map(t => transferCardHtml(t)).join('')}</div>
+      </div>`;
     }
-    if (isLeader && (currentFilter === 'history' || currentFilter === 'all')) {
-      body += `<div id="team-history-list"><h3 style="margin:16px 0 8px 0;font-size:0.9rem;">📜 调配历史</h3><div class="ts-list">${historyTransfers.length === 0 ? '<div class="ts-empty" style="padding:20px;"><div class="ts-empty-text">暂无调配历史</div></div>' : historyTransfers.slice(0, 20).map(t => transferCardHtml(t)).join('')}</div></div>`;
+    if (showOther) {
+      body += `<div class="team-section" data-team-section="other" style="margin-top:24px;">
+        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">🌐 其他组 <span style="color:var(--text-secondary);font-size:0.8rem;">（可申请调入）</span></h3>
+        <div class="ts-list">${otherGroups.length === 0 ? emptyHtml('🌐','暂无其他组','系统中只有你的组') : otherGroups.map(g => otherGroupHtml(g)).join('')}</div>
+      </div>`;
+    }
+    if (showHistory) {
+      body += `<div class="team-section" data-team-section="history" style="margin-top:24px;">
+        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📜 调配历史</h3>
+        <div class="ts-list">${historyTransfers.length === 0 ? emptyHtml('📜','暂无调配历史','完成调配后在此记录') : historyTransfers.slice(0, 20).map(t => transferCardHtml(t)).join('')}</div>
+      </div>`;
     }
 
     const headerSub = isLeader ? `组长：${adminInfo || user.username}` : `组长：${adminInfo}`;
@@ -672,6 +717,62 @@ const OpsApp = {
     document.querySelectorAll('.ts-filter-btn').forEach(b => b.classList.remove('active'));
     const btn = document.getElementById('team-filter-' + filter);
     if (btn) btn.classList.add('active');
+    document.querySelectorAll('.team-section').forEach(section => {
+      const sectionType = section.dataset.teamSection;
+      if (filter === 'all') {
+        section.style.display = '';
+      } else {
+        section.style.display = sectionType === filter ? '' : 'none';
+      }
+    });
+  },
+
+  _showInTransferModal(adminId, adminName) {
+    const groups = this._groupMembers || [];
+    const group = groups.find(g => g.adminId === adminId);
+    if (!group || !group.members || group.members.length === 0) {
+      this.notify('该组暂无组员可调入', 'warning');
+      return;
+    }
+    const members = group.members.filter(m => m.role !== 'admin');
+    if (members.length === 0) {
+      this.notify('该组只有组长，无法调入', 'warning');
+      return;
+    }
+    const options = members.map(m =>
+      `<option value="${m.id}">${m.displayName || m.username}（${m.username}）</option>`
+    ).join('');
+    const html = `
+      <div class="form-group">
+        <label>选择调入组员 <span class="required">*</span></label>
+        <select id="in-transfer-user" class="form-select">${options}</select>
+      </div>
+      <div class="form-group">
+        <label>来源组长</label>
+        <input class="form-input" value="${adminName}" disabled>
+      </div>
+      <div class="form-group">
+        <label>调配原因</label>
+        <textarea id="in-transfer-reason" class="form-textarea" rows="2" placeholder="可选：调配原因说明"></textarea>
+      </div>
+    `;
+    this.showModal('📥 申请调入组员', html, async () => {
+      const userId = document.getElementById('in-transfer-user')?.value;
+      const reason = document.getElementById('in-transfer-reason')?.value?.trim() || '';
+      if (!userId) { this.notify('请选择要调入的组员', 'warning'); return false; }
+      const user = members.find(m => m.id == userId);
+      const result = await API.createGroupTransfer({
+        toAdminId: adminId, userId, username: user?.username || '',
+        direction: 'in', reason
+      });
+      if (result?.success) {
+        this.notify('调配请求已发送，等待对方组长审批');
+        this.renderTeamMembers();
+      } else {
+        this.notify(result?.message || result?.error || '发送失败', 'error');
+      }
+      return true;
+    });
   },
 
   // 普通用户显示的组长概览页面（无维修日志）
@@ -1414,7 +1515,127 @@ const OpsApp = {
   },
 
   _showTransferForm() {
-    this.renderTeamMembers();
+    const user = API.currentUser;
+    const groups = this._groupMembers || [];
+    const myGroup = groups.find(g => g.adminId === user.id) || { members: this._mySubordinates || [] };
+    const myMembers = (myGroup.members || []).filter(m => m.role !== 'admin');
+    const otherGroups = groups.filter(g => g.adminId !== user.id);
+
+    if (myMembers.length === 0 && otherGroups.length === 0) {
+      this.notify('暂无可调配的组员或其他组', 'warning');
+      return;
+    }
+
+    const myOptions = myMembers.map(m =>
+      `<option value="${m.id}">${m.displayName || m.username}（${m.username}）</option>`
+    ).join('');
+    const otherOptions = otherGroups.map(g =>
+      `<option value="${g.adminId}">${g.adminName || g.adminId}（${g.members.length}名组员）</option>`
+    ).join('');
+
+    const html = `
+      <div style="margin-bottom:16px;display:flex;gap:8px;">
+        <button id="tf-tab-out" class="btn btn-sm btn-primary" onclick="OpsApp._tfSwitchTab('out')">📤 调出组员</button>
+        <button id="tf-tab-in" class="btn btn-sm btn-outline" onclick="OpsApp._tfSwitchTab('in')">📥 申请调入</button>
+      </div>
+      <div id="tf-out-panel">
+        <div class="form-group">
+          <label>调出组员 <span class="required">*</span></label>
+          <select id="tf-out-user" class="form-select">${myOptions}</select>
+        </div>
+        <div class="form-group">
+          <label>目标组长 <span class="required">*</span></label>
+          <select id="tf-out-target" class="form-select">${otherOptions}</select>
+        </div>
+        <div class="form-group">
+          <label>调配原因</label>
+          <textarea id="tf-out-reason" class="form-textarea" rows="2" placeholder="可选：调配原因说明"></textarea>
+        </div>
+      </div>
+      <div id="tf-in-panel" style="display:none;">
+        <div class="form-group">
+          <label>来源组长 <span class="required">*</span></label>
+          <select id="tf-in-source" class="form-select" onchange="OpsApp._tfUpdateInUsers()">${otherOptions}</select>
+        </div>
+        <div class="form-group">
+          <label>选择调入组员 <span class="required">*</span></label>
+          <select id="tf-in-user" class="form-select"><option value="">请先选择来源组长</option></select>
+        </div>
+        <div class="form-group">
+          <label>调配原因</label>
+          <textarea id="tf-in-reason" class="form-textarea" rows="2" placeholder="可选：调配原因说明"></textarea>
+        </div>
+      </div>
+    `;
+    this.showModal('🔄 跨组调配', html, async () => {
+      const isOut = document.getElementById('tf-out-panel').style.display !== 'none';
+      if (isOut) {
+        const userId = document.getElementById('tf-out-user')?.value;
+        const toAdminId = document.getElementById('tf-out-target')?.value;
+        const reason = document.getElementById('tf-out-reason')?.value?.trim() || '';
+        if (!userId || !toAdminId) { this.notify('请完善调出信息', 'warning'); return false; }
+        const u = myMembers.find(m => m.id == userId);
+        const result = await API.createGroupTransfer({
+          toAdminId, userId, username: u?.username || '', direction: 'out', reason
+        });
+        if (result?.success) {
+          this.notify('调出请求已发送，等待对方组长审批');
+          this.renderTeamMembers();
+        } else {
+          this.notify(result?.message || result?.error || '发送失败', 'error');
+          return false;
+        }
+      } else {
+        const fromAdminId = document.getElementById('tf-in-source')?.value;
+        const userId = document.getElementById('tf-in-user')?.value;
+        const reason = document.getElementById('tf-in-reason')?.value?.trim() || '';
+        if (!fromAdminId || !userId) { this.notify('请完善调入信息', 'warning'); return false; }
+        const g = otherGroups.find(g => g.adminId == fromAdminId);
+        const u = g?.members?.find(m => m.id == userId);
+        const result = await API.createGroupTransfer({
+          toAdminId: fromAdminId, userId, username: u?.username || '', direction: 'in', reason
+        });
+        if (result?.success) {
+          this.notify('调入请求已发送，等待对方组长审批');
+          this.renderTeamMembers();
+        } else {
+          this.notify(result?.message || result?.error || '发送失败', 'error');
+          return false;
+        }
+      }
+      return true;
+    });
+  },
+
+  _tfSwitchTab(tab) {
+    const outBtn = document.getElementById('tf-tab-out');
+    const inBtn = document.getElementById('tf-tab-in');
+    const outPanel = document.getElementById('tf-out-panel');
+    const inPanel = document.getElementById('tf-in-panel');
+    if (tab === 'out') {
+      outBtn.className = 'btn btn-sm btn-primary';
+      inBtn.className = 'btn btn-sm btn-outline';
+      outPanel.style.display = '';
+      inPanel.style.display = 'none';
+    } else {
+      outBtn.className = 'btn btn-sm btn-outline';
+      inBtn.className = 'btn btn-sm btn-primary';
+      outPanel.style.display = 'none';
+      inPanel.style.display = '';
+      this._tfUpdateInUsers();
+    }
+  },
+
+  _tfUpdateInUsers() {
+    const sourceAdminId = document.getElementById('tf-in-source')?.value;
+    const userSelect = document.getElementById('tf-in-user');
+    if (!sourceAdminId || !userSelect) return;
+    const groups = this._groupMembers || [];
+    const group = groups.find(g => g.adminId == sourceAdminId);
+    const members = (group?.members || []).filter(m => m.role !== 'admin');
+    userSelect.innerHTML = members.length === 0
+      ? '<option value="">该组无组员可调入</option>'
+      : members.map(m => `<option value="${m.id}">${m.displayName || m.username}（${m.username}）</option>`).join('');
   },
 
   // ==================== REQUIREMENTS ====================
