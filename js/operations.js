@@ -1995,7 +1995,7 @@ const OpsApp = {
         </div>
       </div>
       <div class="ts-action-bar">
-        <button class="btn btn-primary" id="ts-submit-btn" onclick="OpsApp.doSubmitTechSupport()" style="min-width:160px;padding:12px 28px;font-size:.9rem;">📤 确认提交</button>
+        <button class="ts-submit-btn" id="ts-submit-btn" onclick="OpsApp.doSubmitTechSupport()">📤 确认提交</button>
       </div>
     </div>`;
   },
