@@ -1579,10 +1579,14 @@ const App = {
         ${filteredList.map(sn => {
           const s = SN_ST[sn.status] || SN_ST['可用'];
           return `<div class="ts-card ${sn.status==='在用'?'responded':sn.status==='损坏'||sn.status==='售后中'?'pending':'idle'}" data-sn-status="${sn.status==='在用'?'inuse':sn.status==='损坏'||sn.status==='售后中'?'damaged':'idle'}">
-            <div class="ts-card-icon">${s.icon}</div>
-            <div class="ts-card-title"><code>${sn.snCode}</code></div>
-            <div class="ts-card-sub">${sn.type}${sn.handLabel?' · '+sn.handLabel:''}</div>
-            ${sn.machine?`<div style="font-size:0.85rem;color:var(--text-secondary);margin-top:2px;">🖥 ${sn.machine}</div>`:''}
+            <div style="display:flex;gap:12px;">
+              <div class="ts-card-icon" style="width:56px;height:56px;border-radius:var(--radius-md);display:flex;align-items:center;justify-content:center;font-size:1.8rem;flex-shrink:0;">${sn.attachment?'<img src="'+sn.attachment+'" style="width:100%;height:100%;object-fit:cover;border-radius:var(--radius-md);" onerror="this.parentElement.innerHTML=\''+s.icon+'\'">':s.icon}</div>
+              <div style="flex:1;min-width:0;">
+                <div class="ts-card-title"><code>${sn.snCode}</code></div>
+                <div class="ts-card-sub">${sn.type}${sn.handLabel?' · '+sn.handLabel:''}</div>
+                ${sn.machine?`<div style="font-size:0.85rem;color:var(--text-secondary);margin-top:2px;">🖥 ${sn.machine}</div>`:''}
+              </div>
+            </div>
             <div class="ts-card-footer">
               <span>🕐 ${fm(sn.latest.timestamp)}</span>
               <span style="margin-left:auto;"><span class="ts-status-badge ${s.c}">${sn.status}</span></span>
