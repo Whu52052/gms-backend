@@ -57,7 +57,9 @@ const OpsApp = {
       this._tasks = JSON.parse(localStorage.getItem('ops_tasks') || '[]');
       this._requirements = JSON.parse(localStorage.getItem('ops_requirements') || '[]');
       this._currentMachine = localStorage.getItem('ops_current_machine') || null;
-    } catch { this._tasks = []; this._requirements = []; this._currentMachine = null; }
+      this._tsFilter = localStorage.getItem('ops_ts_filter') || 'all';
+      this._tsViewMode = localStorage.getItem('ops_ts_view_mode') || 'card';
+    } catch { this._tasks = []; this._requirements = []; this._currentMachine = null; this._tsFilter = 'all'; this._tsViewMode = 'card'; }
   },
   _saveCurrentMachine(machine) {
     this._currentMachine = machine;
@@ -2330,6 +2332,7 @@ const OpsApp = {
   async renderTechSupportMy(viewMode) {
     if (!viewMode) viewMode = this._tsViewMode || 'card';
     this._tsViewMode = viewMode;
+    localStorage.setItem('ops_ts_view_mode', viewMode);
     const currentFilter = this._tsFilter || 'all';
     let items = [];
     try { items = await API.getTechSupportList(); } catch {}
@@ -2405,6 +2408,7 @@ const OpsApp = {
 
   _setTsFilter(filter) {
     this._tsFilter = filter;
+    localStorage.setItem('ops_ts_filter', filter);
     this.renderTechSupportMy();
   },
 
