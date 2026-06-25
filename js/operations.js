@@ -675,32 +675,25 @@ const OpsApp = {
       </div>
     </div>`;
 
-    // 主体内容
+    // 主体内容 - 始终渲染所有区块，通过 _setTeamFilter 控制显示/隐藏
     let body = '';
-    const showMy = currentFilter === 'my' || currentFilter === 'all';
-    const showPending = isLeader && (currentFilter === 'pending' || currentFilter === 'all');
-    const showOther = isLeader && (currentFilter === 'other' || currentFilter === 'all');
-    const showHistory = isLeader && (currentFilter === 'history' || currentFilter === 'all');
 
-    if (showMy) {
-      body += `<div class="team-section" data-team-section="my">
-        <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📋 我的组员 <span style="color:var(--text-secondary);font-size:0.8rem;">（组长：${adminInfo || user.username}）</span></h3>
-        <div class="ts-list">${members.length === 0 ? emptyHtml('👥','暂无组员','通过"添加用户"功能创建用户后自动加入此组') : members.map((m, i) => memberCardHtml(m, i)).join('')}</div>
-      </div>`;
-    }
-    if (showPending) {
+    body += `<div class="team-section" data-team-section="my">
+      <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📋 我的组员 <span style="color:var(--text-secondary);font-size:0.8rem;">（组长：${adminInfo || user.username}）</span></h3>
+      <div class="ts-list">${members.length === 0 ? emptyHtml('👥','暂无组员','通过"添加用户"功能创建用户后自动加入此组') : members.map((m, i) => memberCardHtml(m, i)).join('')}</div>
+    </div>`;
+
+    if (isLeader) {
       body += `<div class="team-section" data-team-section="pending" style="margin-top:24px;">
         <h3 style="margin:0 0 12px 0;font-size:0.95rem;">⏳ 待处理调配</h3>
         <div class="ts-list">${pendingTransfers.length === 0 ? emptyHtml('⏳','暂无待处理调配','等待其他组的调配请求') : pendingTransfers.map(t => transferCardHtml(t)).join('')}</div>
       </div>`;
-    }
-    if (showOther) {
+
       body += `<div class="team-section" data-team-section="other" style="margin-top:24px;">
         <h3 style="margin:0 0 12px 0;font-size:0.95rem;">🌐 其他组 <span style="color:var(--text-secondary);font-size:0.8rem;">（可申请调入）</span></h3>
         <div class="ts-list">${otherGroups.length === 0 ? emptyHtml('🌐','暂无其他组','系统中只有你的组') : otherGroups.map(g => otherGroupHtml(g)).join('')}</div>
       </div>`;
-    }
-    if (showHistory) {
+
       body += `<div class="team-section" data-team-section="history" style="margin-top:24px;">
         <h3 style="margin:0 0 12px 0;font-size:0.95rem;">📜 调配历史</h3>
         <div class="ts-list">${historyTransfers.length === 0 ? emptyHtml('📜','暂无调配历史','完成调配后在此记录') : historyTransfers.slice(0, 20).map(t => transferCardHtml(t)).join('')}</div>
@@ -710,6 +703,9 @@ const OpsApp = {
     const headerSub = isLeader ? `组长：${adminInfo || user.username}` : `组长：${adminInfo}`;
     const html = `<div class="page-header"><h2>👥 组员管理</h2><span style="color:var(--text-secondary);font-size:0.85rem;">${headerSub}</span></div>${statsHtml}${toolbar}${body}`;
     document.getElementById('main-content').innerHTML = html;
+
+    // 应用当前筛选状态
+    this._setTeamFilter(currentFilter);
   },
 
   _setTeamFilter(filter) {
