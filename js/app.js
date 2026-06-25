@@ -7,6 +7,7 @@ const App = {
   currentTab: 'dashboard',
   currentPage: { transactions: 1 },
   pageSize: 15,
+  _txViewMode: 'card',
   _repairResultHistory: [],  // 维修结果记忆历史
   filters: {
     equipmentType: 'all',
@@ -4940,6 +4941,11 @@ const App = {
   setPageSize(size) {
     this.pageSize = size;
     this.renderTransactions(1);
+  },
+
+  toggleTxViewMode() {
+    this._txViewMode = this._txViewMode === 'card' ? 'table' : 'card';
+    this.renderTransactions(this.currentPage.transactions);
   },
 
   toggleTxDetail(id) {
