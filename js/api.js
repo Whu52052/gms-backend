@@ -566,6 +566,19 @@ const API = {
     return data || { success: false, message: '请求失败' };
   },
 
+  // 共享记忆（故障说明 / 维修结果）
+  async getMemoryList(category) {
+    if (!this.online) return [];
+    const data = await this._fetch('GET', '/api/tech-support/memory/' + category);
+    return Array.isArray(data) ? data : [];
+  },
+
+  async addMemory(category, text) {
+    if (!this.online) return { success: false, message: '离线模式不支持' };
+    const data = await this._fetch('POST', '/api/tech-support/memory/' + category, { text });
+    return data || { success: false, message: '请求失败' };
+  },
+
   // Group Transfer
   async getGroupTransfers() {
     if (!this.online) return [];

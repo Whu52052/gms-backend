@@ -2145,6 +2145,25 @@ th.sortable:hover { background: var(--bg-secondary); }
 .ts-form-textarea { resize:vertical;min-height:80px; }
 .ts-form-hint { font-size:.72rem;color:var(--text-tertiary);margin-top:4px; }
 
+/* -- Memory tags for shared history -- */
+.ts-memory-tag {
+  display:inline-block;
+  padding:4px 12px;
+  background:var(--bg-secondary);
+  border:1px solid var(--border-color);
+  border-radius:20px;
+  font-size:.78rem;
+  color:var(--text-secondary);
+  cursor:pointer;
+  transition:all var(--transition-fast);
+  white-space:nowrap;
+}
+.ts-memory-tag:hover {
+  background:var(--color-primary-bg);
+  border-color:var(--color-primary);
+  color:var(--color-primary);
+}
+
 /* -- Empty state -- */
 .ts-empty {
   text-align:center;padding:60px 20px;color:var(--text-tertiary);

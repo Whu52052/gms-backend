@@ -390,6 +390,16 @@ function initDB() {
       updatedAt VARCHAR(64),
       UNIQUE KEY unique_user_date (userId, date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS tech_support_memory (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      category VARCHAR(32) NOT NULL,
+      text TEXT NOT NULL,
+      useCount INT DEFAULT 1,
+      lastUsedAt VARCHAR(64),
+      createdBy VARCHAR(64),
+      createdAt VARCHAR(64),
+      UNIQUE KEY unique_category_text (category, text(255))
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   ];
   return Promise.all(statements.map(sql => pool.execute(sql)));
 }
@@ -1154,6 +1164,71 @@ async function handleGetRepairResults(req, res) {
     } catch {}
   }
   sendJSON(res, [...results].sort());
+}
+
+// ==================== 共享记忆（故障说明 / 维修结果） ====================
+async function handleGetMemoryList(req, res, authUser, category) {
+  if (category === 'fault_description') {
+    if (authUser.system !== 'operations' && authUser.role !== 'superadmin') {
+      return sendJSON(res, { error: '仅运营用户可查看故障说明记忆' }, 403);
+    }
+  } else if (category === 'repair_result') {
+    if (authUser.system !== 'maintenance' && authUser.role !== 'superadmin') {
+      return sendJSON(res, { error: '仅运维用户可查看维修结果记忆' }, 403);
+    }
+  } else {
+    return sendJSON(res, { error: '无效的分类' }, 400);
+  }
+
+  const [rows] = await pool.execute(
+    'SELECT text, useCount, lastUsedAt FROM tech_support_memory WHERE category = ? ORDER BY useCount DESC, lastUsedAt DESC LIMIT 50',
+    [category]
+  );
+  sendJSON(res, rows);
+}
+
+async function handleAddMemory(req, res, authUser, category, body) {
+  const text = (body && body.text || '').trim();
+  if (!text || text.length < 2) {
+    return sendJSON(res, { error: '内容太短' }, 400);
+  }
+  if (text.length > 1000) {
+    return sendJSON(res, { error: '内容太长（最多1000字）' }, 400);
+  }
+
+  if (category === 'fault_description') {
+    if (authUser.system !== 'operations' && authUser.role !== 'superadmin') {
+      return sendJSON(res, { error: '仅运营用户可添加故障说明记忆' }, 403);
+    }
+  } else if (category === 'repair_result') {
+    if (authUser.system !== 'maintenance' && authUser.role !== 'superadmin') {
+      return sendJSON(res, { error: '仅运维用户可添加维修结果记忆' }, 403);
+    }
+  } else {
+    return sendJSON(res, { error: '无效的分类' }, 400);
+  }
+
+  const now = new Date().toISOString();
+  try {
+    const [existing] = await pool.execute(
+      'SELECT id FROM tech_support_memory WHERE category = ? AND text = ?',
+      [category, text]
+    );
+    if (existing.length > 0) {
+      await pool.execute(
+        'UPDATE tech_support_memory SET useCount = useCount + 1, lastUsedAt = ? WHERE id = ?',
+        [now, existing[0].id]
+      );
+    } else {
+      await pool.execute(
+        'INSERT INTO tech_support_memory (category, text, useCount, lastUsedAt, createdBy, createdAt) VALUES (?, ?, 1, ?, ?, ?)',
+        [category, text, now, authUser.userId, now]
+      );
+    }
+    sendJSON(res, { success: true });
+  } catch (e) {
+    sendJSON(res, { error: e.message }, 500);
+  }
 }
 
 async function handleSubmitTechSupport(req, res, authUser, body) {
@@ -2951,6 +3026,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/tech-support' && req.method === 'GET') return handleGetTechSupportList(req, res, authUser);
     if (url.pathname === '/api/tech-support' && req.method === 'POST') return handleSubmitTechSupport(req, res, authUser, body);
     if (url.pathname === '/api/tech-support/repair-results' && req.method === 'GET') return handleGetRepairResults(req, res);
+    // 共享记忆 API
+    const memGetMatch = url.pathname.match(/^\/api\/tech-support\/memory\/([^/]+)$/);
+    if (memGetMatch && req.method === 'GET') return handleGetMemoryList(req, res, authUser, memGetMatch[1]);
+    const memAddMatch = url.pathname.match(/^\/api\/tech-support\/memory\/([^/]+)$/);
+    if (memAddMatch && req.method === 'POST') return handleAddMemory(req, res, authUser, memAddMatch[1], body);
     const tsDetailMatch = url.pathname.match(/^\/api\/tech-support\/([^/]+)$/);
     if (tsDetailMatch && req.method === 'GET') return handleGetTechSupportDetail(req, res, authUser, tsDetailMatch[1]);
     const tsRespondMatch = url.pathname.match(/^\/api\/tech-support\/([^/]+)\/respond$/);

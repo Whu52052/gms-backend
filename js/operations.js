@@ -1985,17 +1985,26 @@ const OpsApp = {
   },
 
   async renderTechSupportSubmit() {
-    let equipmentList = [], machinesList = [];
+    let equipmentList = [], machinesList = [], faultDescMemory = [];
     try {
       const eq = await API.getEquipmentConfig(); if (Array.isArray(eq)) equipmentList = eq;
       machinesList = await API.getMachines(); if (!Array.isArray(machinesList)) machinesList = [];
+      const mem = await API.getMemoryList('fault_description');
+      if (Array.isArray(mem)) faultDescMemory = mem.map(m => m.text);
     } catch {}
     const machineNumbers = [...new Set(machinesList.map(m => m.machineNumber || m.id).filter(Boolean))];
-    const faultTypes = ['闪退异常','无法启动','连接失败','硬件损坏','数据异常','其他'];
+    const faultTypes = [
+      '模型错位', 'Oculus异常', '模型不动',
+      '闪退异常', '无法启动', '连接失败',
+      '硬件损坏', '数据异常', '操作问题', '其他'
+    ];
     this._tsAllMachines = machineNumbers;
+    this._tsFaultDescMemory = faultDescMemory;
     const currentMachine = this._currentMachine || '';
     const user = API.currentUser;
     const isNormalUser = user && user.role === 'user';
+
+    const memDatalistId = 'fault-desc-memory-' + Date.now();
 
     document.getElementById('main-content').innerHTML = `<div class="page-header">
         <h2>📩 提交技术支持请求</h2>
@@ -2029,14 +2038,31 @@ const OpsApp = {
         </div>
         <div class="ts-form-group">
           <label class="ts-form-label">故障说明</label>
-          <textarea id="ts-fault-description" class="ts-form-textarea" rows="4" placeholder="请详细描述故障现象，包括发生时间、操作过程、已尝试的方法等..."></textarea>
-          <div class="ts-form-hint">提供越详细的信息，运维人员越能快速定位问题</div>
+          <div style="position:relative;">
+            <textarea id="ts-fault-description" class="ts-form-textarea" rows="4" placeholder="请详细描述故障现象，或从下方历史记录中选择..." list="${memDatalistId}"></textarea>
+            <datalist id="${memDatalistId}">
+              ${faultDescMemory.map(t => `<option value="${t.replace(/"/g, '&quot;')}">`).join('')}
+            </datalist>
+          </div>
+          ${faultDescMemory.length > 0 ? `
+          <div style="margin-top:8px;">
+            <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:6px;">💡 历史记录（点击快速填入）：</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;">
+              ${faultDescMemory.slice(0, 8).map(t => `<span class="ts-memory-tag" onclick="OpsApp._fillFaultDesc('${t.replace(/'/g, "\\'").replace(/\n/g, '\\n')}')">${t.length > 20 ? t.slice(0,20)+'...' : t}</span>`).join('')}
+            </div>
+          </div>` : ''}
+          <div class="ts-form-hint">提供越详细的信息，运维人员越能快速定位问题。历史记录所有运营用户共享</div>
         </div>
       </div>
       <div class="ts-action-bar">
         <button class="btn btn-primary" id="ts-submit-btn" onclick="OpsApp.doSubmitTechSupport()" style="min-width:160px;padding:12px 28px;font-size:.9rem;">📤 确认提交</button>
       </div>
     </div>`;
+  },
+
+  _fillFaultDesc(text) {
+    const el = document.getElementById('ts-fault-description');
+    if (el) el.value = text;
   },
 
   // Filter machine dropdown based on input text
@@ -2123,6 +2149,10 @@ const OpsApp = {
       });
       if (result && result.success) {
         success = true;
+        // 保存故障说明到共享记忆
+        if (faultDescription && faultDescription.length >= 2) {
+          API.addMemory('fault_description', faultDescription).catch(() => {});
+        }
         // Show random encouragement popup with return button
         const popup = await API.getRandomPopupMessage('submit');
         this._showPopupModal('🎉 提交成功', popup.text || '请求已提交！', () => {
