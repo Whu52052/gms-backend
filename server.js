@@ -2881,24 +2881,25 @@ async function handleDeleteSNRegistry(req, res, snCode) {
 
 // -- File Upload / Delete --
 function handleUpload(req, res, body) {
-  // Store attachments as base64 in DB (not filesystem — prevents data loss on server rebuild)
   const { filename, data } = body;
   if (!data || !filename) return sendJSON(res, { error: '缺少文件数据' }, 400);
   const matches = data.match(/^data:([^;]+);base64,(.+)$/);
   if (!matches) return sendJSON(res, { error: '无效的数据格式' }, 400);
   const mimeType = matches[1];
   const base64Data = matches[2];
-  // Validate MIME type - only allow safe image types
   const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
   if (!ALLOWED_MIME_TYPES.includes(mimeType)) {
     return sendJSON(res, { error: '只支持上传图片文件 (jpg, png, gif, webp, svg)' }, 400);
   }
   const decodedBuf = Buffer.from(base64Data, 'base64');
   if (decodedBuf.length > 10 * 1024 * 1024) return sendJSON(res, { error: '文件大小超过限制(最大10MB)' }, 413);
-  // Sanitize filename - remove path traversal characters
   const safeFilename = filename.replace(/[\/\\]/g, '_').replace(/[^\w\.\-]/g, '');
-  // Return the base64 data URL directly — frontend stores it in the attachment field
-  sendJSON(res, { path: data, filename: safeFilename });
+  const ext = path.extname(safeFilename) || '.jpg';
+  const randomName = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + ext;
+  if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  const filePath = path.join(UPLOADS_DIR, randomName);
+  fs.writeFileSync(filePath, decodedBuf);
+  sendJSON(res, { path: '/uploads/' + randomName, filename: safeFilename });
 }
 
 function handleDeleteUpload(req, res, body) {
