@@ -59,6 +59,7 @@ const OpsApp = {
       this._currentMachine = localStorage.getItem('ops_current_machine') || null;
       this._tsFilter = localStorage.getItem('ops_ts_filter') || 'all';
       this._tsViewMode = localStorage.getItem('ops_ts_view_mode') || 'card';
+      console.log('[TechSupport] _loadLocalData: _tsFilter=', this._tsFilter, '_tsViewMode=', this._tsViewMode);
     } catch { this._tasks = []; this._requirements = []; this._currentMachine = null; this._tsFilter = 'all'; this._tsViewMode = 'card'; }
   },
   _saveCurrentMachine(machine) {
@@ -2334,6 +2335,7 @@ const OpsApp = {
     this._tsViewMode = viewMode;
     localStorage.setItem('ops_ts_view_mode', viewMode);
     const currentFilter = this._tsFilter || 'all';
+    console.log('[TechSupport] renderTechSupportMy called, viewMode:', viewMode, 'filter:', currentFilter, '_tsFilter:', this._tsFilter);
     let items = [];
     try { items = await API.getTechSupportList(); } catch {}
     const SM = { pending:{l:'待响应',c:'ts-status-pending',icon:'🕐'}, responded:{l:'处理中',c:'ts-status-responded',icon:'🔧'}, completed:{l:'已完成',c:'ts-status-completed',icon:'✅'} };
@@ -2407,6 +2409,7 @@ const OpsApp = {
   },
 
   _setTsFilter(filter) {
+    console.log('[TechSupport] _setTsFilter called with:', filter);
     this._tsFilter = filter;
     localStorage.setItem('ops_ts_filter', filter);
     this.renderTechSupportMy();
@@ -2610,6 +2613,7 @@ const OpsApp = {
   refreshCurrentTab() {
     if (this._memberDetailId) return;
     const tab = this.currentTab;
+    console.log('[Refresh] refreshCurrentTab called, tab:', tab, '_tsFilter:', this._tsFilter);
     if (tab === 'personal-analysis') {
       this.renderPersonalAnalysis();
     } else if (tab === 'task-list') {
