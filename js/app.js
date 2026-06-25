@@ -1879,51 +1879,107 @@ const App = {
     return true;
   },
 
-  renderAfterSales() {
+  renderAfterSales(viewMode) {
+    if (!viewMode) viewMode = this._asViewMode || 'card';
+    this._asViewMode = viewMode;
     const registry = Storage.getSNRegistry();
+    const allItems = registry.filter(r => r.status === 'damaged' || r.status === 'in_repair');
     const damaged = registry.filter(r => r.status === 'damaged');
     const inRepair = registry.filter(r => r.status === 'in_repair');
+    const currentFilter = this._asFilter || 'all';
 
-    function snCard(r) {
-      return `
-      <div class="sn-card">
-        <div class="sn-card-body">
-          <code class="sn-card-code">${r.snCode}</code>
-          <div class="sn-card-type">${r.equipmentType} · ${r.handType === 'left' ? '左手' : r.handType === 'right' ? '右手' : ''}</div>
-          ${r.damageReason ? '<div style="font-size:0.8rem;color:var(--color-danger)">损坏原因: ' + r.damageReason + '</div>' : ''}
-          ${r.trackingNumber ? '<div style="font-size:0.78rem">📦 快递: ' + r.trackingNumber + '</div>' : ''}
-          ${r.machineNumber ? '<div style="font-size:0.75rem;color:var(--text-tertiary)">来源机器: ' + r.machineNumber + '</div>' : ''}
-          <div style="font-size:0.72rem;color:var(--text-tertiary)">${r.updatedAt ? App._formatTime(r.updatedAt) : ''}</div>
-        </div>
+    const SM = {
+      damaged: { l: '损坏待发', c: 'ts-status-pending', icon: '⚠️' },
+      in_repair: { l: '售后中', c: 'ts-status-responded', icon: '🚚' },
+    };
+    const fm = t => t ? new Date(t).toLocaleString('zh-CN') : '-';
+
+    const counts = { all: allItems.length, damaged: damaged.length, in_repair: inRepair.length };
+
+    const statsHtml = `<div class="ts-stats-row">
+      <div class="ts-stat-card total"><div class="ts-stat-icon">📋</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.all}</div><div class="ts-stat-label">售后总数</div></div></div>
+      <div class="ts-stat-card pending"><div class="ts-stat-icon">⚠️</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.damaged}</div><div class="ts-stat-label">损坏待发</div></div></div>
+      <div class="ts-stat-card responded"><div class="ts-stat-icon">🚚</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.in_repair}</div><div class="ts-stat-label">售后中</div></div></div>
+    </div>`;
+
+    const toolbar = `<div class="ts-toolbar">
+      <div class="ts-filter-bar">
+        ${['all','damaged','in_repair'].map(s => `<button class="ts-filter-btn ${s===currentFilter?'active':''}" onclick="App.filterAfterSales('${s}')" id="as-filter-${s}">${s==='all'?'全部':s==='damaged'?'损坏待发':'售后中'} (${counts[s]})</button>`).join('')}
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-sm ${viewMode==='card'?'btn-primary':'btn-outline'}" onclick="App.renderAfterSales('card')">🃏 卡片</button>
+        <button class="btn btn-sm ${viewMode==='table'?'btn-primary':'btn-outline'}" onclick="App.renderAfterSales('table')">📋 表格</button>
+        ${counts.damaged > 0 ? `<button class="btn btn-sm btn-primary" onclick="App._showShipDialog()">📦 发货给厂家</button>` : ''}
+        ${counts.in_repair > 0 ? `<button class="btn btn-sm btn-success" onclick="App._showRepairCompleteDialog()">✅ 维修完成</button>` : ''}
+      </div>
+    </div>`;
+
+    const emptyHtml = `<div class="ts-empty"><div class="ts-empty-icon">🔧</div><div class="ts-empty-text">暂无售后记录</div><div class="ts-empty-sub">设备损坏后的售后流程将在此处管理</div></div>`;
+
+    const filteredItems = currentFilter === 'all' ? allItems : allItems.filter(i => i.status === currentFilter);
+
+    const eqLabel = t => {
+      const map = { glove: '手套', dexterous_hand: '灵巧手', gripper: '夹爪' };
+      return map[t] || t;
+    };
+    const handLabel = h => h === 'left' ? '左手' : h === 'right' ? '右手' : '';
+
+    let body;
+    if (viewMode === 'table') {
+      const cols = [
+        { k: 'snCode', l: 'SN码' }, { k: 'equipmentType', l: '设备类型' }, { k: 'handType', l: '左右手' },
+        { k: 'status', l: '状态' }, { k: 'damageReason', l: '损坏原因' }, { k: 'trackingNumber', l: '快递单号' },
+        { k: 'machineNumber', l: '来源机器' }, { k: 'updatedAt', l: '更新时间' }
+      ];
+      body = `<div class="ts-table-wrap"><table class="ts-log-table"><thead><tr>
+        ${cols.map(c => `<th>${c.l}</th>`).join('')}
+      </tr></thead><tbody>
+        ${filteredItems.length===0?`<tr><td colspan="8">${emptyHtml}</td></tr>`:''}
+        ${filteredItems.map(item => { const s=SM[item.status]||SM.damaged;
+          return `<tr data-as-status="${item.status}">
+            <td><code>${item.snCode||'-'}</code></td>
+            <td>${eqLabel(item.equipmentType)||'-'}</td>
+            <td>${handLabel(item.handType)||'-'}</td>
+            <td><span class="ts-status-badge ${s.c}">${s.icon} ${s.l}</span></td>
+            <td>${item.damageReason||'-'}</td>
+            <td>${item.trackingNumber?`📦 ${item.trackingNumber}`:'-'}</td>
+            <td>${item.machineNumber||'-'}</td>
+            <td style="font-size:0.8rem;white-space:nowrap;">${fm(item.updatedAt)}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table></div>`;
+    } else {
+      body = `<div class="ts-list" id="as-list-container">
+        ${filteredItems.length===0?emptyHtml:''}
+        ${filteredItems.map(item => { const s=SM[item.status]||SM.damaged;
+          return `<div class="ts-card ${item.status}" data-as-status="${item.status}">
+            <div class="ts-card-icon">${s.icon}</div>
+            <div class="ts-card-title"><code>${item.snCode||'-'}</code></div>
+            <div class="ts-card-sub">${eqLabel(item.equipmentType)||'-'} ${handLabel(item.handType)?'· '+handLabel(item.handType):''}</div>
+            ${item.damageReason?`<div style="font-size:0.85rem;color:var(--color-danger);margin-top:4px;">💔 ${item.damageReason}</div>`:''}
+            ${item.trackingNumber?`<div style="font-size:0.85rem;color:var(--text-secondary);margin-top:2px;">📦 快递: ${item.trackingNumber}</div>`:''}
+            <div class="ts-card-footer">
+              ${item.machineNumber?`<span>🖥 ${item.machineNumber}</span>`:''}
+              <span>🕐 ${fm(item.updatedAt)}</span>
+              <span style="margin-left:auto;"><span class="ts-status-badge ${s.c}">${s.l}</span></span>
+            </div>
+          </div>`;
+        }).join('')}
       </div>`;
     }
 
-    const html = `
-      <div class="page-header">
-        <h2>🔧 售后管理</h2>
-        <span class="page-subtitle">损坏 ${damaged.length} 个 · 售后中 ${inRepair.length} 个</span>
-      </div>
+    document.getElementById('main-content').innerHTML = `<div class="page-header"><h2>🔧 售后管理</h2><span style="color:var(--text-secondary);font-size:0.85rem;">设备损坏与售后维修管理</span></div>${statsHtml}${toolbar}${body}`;
+  },
 
-      <div class="section-header"><h3>⚠️ 损坏库存 (${damaged.length})</h3></div>
-      ${damaged.length === 0 ? '<p class="empty-text">暂无损坏手套</p>' : `
-        <div class="sn-grid">${damaged.map(r => snCard(r)).join('')}</div>
-        <div style="margin-top:12px;">
-          <button class="btn btn-primary" onclick="App._showShipDialog()">📦 发货给厂家</button>
-        </div>
-      `}
-
-      <div class="section-header" style="margin-top:24px;"><h3>🚚 售后中 (${inRepair.length})</h3></div>
-      <p style="font-size:0.8rem;color:var(--text-tertiary);margin-bottom:12px;">
-        💡 售后流程的每一步都会记录在 <a href="#" onclick="App.switchTab('transactions');return false" style="color:var(--color-primary);">📋 流水记录</a> 中
-      </p>
-      ${inRepair.length === 0 ? '<p class="empty-text">暂无售后中手套</p>' : `
-        <div class="sn-grid">${inRepair.map(r => snCard(r)).join('')}</div>
-        <div style="margin-top:12px;">
-          <button class="btn btn-success" onclick="App._showRepairCompleteDialog()">✅ 维修完成（回到库存）</button>
-        </div>
-      `}
-    `;
-    document.getElementById('main-content').innerHTML = html;
+  filterAfterSales(status) {
+    this._asFilter = status;
+    document.querySelectorAll('.ts-filter-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('as-filter-' + status);
+    if (btn) btn.classList.add('active');
+    document.querySelectorAll('.ts-card[data-as-status], tr[data-as-status]').forEach(el => {
+      if (status === 'all') { el.style.display = ''; }
+      else { el.style.display = el.dataset.asStatus === status ? '' : 'none'; }
+    });
   },
 
   _showShipDialog() {
