@@ -1993,6 +1993,8 @@ th.sortable:hover { background: var(--bg-secondary); }
 }
 .ts-stat-card::after { content:'';position:absolute;top:0;right:0;bottom:0;width:4px;border-radius:0 var(--radius-lg) var(--radius-lg) 0; }
 .ts-stat-card:hover { box-shadow:var(--shadow-md);transform:translateY(-2px); }
+.ts-stat-card.active { box-shadow:var(--shadow-lg);transform:scale(1.02);border-width:2px; }
+.ts-stat-card.active::before { content:'';position:absolute;inset:0;background:currentColor;opacity:0.05; }
 .ts-stat-icon { width:44px;height:44px;border-radius:var(--radius);display:flex;align-items:center;justify-content:center;font-size:1.3rem;flex-shrink:0; }
 .ts-stat-content { flex:1;min-width:0; }
 .ts-stat-value { font-size:1.5rem;font-weight:800;letter-spacing:-0.03em;line-height:1.1;color:var(--text-primary); }
@@ -2000,15 +2002,19 @@ th.sortable:hover { background: var(--bg-secondary); }
 .ts-stat-card.pending { border-left:3px solid #ef4444; }
 .ts-stat-card.pending .ts-stat-icon { background:#fef2f2;color:#dc2626; }
 .ts-stat-card.pending::after { background:#ef4444; }
+.ts-stat-card.pending.active { border-color:#ef4444; }
 .ts-stat-card.responded { border-left:3px solid var(--color-warning); }
 .ts-stat-card.responded .ts-stat-icon { background:#fffbeb;color:#d97706; }
 .ts-stat-card.responded::after { background:var(--color-warning); }
+.ts-stat-card.responded.active { border-color:var(--color-warning); }
 .ts-stat-card.completed { border-left:3px solid var(--color-accent); }
 .ts-stat-card.completed .ts-stat-icon { background:#ecfdf5;color:#059669; }
 .ts-stat-card.completed::after { background:var(--color-accent); }
+.ts-stat-card.completed.active { border-color:var(--color-accent); }
 .ts-stat-card.total { border-left:3px solid var(--color-primary); }
 .ts-stat-card.total .ts-stat-icon { background:var(--color-primary-bg);color:var(--color-primary); }
 .ts-stat-card.total::after { background:var(--color-primary); }
+.ts-stat-card.total.active { border-color:var(--color-primary); }
 [data-theme="dark"] .ts-stat-card.pending .ts-stat-icon { background:#7f1d1d40;color:#fca5a5; }
 [data-theme="dark"] .ts-stat-card.responded .ts-stat-icon { background:#78350f40;color:#fcd34d; }
 [data-theme="dark"] .ts-stat-card.completed .ts-stat-icon { background:#064e3b40;color:#6ee7b7; }

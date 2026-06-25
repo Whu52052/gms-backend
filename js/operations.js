@@ -2139,6 +2139,7 @@ const OpsApp = {
   async renderTechSupportMy(viewMode) {
     if (!viewMode) viewMode = this._tsViewMode || 'card';
     this._tsViewMode = viewMode;
+    const currentFilter = this._tsFilter || 'all';
     let items = [];
     try { items = await API.getTechSupportList(); } catch {}
     const SM = { pending:{l:'待响应',c:'ts-status-pending',icon:'🕐'}, responded:{l:'处理中',c:'ts-status-responded',icon:'🔧'}, completed:{l:'已完成',c:'ts-status-completed',icon:'✅'} };
@@ -2147,14 +2148,25 @@ const OpsApp = {
     const counts = { all: items.length, pending: 0, responded: 0, completed: 0 };
     items.forEach(i => { if (counts[i.status] !== undefined) counts[i.status]++; });
 
+    // 根据筛选状态过滤数据
+    const filteredItems = currentFilter === 'all' ? items : items.filter(i => i.status === currentFilter);
+
     const statsHtml = `<div class="ts-stats-row">
-      <div class="ts-stat-card total"><div class="ts-stat-icon">📋</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.all}</div><div class="ts-stat-label">总记录</div></div></div>
-      <div class="ts-stat-card pending"><div class="ts-stat-icon">🕐</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.pending}</div><div class="ts-stat-label">待响应</div></div></div>
-      <div class="ts-stat-card responded"><div class="ts-stat-icon">🔧</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.responded}</div><div class="ts-stat-label">处理中</div></div></div>
-      <div class="ts-stat-card completed"><div class="ts-stat-icon">✅</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.completed}</div><div class="ts-stat-label">已完成</div></div></div>
+      <div class="ts-stat-card total ${currentFilter==='all'?'active':''}" onclick="OpsApp._setTsFilter('all')" style="cursor:pointer;">
+        <div class="ts-stat-icon">📋</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.all}</div><div class="ts-stat-label">全部</div></div>
+      </div>
+      <div class="ts-stat-card pending ${currentFilter==='pending'?'active':''}" onclick="OpsApp._setTsFilter('pending')" style="cursor:pointer;">
+        <div class="ts-stat-icon">🕐</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.pending}</div><div class="ts-stat-label">待响应</div></div>
+      </div>
+      <div class="ts-stat-card responded ${currentFilter==='responded'?'active':''}" onclick="OpsApp._setTsFilter('responded')" style="cursor:pointer;">
+        <div class="ts-stat-icon">🔧</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.responded}</div><div class="ts-stat-label">处理中</div></div>
+      </div>
+      <div class="ts-stat-card completed ${currentFilter==='completed'?'active':''}" onclick="OpsApp._setTsFilter('completed')" style="cursor:pointer;">
+        <div class="ts-stat-icon">✅</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.completed}</div><div class="ts-stat-label">已完成</div></div>
+      </div>
     </div>`;
 
-    const emptyHtml = `<div class="ts-empty"><div class="ts-empty-icon">📋</div><div class="ts-empty-text">暂无维修记录</div><div class="ts-empty-sub">提交技术支持请求后，记录将显示在此处</div></div>`;
+    const emptyHtml = `<div class="ts-empty"><div class="ts-empty-icon">📋</div><div class="ts-empty-text">暂无${currentFilter==='all'?'':'「'+(SM[currentFilter]?.l||currentFilter)+'」'}维修记录</div><div class="ts-empty-sub">提交技术支持请求后，记录将显示在此处</div></div>`;
 
     const toolbar = `<div class="ts-toolbar" style="justify-content:flex-end;">
       <div style="display:flex;gap:6px;">
@@ -2169,8 +2181,8 @@ const OpsApp = {
       body = `<div class="ts-table-wrap"><table class="ts-log-table"><thead><tr>
         <th>设备编号</th><th>故障设备</th><th>故障现象</th><th>提交时间</th><th>状态</th><th>维修人员</th><th>响应时间</th><th>恢复时间</th><th>总时长</th>
       </tr></thead><tbody>
-        ${items.length===0?`<tr><td colspan="9">${emptyHtml}</td></tr>`:''}
-        ${items.map(item => { const s=SM[item.status]||SM.pending;
+        ${filteredItems.length===0?`<tr><td colspan="9">${emptyHtml}</td></tr>`:''}
+        ${filteredItems.map(item => { const s=SM[item.status]||SM.pending;
           return `<tr class="ts-row-clickable" onclick="OpsApp.showTechSupportDetail('${item.id}')">
             <td><strong>${item.machineNumber||'-'}</strong></td><td>${item.equipmentTypeName||item.equipmentType||'-'}</td>
             <td>${item.faultType||'-'}</td><td style="font-size:0.8rem;white-space:nowrap;">${fm(item.submittedAt)}</td>
@@ -2181,8 +2193,8 @@ const OpsApp = {
       </tbody></table></div>`;
     } else {
       body = `<div class="ts-list">
-        ${items.length===0?emptyHtml:''}
-        ${items.map(item => { const s=SM[item.status]||SM.pending;
+        ${filteredItems.length===0?emptyHtml:''}
+        ${filteredItems.map(item => { const s=SM[item.status]||SM.pending;
           return `<div class="ts-card ${item.status}" onclick="OpsApp.showTechSupportDetail('${item.id}')">
             <div class="ts-card-icon">${s.icon}</div>
             <div class="ts-card-title">${item.machineNumber||item.machineId}</div>
@@ -2197,7 +2209,12 @@ const OpsApp = {
       </div>`;
     }
 
-    document.getElementById('main-content').innerHTML = `<div class="page-header"><h2>📋 维修日志</h2><span style="color:var(--text-secondary);font-size:0.85rem;">${items.length} 条记录</span></div>${statsHtml}${toolbar}${body}`;
+    document.getElementById('main-content').innerHTML = `<div class="page-header"><h2>📋 维修日志</h2><span style="color:var(--text-secondary);font-size:0.85rem;">${filteredItems.length} 条${currentFilter==='all'?'':'「'+(SM[currentFilter]?.l||currentFilter)+'」'}记录</span></div>${statsHtml}${toolbar}${body}`;
+  },
+
+  _setTsFilter(filter) {
+    this._tsFilter = filter;
+    this.renderTechSupportMy();
   },
 
   exportTechSupportXLSX() {
