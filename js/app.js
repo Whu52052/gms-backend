@@ -1578,7 +1578,7 @@ const App = {
         ${filteredList.length===0?emptyHtml:''}
         ${filteredList.map(sn => {
           const s = SN_ST[sn.status] || SN_ST['可用'];
-          const hasImg = sn.attachment && sn.attachment.length > 0 && (sn.attachment.startsWith('data:') || sn.attachment.startsWith('http'));
+          const hasImg = App._hasValidAttachment(sn.attachment);
           return `<div class="ts-card ${sn.status==='在用'?'responded':sn.status==='损坏'||sn.status==='售后中'?'pending':'idle'}" data-sn-status="${sn.status==='在用'?'inuse':sn.status==='损坏'||sn.status==='售后中'?'damaged':'idle'}" data-sn-code="${sn.snCode}" style="cursor:pointer;position:relative;">
             <div class="ts-card-icon">${s.icon}</div>
             <div class="ts-card-title"><code>${sn.snCode}</code></div>
@@ -4175,17 +4175,33 @@ const App = {
     return html;
   },
 
+  _hasValidAttachment(attachment) {
+    if (!attachment || !attachment.length) return false;
+    if (attachment.startsWith('data:')) return true;
+    if (attachment.startsWith('http://') || attachment.startsWith('https://')) return true;
+    if (attachment.startsWith('/uploads/')) return true;
+    return false;
+  },
+
+  _isImageAttachment(attachment) {
+    if (!this._hasValidAttachment(attachment)) return false;
+    if (attachment.startsWith('data:image/')) return true;
+    if (/\.(jpg|jpeg|png|gif|webp|svg)(\?|$)/i.test(attachment)) return true;
+    return false;
+  },
+
   _showSNAttachment(snCode) {
     const reg = Storage.getSNByCode(snCode);
     const currentAttachment = reg && reg.attachment;
-    const isImage = currentAttachment && (currentAttachment.startsWith('data:image/') || /\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(currentAttachment));
+    const hasValid = this._hasValidAttachment(currentAttachment);
+    const isImage = this._isImageAttachment(currentAttachment);
     
     const canEdit = this._isPrivileged();
     const contentHtml = `
       <div style="text-align:center;">
-        ${currentAttachment ? `
+        ${hasValid ? `
           ${isImage 
-            ? `<img src="${currentAttachment}" style="max-width:100%;max-height:60vh;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);" alt="${snCode} 附件">`
+            ? `<img src="${currentAttachment}" style="max-width:100%;max-height:60vh;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);" alt="${snCode} 附件" onerror="this.style.display='none';this.parentElement.innerHTML='<div style=\\'padding:40px 20px;color:var(--text-tertiary);\\'><div style=\\'font-size:3rem;margin-bottom:8px;\\'>⚠️</div><div>图片加载失败</div></div>'">`
             : `<a href="${currentAttachment}" target="_blank" class="btn btn-primary">📥 打开附件</a>`
           }
         ` : `
@@ -4198,10 +4214,10 @@ const App = {
       ${canEdit ? `
         <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
           <label class="btn btn-primary" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
-            📤 ${currentAttachment ? '重新上传' : '上传附件'}
+            📤 ${hasValid ? '重新上传' : '上传附件'}
             <input type="file" accept="image/*" style="display:none;" onchange="App._uploadSNAttachment('${snCode}', this)">
           </label>
-          ${currentAttachment ? `<button class="btn btn-danger" onclick="App._deleteSNAttachment('${snCode}')">🗑️ 删除附件</button>` : ''}
+          ${hasValid ? `<button class="btn btn-danger" onclick="App._deleteSNAttachment('${snCode}')">🗑️ 删除附件</button>` : ''}
         </div>
       ` : ''}
     `;
@@ -4220,38 +4236,64 @@ const App = {
       return;
     }
     
-    // 压缩图片
-    const compressed = await this._compressImage(file);
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const dataUrl = e.target.result;
-      try {
-        // 1. 上传到服务器
-        const uploadRes = await API._fetch('POST', '/api/upload', { filename: file.name, data: dataUrl });
-        // 2. 更新 SN 码记录的 attachment 字段
-        await API.upsertSNRegistry({
-          snCode,
-          attachment: uploadRes.path
-        });
-        alert('上传成功！');
-        this._showSNAttachment(snCode);
-        if (typeof this._doRenderSNCodes === 'function') this._doRenderSNCodes();
-      } catch (err) {
-        console.error('上传失败:', err);
-        alert('上传失败: ' + (err.message || '未知错误'));
-      }
-    };
-    reader.readAsDataURL(compressed);
+    const btn = fileInput.parentElement;
+    const originalText = btn.textContent;
+    btn.textContent = '上传中...';
+    btn.style.opacity = '0.6';
+    btn.style.pointerEvents = 'none';
+    
+    try {
+      const compressed = await this._compressImage(file);
+      const reader = new FileReader();
+      
+      const uploadPromise = new Promise((resolve, reject) => {
+        reader.onload = async (e) => {
+          try {
+            const dataUrl = e.target.result;
+            const uploadRes = await API._fetch('POST', '/api/upload', { filename: file.name, data: dataUrl });
+            if (!uploadRes || !uploadRes.path) {
+              reject(new Error(uploadRes?.error || '上传失败'));
+              return;
+            }
+            const upsertRes = await API.upsertSNRegistry({
+              snCode,
+              attachment: uploadRes.path
+            });
+            if (upsertRes && upsertRes.error) {
+              reject(new Error(upsertRes.error));
+              return;
+            }
+            resolve(uploadRes.path);
+          } catch (err) { reject(err); }
+        };
+        reader.onerror = () => reject(new Error('读取文件失败'));
+      });
+      
+      reader.readAsDataURL(compressed);
+      await uploadPromise;
+      
+      this._showSNAttachment(snCode);
+      if (typeof this._doRenderSNCodes === 'function') this._doRenderSNCodes();
+    } catch (err) {
+      console.error('上传失败:', err);
+      alert('上传失败: ' + (err.message || '未知错误'));
+      btn.textContent = originalText;
+      btn.style.opacity = '';
+      btn.style.pointerEvents = '';
+    }
   },
 
   async _deleteSNAttachment(snCode) {
     if (!confirm(`确定要删除 ${snCode} 的附件吗？`)) return;
     try {
-      await API.upsertSNRegistry({
+      const res = await API.upsertSNRegistry({
         snCode,
-        attachment: null
+        attachment: ''
       });
-      alert('删除成功！');
+      if (res && res.error) {
+        alert('删除失败: ' + res.error);
+        return;
+      }
       this._showSNAttachment(snCode);
       if (typeof this._doRenderSNCodes === 'function') this._doRenderSNCodes();
     } catch (err) {
