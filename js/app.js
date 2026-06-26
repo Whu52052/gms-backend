@@ -3205,10 +3205,13 @@ const App = {
 
     const contentHtml = `
       <div class="breakdown-popover">
-        <div class="breakdown-summary">在线机器共 <strong>${onlineMachines.length}</strong> 台</div>
-        <div class="breakdown-list">${rows || '<p class="empty-text">暂无在线机器</p>'}</div>
+        <div class="breakdown-summary">
+          <span style="font-size:1.8rem;">🖥️</span>
+          <span>在线机器共 <strong>${onlineMachines.length}</strong> 台</span>
+        </div>
+        <div class="breakdown-list">${rows || '<div style="padding:30px;text-align:center;color:var(--text-tertiary);">暂无在线机器</div>'}</div>
         <div class="breakdown-footer">
-          <small>总机器数: ${Object.keys(latestByMachine).length} 台 | 利用率: ${Object.keys(latestByMachine).length > 0 ? Math.round(onlineMachines.length / Object.keys(latestByMachine).length * 100) : 0}%</small>
+          总机器数: ${Object.keys(latestByMachine).length} 台 | 利用率: ${Object.keys(latestByMachine).length > 0 ? Math.round(onlineMachines.length / Object.keys(latestByMachine).length * 100) : 0}%
         </div>
       </div>
     `;
@@ -3279,16 +3282,39 @@ const App = {
     }).join('');
 
     const contentHtml = `
-      <div class="breakdown-list">${rows}</div>
-      <div style="margin-top:12px;"><button class="btn btn-sm btn-outline" onclick="App._exportAllSNExcel()">📥 导出全部库存库存Excel</button></div>
-      <div style="margin-top:12px;border-top:1px solid var(--border-color);padding-top:12px;">
-        <p style="font-weight:600;margin-bottom:8px;">⚡ 快速左/右手入库</p>
-        <p class="form-hint" style="margin-bottom:8px;">手套: <code>L/R+SN码</code> 如 <code>LWG1JA02260403004</code> · 灵巧手: <code>QL/QR+SN码</code> 如 <code>QL347A386D3433</code><br>支持换行/空格批量输入</p>
-        <textarea id="quick-lr-input" rows="4" placeholder="RWG1K01260321284&#10;LWG1JA02260403004" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;font-family:monospace;"></textarea>
-        <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="App._quickLRInbound()">📥 快速入库</button>
-        <span id="quick-lr-result" style="margin-left:8px;font-size:0.8rem;color:var(--text-tertiary);"></span>
+      <div class="breakdown-popover">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+          <div style="padding:16px;background:var(--bg-secondary);border-radius:10px;text-align:center;">
+            <div style="font-size:2rem;margin-bottom:4px;">🧤</div>
+            <div style="font-weight:700;font-size:1.4rem;color:var(--text-primary);">${gloveTotal} 只</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:2px;">${pairCount} 对 · 左${gloveTypes[0].total} · 右${gloveTypes[1].total}</div>
+          </div>
+          <div style="padding:16px;background:var(--bg-secondary);border-radius:10px;text-align:center;">
+            <div style="font-size:2rem;margin-bottom:4px;">🤖</div>
+            <div style="font-weight:700;font-size:1.4rem;color:var(--text-primary);">${dexTotal} 只</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:2px;">左${dexTypes[0].total} · 右${dexTypes[1].total}</div>
+          </div>
+        </div>
+        <div class="breakdown-section-title">库存明细</div>
+        <div class="breakdown-list">${rows}</div>
+        <div style="margin-top:16px;">
+          <button class="btn btn-sm btn-outline" onclick="App._exportAllSNExcel()">📥 导出全部库存Excel</button>
+        </div>
+        <div style="margin-top:20px;border-top:1px solid var(--border-color);padding-top:16px;">
+          <div class="breakdown-section-title">⚡ 快速左/右手入库</div>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:10px;">
+            手套: <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;">L/R+SN码</code> 如 <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;">LWG1JA02260403004</code><br>
+            灵巧手: <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;">QL/QR+SN码</code> 如 <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;">QL347A386D3433</code><br>
+            支持换行/空格批量输入
+          </p>
+          <textarea id="quick-lr-input" rows="3" placeholder="RWG1K01260321284&#10;LWG1JA02260403004" style="width:100%;padding:10px;border:1px solid var(--border-color);border-radius:8px;font-family:monospace;font-size:0.9rem;resize:vertical;"></textarea>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:10px;">
+            <button class="btn btn-primary btn-sm" onclick="App._quickLRInbound()">📥 快速入库</button>
+            <span id="quick-lr-result" style="font-size:0.8rem;color:var(--text-tertiary);"></span>
+          </div>
+        </div>
+        <table id="all-sn-print-table" style="display:none;"><thead><tr><th>时间</th><th>设备类型</th><th>SN码</th><th>状态</th><th>机器编号</th></tr></thead><tbody>${snPrintRows}</tbody></table>
       </div>
-      <table id="all-sn-print-table" style="display:none;"><thead><tr><th>时间</th><th>设备类型</th><th>SN码</th><th>状态</th><th>机器编号</th></tr></thead><tbody>${snPrintRows}</tbody></table>
     `;
     this._showInfoModal('全部库存明细', contentHtml);
   },
@@ -3442,18 +3468,21 @@ const App = {
     const contentHtml = `
       <div class="breakdown-popover">
         <div class="breakdown-summary">
-          <span style="font-size:2rem;">${icon}</span>
-          <strong>${label}</strong> 当前库存: <strong style="font-size:1.3rem;">${inv.quantity}</strong> 个
+          <span style="font-size:1.8rem;">${icon}</span>
+          <div style="text-align:center;">
+            <div style="font-size:0.9rem;color:var(--text-secondary);margin-bottom:4px;">${label}</div>
+            <div style="font-size:1.8rem;font-weight:700;color:var(--text-primary);">${inv.quantity} <span style="font-size:0.9rem;font-weight:400;color:var(--text-secondary);">个</span></div>
+          </div>
         </div>
         <div class="breakdown-meta">
-          最后更新: ${this._formatTime(inv.updatedAt)} | 更新人: ${inv.updatedBy || '无'}
+          最后更新: ${this._formatTime(inv.updatedAt)} · 更新人: ${inv.updatedBy || '无'}
         </div>
-        <div style="margin:12px 0;display:flex;gap:8px;">
-          <button class="btn btn-sm btn-primary" onclick="App.quickInOut('${type}','in')">+ 入库</button>
-          <button class="btn btn-sm btn-primary" onclick="App.quickInOut('${type}','out')">- 出库</button>
-          ${API.currentUser && API.currentUser.role === 'superadmin' ? `<button class="btn btn-sm btn-danger" onclick="App.showSetInventoryModal('${type}','${label}')">✎ 直接设置库存</button>` : ''}
+        <div style="margin:12px 0 16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+          <button class="btn btn-sm btn-success" onclick="App.quickInOut('${type}','in')">+ 入库</button>
+          <button class="btn btn-sm btn-warning" onclick="App.quickInOut('${type}','out')">- 出库</button>
+          ${API.currentUser && API.currentUser.role === 'superadmin' ? `<button class="btn btn-sm btn-outline" onclick="App.showSetInventoryModal('${type}','${label}')">⚙ 直接设置</button>` : ''}
         </div>
-        <h4 style="margin-top:12px;">最近10条流水</h4>
+        <div class="breakdown-section-title">最近10条流水</div>
         <div class="mini-list">${this._renderRecentTransactions(transactions)}</div>
       </div>
     `;
@@ -3519,20 +3548,34 @@ const App = {
 
     const typeRows = Object.entries(byType).map(([k, v]) => {
       const labels = { glove: '手套', dexterous_hand: '灵巧手', gripper: '夹爪' };
-      return `<div class="breakdown-row"><span>${labels[k] || k}</span><span class="breakdown-count">${v} 条</span></div>`;
+      return `<div class="breakdown-row"><span class="breakdown-icon">📦</span><span class="breakdown-type">${labels[k] || k}</span><span class="breakdown-count">${v}</span></div>`;
     }).join('');
 
     const contentHtml = `
       <div class="breakdown-popover">
-        <div class="breakdown-summary">今日操作共 <strong>${todayTx.length}</strong> 条</div>
+        <div class="breakdown-summary">
+          <span style="font-size:1.8rem;">📋</span>
+          <div style="text-align:center;">
+            <div style="font-size:0.9rem;color:var(--text-secondary);margin-bottom:4px;">今日操作</div>
+            <div style="font-size:1.8rem;font-weight:700;color:var(--text-primary);">${todayTx.length} <span style="font-size:0.9rem;font-weight:400;color:var(--text-secondary);">条</span></div>
+          </div>
+        </div>
         <div class="breakdown-list">
-          <div class="breakdown-row"><span>📥 入库</span><span class="breakdown-count">${inCount} 条</span></div>
-          <div class="breakdown-row"><span>📤 出库</span><span class="breakdown-count">${outCount} 条</span></div>
+          <div class="breakdown-row">
+            <span class="breakdown-icon">📥</span>
+            <span class="breakdown-type">入库</span>
+            <span class="breakdown-count">${inCount}</span>
+          </div>
+          <div class="breakdown-row">
+            <span class="breakdown-icon">📤</span>
+            <span class="breakdown-type">出库</span>
+            <span class="breakdown-count">${outCount}</span>
+          </div>
           ${typeRows}
         </div>
-        <h4 style="margin-top:12px;">今日流水</h4>
+        <div class="breakdown-section-title">今日流水</div>
         <div class="mini-list">${this._renderRecentTransactions(todayTx.slice(0, 15))}</div>
-        <div style="margin-top:8px;text-align:right;">
+        <div style="margin-top:12px;text-align:right;">
           <button class="btn btn-sm btn-outline" onclick="App.switchTab('transactions')">查看全部流水 →</button>
         </div>
       </div>

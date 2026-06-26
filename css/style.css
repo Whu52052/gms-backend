@@ -1623,22 +1623,47 @@ body.login-mode #main-content { padding: 0; }
 }
 
 /* ==================== ONLINE MACHINE BREAKDOWN POPOVER ==================== */
-.breakdown-popover { padding: 8px 0; }
+.breakdown-popover { padding: 4px 0; }
 .breakdown-summary {
-  text-align: center; font-size: 1rem; margin-bottom: 14px;
-  padding-bottom: 10px; border-bottom: 1px solid var(--border-color);
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  font-size: 1rem; margin-bottom: 14px;
+  padding: 16px; background: var(--bg-secondary); border-radius: 10px;
 }
-.breakdown-list { margin-bottom: 12px; }
+.breakdown-summary strong { font-size: 1.5rem; color: var(--text-primary); }
+.breakdown-list {
+  background: var(--bg-card); border: 1px solid var(--border-color);
+  border-radius: 8px; overflow: hidden;
+}
 .breakdown-row {
-  display: flex; align-items: center; gap: 12px; padding: 8px 10px;
-  border-radius: 8px; transition: background var(--transition);
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  border-bottom: 1px solid var(--border-color); transition: background var(--transition);
 }
+.breakdown-row:last-child { border-bottom: none; }
 .breakdown-row:hover { background: var(--bg-secondary); }
-.breakdown-icon { font-size: 1.3rem; flex-shrink: 0; }
-.breakdown-type { flex: 1; font-weight: 600; min-width: 80px; }
-.breakdown-count { font-weight: 700; color: var(--color-primary); white-space: nowrap; }
-.breakdown-machines { font-size: 0.78rem; color: var(--text-secondary); word-break: break-all; }
-.breakdown-footer { text-align: center; border-top: 1px solid var(--border-color); padding-top: 10px; }
+.breakdown-icon { font-size: 1.3rem; flex-shrink: 0; width: 28px; text-align: center; }
+.breakdown-type { flex: 1; font-weight: 600; min-width: 100px; color: var(--text-primary); }
+.breakdown-count {
+  font-weight: 700; color: var(--color-primary); white-space: nowrap;
+  font-size: 1.1rem; min-width: 60px; text-align: right;
+}
+.breakdown-machines {
+  font-size: 0.78rem; color: var(--text-secondary);
+  word-break: break-all; font-family: monospace;
+  flex: 2; text-align: right;
+}
+.breakdown-footer {
+  text-align: center; border-top: 1px solid var(--border-color);
+  padding-top: 12px; margin-top: 12px; color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.breakdown-meta {
+  font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;
+  text-align: center; padding-bottom: 12px; border-bottom: 1px solid var(--border-color);
+}
+.breakdown-section-title {
+  font-weight: 600; font-size: 0.95rem; margin: 16px 0 10px;
+  padding-left: 10px; border-left: 3px solid var(--color-primary);
+}
 
 /* ==================== UTILIZATION BAR ==================== */
 .utilization-bar-container {
