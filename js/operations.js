@@ -321,19 +321,19 @@ const OpsApp = {
         </div>` : ''}
 
         <div class="ops-overview-row">
-          <div class="ops-overview-card" onclick="OpsApp.switchTab('task-list')">
+          <div class="ops-overview-card" onclick="OpsApp.showOverviewDetail('tasks')">
             <div class="ov-icon blue">✅</div>
             <div class="ov-info"><div class="ov-value">${tasksTotal}</div><div class="ov-label">总任务数</div></div>
           </div>
-          <div class="ops-overview-card" onclick="OpsApp.switchTab('task-list')">
+          <div class="ops-overview-card" onclick="OpsApp.showOverviewDetail('done')">
             <div class="ov-icon green">✓</div>
             <div class="ov-info"><div class="ov-value">${tasksDone}</div><div class="ov-label">已完成</div></div>
           </div>
-          <div class="ops-overview-card" onclick="OpsApp.switchTab('requirements')">
+          <div class="ops-overview-card" onclick="OpsApp.showOverviewDetail('requirements')">
             <div class="ov-icon orange">📝</div>
             <div class="ov-info"><div class="ov-value">${reqsTotal}</div><div class="ov-label">需求数</div></div>
           </div>
-          <div class="ops-overview-card" onclick="OpsApp.switchTab('data-analysis')">
+          <div class="ops-overview-card" onclick="OpsApp.showOverviewDetail('pending')">
             <div class="ov-icon purple">📈</div>
             <div class="ov-info"><div class="ov-value">${this._tasks.filter(t => !t.done).length}</div><div class="ov-label">待处理</div></div>
           </div>
@@ -368,6 +368,125 @@ const OpsApp = {
       </div>
     `;
     document.getElementById('main-content').innerHTML = html;
+  },
+
+  // ==================== OVERVIEW DETAIL MODAL ====================
+  showOverviewDetail(type) {
+    const tasksDone = this._tasks.filter(t => t.done).length;
+    const tasksTotal = this._tasks.length;
+    const reqsTotal = this._requirements.length;
+    const pending = this._tasks.filter(t => !t.done);
+
+    const configs = {
+      tasks: {
+        title: '任务概览',
+        subtitle: '查看和管理所有任务',
+        icon: '✅',
+        iconClass: 'blue',
+        stats: [
+          { label: '总任务数', value: tasksTotal },
+          { label: '已完成', value: tasksDone },
+          { label: '待处理', value: tasksTotal - tasksDone },
+          { label: '完成率', value: tasksTotal > 0 ? Math.round(tasksDone / tasksTotal * 100) + '%' : '0%' }
+        ],
+        items: this._tasks.slice(0, 8),
+        emptyText: '暂无任务记录',
+        showPrio: true,
+        doneFlag: false
+      },
+      done: {
+        title: '已完成任务',
+        subtitle: '查看已完成的任务',
+        icon: '✓',
+        iconClass: 'green',
+        stats: [
+          { label: '已完成', value: tasksDone },
+          { label: '总任务数', value: tasksTotal },
+          { label: '完成率', value: tasksTotal > 0 ? Math.round(tasksDone / tasksTotal * 100) + '%' : '0%' }
+        ],
+        items: this._tasks.filter(t => t.done).slice(0, 8),
+        emptyText: '暂无已完成任务',
+        showPrio: true,
+        doneFlag: true
+      },
+      requirements: {
+        title: '需求管理',
+        subtitle: '查看和管理所有需求',
+        icon: '📝',
+        iconClass: 'orange',
+        stats: [
+          { label: '需求总数', value: reqsTotal },
+          { label: '高优先级', value: this._requirements.filter(r => r.priority === 'high').length },
+          { label: '中优先级', value: this._requirements.filter(r => r.priority === 'medium').length },
+          { label: '低优先级', value: this._requirements.filter(r => r.priority === 'low').length }
+        ],
+        items: this._requirements.slice(0, 8),
+        emptyText: '暂无需求记录',
+        itemMapper: r => ({ text: r.title, date: r.date, priority: r.priority })
+      },
+      pending: {
+        title: '待处理事项',
+        subtitle: '需要尽快处理的任务',
+        icon: '📈',
+        iconClass: 'purple',
+        stats: [
+          { label: '待处理', value: pending.length },
+          { label: '高优先级', value: pending.filter(t => t.priority === 'high').length },
+          { label: '中优先级', value: pending.filter(t => t.priority === 'medium' || !t.priority).length },
+          { label: '低优先级', value: pending.filter(t => t.priority === 'low').length }
+        ],
+        items: pending.slice(0, 8),
+        emptyText: '暂无待处理事项',
+        showPrio: true,
+        doneFlag: false
+      }
+    };
+
+    const cfg = configs[type] || configs.tasks;
+    const fm = d => d ? (new Date(d).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })) : '';
+
+    const listHtml = cfg.items.length === 0
+      ? `<div class="overview-detail-empty">${cfg.emptyText}</div>`
+      : cfg.items.map(item => {
+          const data = cfg.itemMapper ? cfg.itemMapper(item) : item;
+          const prio = data.priority || 'medium';
+          const doneClass = cfg.doneFlag || item.done ? 'done' : '';
+          return `<div class="overview-detail-item ${doneClass}">
+            ${cfg.showPrio ? `<span class="item-prio ${prio}"></span>` : ''}
+            <span class="item-text">${data.text}</span>
+            <span class="item-date">${fm(data.date)}</span>
+          </div>`;
+        }).join('');
+
+    const html = `<div class="overview-detail-modal" onclick="if(event.target===this)this.closeOverviewDetail()">
+      <div class="overview-detail-content">
+        <div class="overview-detail-header">
+          <div class="ov-icon ${cfg.iconClass}">${cfg.icon}</div>
+          <div>
+            <h3>${cfg.title}</h3>
+            <p>${cfg.subtitle}</p>
+          </div>
+          <button class="overview-detail-close" onclick="OpsApp.closeOverviewDetail()">×</button>
+        </div>
+        <div class="overview-detail-body">
+          <div class="overview-detail-stats">
+            ${cfg.stats.map(s => `<div class="overview-stat-box"><div class="stat-num">${s.value}</div><div class="stat-label">${s.label}</div></div>`).join('')}
+          </div>
+          <div class="overview-detail-list">${listHtml}</div>
+        </div>
+        <div class="overview-detail-footer">
+          <button class="btn btn-outline" onclick="OpsApp.closeOverviewDetail()">关闭</button>
+          <button class="btn btn-primary" onclick="OpsApp.closeOverviewDetail();OpsApp.switchTab('${type === 'requirements' ? 'requirements' : 'task-list'}')">查看全部</button>
+        </div>
+      </div>
+    </div>`;
+
+    document.body.insertAdjacentHTML('beforeend', html);
+  },
+
+  closeOverviewDetail() {
+    const modal = document.querySelector('.overview-detail-modal');
+    if (modal) modal.remove();
   },
 
   // ==================== TASK LIST ====================
