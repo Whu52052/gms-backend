@@ -1730,6 +1730,13 @@ const App = {
       // 获取本地SN状态，以便同步库存
       var r = Storage.getSNRegistry();
       var snEntry = r.find(function(x){ return x.snCode === snCode; });
+
+      // Bug Fix 1: 拦截「在用」状态的 SN，防止误删导致机器引用不存在的 SN
+      if (snEntry && snEntry.status === 'in_use') {
+        alert('SN码 ' + snCode + ' 当前正在机器【' + (snEntry.machineNumber || '-') + '】上使用，请先下线该机器后再删除。');
+        return;
+      }
+
       var wasAvailable = snEntry && snEntry.status === 'available';
       var invType = null;
       if (wasAvailable && snEntry) {
@@ -1754,13 +1761,32 @@ const App = {
         if (deleted.indexOf(snCode) === -1) deleted.push(snCode);
         localStorage.setItem('gms_deleted_sns', JSON.stringify(deleted));
       } catch(e) {}
-      // 同步库存：删除SN码时相应的手套也被删除
+
+      // Bug Fix 2: 同步删除服务端附件文件，避免孤儿文件占用存储
+      if (snEntry && snEntry.attachment && snEntry.attachment.startsWith('/uploads/')) {
+        try { API.deleteUpload(snEntry.attachment); } catch(e) {}
+      }
+
+      // Bug Fix 3: 写入删除流水记录，保留审计轨迹
+      if (snEntry) {
+        try {
+          Storage.addTransaction({
+            equipmentType: snEntry.equipmentType,
+            handType: snEntry.handType,
+            direction: 'out',
+            quantity: 1,
+            snCode: snCode,
+            updatedBy: API.currentUser?.username || '系统',
+            note: '删除SN码（' + (snEntry.status || '未知') + '）'
+          });
+        } catch(e) {}
+      }
+
+      // Bug Fix 4: 走 Storage.adjustInventory 以触发本地流水 + audit log
       if (wasAvailable && invType) {
-        var inv = Storage.getInventory(invType);
-        var newQty = Math.max(0, inv.quantity - 1);
-        Storage.setInventory(invType, newQty, '系统');
+        Storage.adjustInventory(invType, -1, '系统', snCode);
         if (API.online) {
-          API.adjustInventory(invType, -1, '系统', '').catch(function(){});
+          API.adjustInventory(invType, -1, '系统', snCode).catch(function(){});
         }
       }
       // 刷新页面内容（不使用 window.location.reload 避免重新验证token导致登出）
