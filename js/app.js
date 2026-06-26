@@ -1927,10 +1927,12 @@ const App = {
     if (!viewMode) viewMode = this._asViewMode || 'card';
     this._asViewMode = viewMode;
     const registry = Storage.getSNRegistry();
+    console.log('[AfterSales] registry length:', registry.length, 'in_repair items:', registry.filter(r => r.status === 'in_repair').length, 'damaged items:', registry.filter(r => r.status === 'damaged').length);
     const allItems = registry.filter(r => r.status === 'damaged' || r.status === 'in_repair');
     const damaged = registry.filter(r => r.status === 'damaged');
     const inRepair = registry.filter(r => r.status === 'in_repair');
     const currentFilter = this._asFilter || 'all';
+    console.log('[AfterSales] allItems:', allItems.length, 'damaged:', damaged.length, 'inRepair:', inRepair.length, 'currentFilter:', currentFilter);
 
     const SM = {
       damaged: { l: '损坏待发', c: 'ts-status-pending', icon: '⚠️' },
