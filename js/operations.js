@@ -7,6 +7,7 @@ const OpsApp = {
   _requirements: [],
   _memberDetailId: null,
   _currentMachine: null,
+  _timeFormat: localStorage.getItem('ops_time_format') || 'decimal', // 'decimal' = 1.5分钟, 'readable' = 1分30秒
 
   // ==================== INITIALIZATION ====================
   async init() {
@@ -927,8 +928,15 @@ const OpsApp = {
 
     let html = `
       <div class="page-header">
-        <h2>${title}</h2>
-        <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTeamMembers()">🔄 刷新</button>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <h2 style="margin:0;">${title}</h2>
+          <div style="margin-left:auto;">
+            <button class="btn btn-outline btn-sm" onclick="OpsApp._toggleTimeFormat()">
+              ${this._timeFormat === 'decimal' ? '⏱ 1.5分钟' : '⏱ 1分30秒'}
+            </button>
+            <button class="btn btn-outline btn-sm" onclick="OpsApp.renderTeamMembers()" style="margin-left:8px;">🔄 刷新</button>
+          </div>
+        </div>
       </div>
 
       <!-- 组长信息卡片 -->
@@ -1364,9 +1372,14 @@ const OpsApp = {
     };
     const html = `
       <div class="page-header">
-        <div style="display:flex;align-items:center;gap:12px;">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <button class="btn btn-outline btn-sm" onclick="OpsApp.backToTeamMembers()">← 返回</button>
           <h2 style="margin:0;">👤 组员详情</h2>
+          <div style="margin-left:auto;">
+            <button class="btn btn-outline btn-sm" onclick="OpsApp._toggleTimeFormat()">
+              ${this._timeFormat === 'decimal' ? '⏱ 1.5分钟' : '⏱ 1分30秒'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -2057,12 +2070,40 @@ const OpsApp = {
   _fmtDuration(seconds) {
     if (seconds == null) return '-';
     const s = Math.round(seconds);
-    if (s < 60) return '<1分钟';
+    if (s <= 0) return '0分钟';
+    if (s < 60) {
+      // 小于1分钟
+      if (this._timeFormat === 'readable') {
+        return s + '秒';
+      }
+      return '小于1分钟';
+    }
     const m = Math.round(s / 60);
-    if (m < 60) return m + '分钟';
+    if (m < 60) {
+      if (this._timeFormat === 'readable') {
+        // 分钟秒格式：1分30秒
+        const mins = Math.floor(s / 60);
+        const secs = s % 60;
+        return secs > 0 ? mins + '分' + secs + '秒' : mins + '分钟';
+      }
+      // 小数格式：1.5分钟
+      return m.toFixed(1).replace(/\.0$/, '') + '分钟';
+    }
     const h = Math.floor(m / 60);
     const rm = m % 60;
-    return rm > 0 ? h + '时' + rm + '分' : h + '小时';
+    if (this._timeFormat === 'readable') {
+      return rm > 0 ? h + '时' + rm + '分' : h + '小时';
+    }
+    // 小数格式
+    const totalMins = (s / 60).toFixed(1).replace(/\.0$/, '');
+    return totalMins + '分钟';
+  },
+
+  _toggleTimeFormat() {
+    this._timeFormat = this._timeFormat === 'decimal' ? 'readable' : 'decimal';
+    localStorage.setItem('ops_time_format', this._timeFormat);
+    this.notify('时间格式已切换为：' + (this._timeFormat === 'decimal' ? '1.5分钟' : '1分30秒'));
+    this.refreshCurrentTab();
   },
 
   // ==================== POPUP MODAL HELPER ====================
@@ -2483,7 +2524,12 @@ const OpsApp = {
 
     const emptyHtml = `<div class="ts-empty"><div class="ts-empty-icon">📋</div><div class="ts-empty-text">暂无${currentFilter==='all'?'':'「'+(SM[currentFilter]?.l||currentFilter)+'」'}维修记录</div><div class="ts-empty-sub">提交技术支持请求后，记录将显示在此处</div></div>`;
 
-    const toolbar = `<div class="ts-toolbar" style="justify-content:flex-end;">
+    const toolbar = `<div class="ts-toolbar" style="justify-content:space-between;">
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-outline btn-sm" onclick="OpsApp._toggleTimeFormat()">
+          ${this._timeFormat === 'decimal' ? '⏱ 1.5分钟' : '⏱ 1分30秒'}
+        </button>
+      </div>
       <div style="display:flex;gap:6px;">
         <button class="btn btn-sm ${viewMode==='card'?'btn-primary':'btn-outline'}" onclick="OpsApp.renderTechSupportMy('card')">🃏 卡片</button>
         <button class="btn btn-sm ${viewMode==='table'?'btn-primary':'btn-outline'}" onclick="OpsApp.renderTechSupportMy('table')">📋 表格</button>

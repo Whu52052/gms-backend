@@ -586,7 +586,8 @@ async function migrateFromJSON() {
 function _fmtDuration(seconds) {
   if (seconds == null) return '-';
   const s = Math.round(seconds);
-  if (s < 60) return '<1分钟';
+  if (s <= 0) return '0分钟';
+  if (s < 60) return '小于1分钟';
   const m = Math.round(s / 60);
   if (m < 60) return m + '分钟';
   const h = Math.floor(m / 60);
