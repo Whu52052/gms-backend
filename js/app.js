@@ -2042,7 +2042,7 @@ const App = {
     ).join('');
 
     const checkboxes = damaged.map(r => `
-      <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-radius:8px;transition:all var(--transition);" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
+      <label class="ship-sn-item" data-sn="${r.snCode.toLowerCase()}" data-eq="${this._equipmentLabel(r.equipmentType, r.handType).toLowerCase()}" data-reason="${(r.damageReason||'').toLowerCase()}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-radius:8px;transition:all var(--transition);" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
         <input type="checkbox" class="ship-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" data-reason="${r.damageReason||''}" style="width:18px;height:18px;accent-color:var(--color-primary);">
         <div style="flex:1;">
           <div style="font-weight:600;color:var(--text-primary);font-size:0.9rem;">${r.snCode}</div>
@@ -2070,13 +2070,17 @@ const App = {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
           <label class="ts-form-label" style="margin-bottom:0;">选择SN码 <span class="req">*</span></label>
           <div style="display:flex;gap:6px;">
-            <button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.ship-sn-check').forEach(c=>c.checked=true)">全选</button>
-            <button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.ship-sn-check').forEach(c=>c.checked=false)">取消</button>
+            <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllShip(true)">全选</button>
+            <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllShip(false)">取消</button>
           </div>
         </div>
-        <div style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border-color);border-radius:var(--radius-md);padding:4px;background:var(--bg-card);">
+        <div style="margin-bottom:10px;">
+          <input type="text" id="ship-search" class="ts-form-input" placeholder="🔍 搜索SN码/设备类型/损坏原因..." oninput="App._filterShipItems()" style="padding:10px 14px;">
+        </div>
+        <div id="ship-list-container" style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border-color);border-radius:var(--radius-md);padding:4px;background:var(--bg-card);">
           ${checkboxes}
         </div>
+        <div id="ship-empty-tip" style="display:none;padding:20px;text-align:center;color:var(--text-tertiary);font-size:0.85rem;">没有找到匹配的SN码</div>
       </div>
 
       <div class="ts-form-group">
@@ -2110,6 +2114,31 @@ const App = {
     });
   },
 
+  _filterShipItems() {
+    const q = (document.getElementById('ship-search')?.value || '').toLowerCase().trim();
+    const items = document.querySelectorAll('.ship-sn-item');
+    let visibleCount = 0;
+    items.forEach(item => {
+      const sn = item.dataset.sn || '';
+      const eq = item.dataset.eq || '';
+      const reason = item.dataset.reason || '';
+      const match = !q || sn.includes(q) || eq.includes(q) || reason.includes(q);
+      item.style.display = match ? '' : 'none';
+      if (match) visibleCount++;
+    });
+    const emptyTip = document.getElementById('ship-empty-tip');
+    if (emptyTip) emptyTip.style.display = visibleCount === 0 ? '' : 'none';
+  },
+
+  _selectAllShip(checked) {
+    document.querySelectorAll('.ship-sn-item').forEach(item => {
+      if (item.style.display !== 'none') {
+        const cb = item.querySelector('.ship-sn-check');
+        if (cb) cb.checked = checked;
+      }
+    });
+  },
+
   _showRepairCompleteDialog() {
     const inRepair = Storage.getSNRegistry().filter(r => r.status === 'in_repair');
     if (inRepair.length === 0) { this.notify('没有售后中的手套', 'warning'); return; }
@@ -2124,7 +2153,7 @@ const App = {
     ).join('');
 
     const checkboxes = inRepair.map(r => `
-      <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-radius:8px;transition:all var(--transition);" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
+      <label class="repair-sn-item" data-sn="${r.snCode.toLowerCase()}" data-eq="${this._equipmentLabel(r.equipmentType, r.handType).toLowerCase()}" data-tracking="${(r.trackingNumber||'').toLowerCase()}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-radius:8px;transition:all var(--transition);" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
         <input type="checkbox" class="repair-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" style="width:18px;height:18px;accent-color:var(--color-success);">
         <div style="flex:1;">
           <div style="font-weight:600;color:var(--text-primary);font-size:0.9rem;">${r.snCode}</div>
@@ -2152,13 +2181,17 @@ const App = {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
           <label class="ts-form-label" style="margin-bottom:0;">选择SN码 <span class="req">*</span></label>
           <div style="display:flex;gap:6px;">
-            <button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.repair-sn-check').forEach(c=>c.checked=true)">全选</button>
-            <button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.repair-sn-check').forEach(c=>c.checked=false)">取消</button>
+            <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllRepair(true)">全选</button>
+            <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllRepair(false)">取消</button>
           </div>
         </div>
-        <div style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border-color);border-radius:var(--radius-md);padding:4px;background:var(--bg-card);">
+        <div style="margin-bottom:10px;">
+          <input type="text" id="repair-search" class="ts-form-input" placeholder="🔍 搜索SN码/设备类型/快递单号..." oninput="App._filterRepairItems()" style="padding:10px 14px;">
+        </div>
+        <div id="repair-list-container" style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border-color);border-radius:var(--radius-md);padding:4px;background:var(--bg-card);">
           ${checkboxes}
         </div>
+        <div id="repair-empty-tip" style="display:none;padding:20px;text-align:center;color:var(--text-tertiary);font-size:0.85rem;">没有找到匹配的SN码</div>
       </div>
 
       <div style="padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);border-left:4px solid var(--color-success);">
@@ -2195,6 +2228,31 @@ const App = {
       this.notify(`${checked.length} 个SN码已回到空闲库存`);
       this.renderAfterSales();
       return true;
+    });
+  },
+
+  _filterRepairItems() {
+    const q = (document.getElementById('repair-search')?.value || '').toLowerCase().trim();
+    const items = document.querySelectorAll('.repair-sn-item');
+    let visibleCount = 0;
+    items.forEach(item => {
+      const sn = item.dataset.sn || '';
+      const eq = item.dataset.eq || '';
+      const tracking = item.dataset.tracking || '';
+      const match = !q || sn.includes(q) || eq.includes(q) || tracking.includes(q);
+      item.style.display = match ? '' : 'none';
+      if (match) visibleCount++;
+    });
+    const emptyTip = document.getElementById('repair-empty-tip');
+    if (emptyTip) emptyTip.style.display = visibleCount === 0 ? '' : 'none';
+  },
+
+  _selectAllRepair(checked) {
+    document.querySelectorAll('.repair-sn-item').forEach(item => {
+      if (item.style.display !== 'none') {
+        const cb = item.querySelector('.repair-sn-check');
+        if (cb) cb.checked = checked;
+      }
     });
   },
 
