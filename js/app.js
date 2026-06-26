@@ -1373,6 +1373,10 @@ const App = {
 
   // ==================== SN CODES ====================
   async renderSNCodes() {
+    // 先显示加载状态，避免白屏
+    const mainContent = document.getElementById('main-content');
+    mainContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;padding:60px 0;color:var(--text-secondary);"><div>⏳ 加载中...</div></div>';
+
     let registry, transactions;
 
     // 始终从服务端实时获取，保证多设备数据统一
@@ -1475,9 +1479,13 @@ const App = {
       localReg.forEach(r => { if (r.snCode && r.status !== '_deleted') registrySnSet.add(r.snCode); });
     }
 
+    // 构建注册表查找表，避免循环中重复调用 getSNByCode
+    const regLookup = {};
+    registry.forEach(r => { if (r.snCode) regLookup[r.snCode] = r; });
+
     const snList = Object.values(snMap).filter(sn => registrySnSet.has(sn.snCode));
     snList.forEach(sn => {
-      const regEntry = Storage.getSNByCode(sn.snCode);
+      const regEntry = regLookup[sn.snCode];
       if (regEntry && regEntry.status === 'damaged') {
         sn.status = '损坏';
         sn.machine = regEntry.damageReason || '';
@@ -1513,7 +1521,7 @@ const App = {
     // 状态分组
     const inUseList = [], idleList = [], damagedList = [];
     snList.forEach(sn => {
-      const reg = Storage.getSNByCode(sn.snCode);
+      const reg = regLookup[sn.snCode];
       if (reg && reg.status === '_deleted') return;
       if (reg && (reg.status === 'in_use')) inUseList.push(sn);
       else if (reg && (reg.status === 'damaged' || reg.status === 'in_repair')) damagedList.push(sn);

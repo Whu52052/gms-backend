@@ -196,7 +196,7 @@ const API = {
             await Storage._syncFromServer();
             this._notifyUIUpdate();
           }
-        }, 1000); // 1s 防抖，实时响应
+        }, 2000); // 2s 防抖，避免事件风暴导致频繁刷新
       };
       const silentSyncCfg = () => {
         if (this._syncCfgTimer) clearTimeout(this._syncCfgTimer);
@@ -339,6 +339,11 @@ const API = {
     if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) return;
     const modal = document.getElementById('modal-overlay');
     if (modal && modal.style.display === 'flex') return;
+
+    // Throttle: 全局防抖，避免一次事件风暴触发多次UI刷新
+    if (this._uiUpdateThrottle) return;
+    this._uiUpdateThrottle = true;
+    setTimeout(() => { this._uiUpdateThrottle = false; }, 2000); // 2秒内最多刷新一次
 
     // Always refresh sidebar inventory dropdown (lightweight, no visible flicker)
     if (typeof App !== 'undefined' && App.refreshSidebarInventory) App.refreshSidebarInventory();
