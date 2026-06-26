@@ -2608,11 +2608,14 @@ const App = {
       const existingOnline = status === 'offline' ? machines.find(m => m.machineNumber === machineNumber && m.status === 'online') : null;
       const effectiveDeviceType = (status === 'offline' && existingOnline) ? existingOnline.deviceType : deviceType;
 
-      // Collect SN codes from the form (custom autocomplete inputs)
+      // Collect SN codes from the form (从搜索输入框 + 隐藏字段读取)
       const snMap = {};
       document.querySelectorAll('.machine-sn-input').forEach(input => {
-        const val = input.value.trim();
-        if (val) snMap[input.dataset.invType] = val;
+        const invType = input.getAttribute('data-inv-type');
+        // 优先从隐藏字段读取（用户点击匹配项后设置的），否则使用输入框值
+        const hiddenInput = document.getElementById(input.id + '-value');
+        const val = hiddenInput ? hiddenInput.value.trim() : input.value.trim();
+        if (val) snMap[invType] = val;
       });
 
       const pairId = Object.keys(snMap).length > 0 ? Storage._generatePairId() : null;
@@ -3011,7 +3014,7 @@ const App = {
         fieldsHtml = '<p style="font-size:0.8rem;color:var(--text-tertiary);">该机器无已分配的SN码</p>';
       }
     } else {
-      // 上线模式：显示可用SN码下拉框
+      // 上线模式：显示可用SN码搜索框（必填）
       eqConfig.consumes.forEach(consumed => {
         if (consumed.handType) {
           hasPairs = true;
@@ -3022,7 +3025,7 @@ const App = {
           const inputId = `machine-sn-inp-${consumed.inventoryType}`;
           fieldsHtml += `
             <div style="margin-bottom:8px;" id="machine-sn-row-${consumed.inventoryType}">
-              <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;">${handLabel}${label} SN码 <span style="color:var(--color-success);" id="sn-count-${consumed.inventoryType}">(${availableSns.length}个可用)</span></span>
+              <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;">${handLabel}${label} SN码 <span style="color:var(--color-success);" id="sn-count-${consumed.inventoryType}">(${availableSns.length}个可用)</span> <span class="required">*</span></span>
               <input type="text" id="${inputId}" class="machine-sn-input" data-inv-type="${consumed.inventoryType}" data-hand-type="${consumed.handType || ''}" placeholder="🔍 搜索或输入SN码..." oninput="App._onMachineSNInput(this)" onfocus="App._onMachineSNInput(this)" autocomplete="off" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;">
               <input type="hidden" id="${inputId}-value" class="machine-sn-value" data-inv-type="${consumed.inventoryType}">
             </div>`;
@@ -3873,15 +3876,14 @@ const App = {
         const latestRecord = machineRecords.sort((a, b) => new Date(b.updatedAt || b.id).getTime() - new Date(a.updatedAt || a.id).getTime())[0];
         if (latestRecord && latestRecord.status === status) { this.notify(`机器 ${machineNumber} 已经是${status === 'online' ? '上线' : '下线'}状态`, 'warning'); return false; }
 
-        // Collect SN codes (select + custom input)
+        // Collect SN codes (从搜索输入框 + 隐藏字段读取)
         const snMap = {};
-        document.querySelectorAll('.qt-sn-select').forEach(sel => {
-          if (sel.value && sel.value !== '__custom__' && sel.value !== '') {
-            snMap[sel.dataset.invType] = sel.value.trim();
-          }
-        });
-        document.querySelectorAll('.qt-sn-input').forEach(input => {
-          if (input.value.trim()) snMap[input.dataset.invType] = input.value.trim();
+        document.querySelectorAll('.qt-sn-input.machine-sn-input').forEach(input => {
+          const invType = input.getAttribute('data-inv-type');
+          // 优先从隐藏字段读取（用户点击匹配项后设置的），否则使用输入框值
+          const hiddenInput = document.getElementById(input.id + '-value');
+          const val = hiddenInput ? hiddenInput.value.trim() : input.value.trim();
+          if (val) snMap[invType] = val;
         });
         const pairId = Object.keys(snMap).length > 0 ? Storage._generatePairId() : null;
 
@@ -4136,27 +4138,130 @@ const App = {
         const label = cfg.name || consumed.inventoryType;
         const handLabel = consumed.handType === 'left' ? '左手' : '右手';
         const availableSns = this._getAvailableSNs(consumed.inventoryType, consumed.handType);
-        const selectId = `qt-sn-sel-${consumed.inventoryType}`;
         const inputId = `qt-sn-inp-${consumed.inventoryType}`;
         html += `
           <div style="margin-bottom:8px;">
-            <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;margin-bottom:2px;">${handLabel}${label} <span style="color:var(--color-success);">(${availableSns.length}个可用)</span></span>
-            <select id="${selectId}" class="qt-sn-select" data-inv-type="${consumed.inventoryType}" data-target="${inputId}" onchange="App._onQtSnSelectChange(this)" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;">
-              <option value="">-- 选择SN码 --</option>
-              ${availableSns.map(s => `<option value="${s}">${s}</option>`).join('')}
-              <option value="__custom__">✏️ 输入新SN码</option>
-            </select>
-            <input type="text" id="${inputId}" class="qt-sn-input" data-inv-type="${consumed.inventoryType}" placeholder="输入新SN码" style="display:none;width:100%;padding:8px;margin-top:4px;border:1px solid var(--border-color);border-radius:6px;" autocomplete="off">
+            <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;margin-bottom:2px;">${handLabel}${label} <span style="color:var(--color-success);" id="qt-sn-count-${consumed.inventoryType}">(${availableSns.length}个可用)</span> <span class="required">*</span></span>
+            <input type="text" id="${inputId}" class="qt-sn-input machine-sn-input" data-inv-type="${consumed.inventoryType}" data-hand-type="${consumed.handType || ''}" placeholder="🔍 搜索或输入SN码..." oninput="App._onQtSNInput(this)" onfocus="App._onQtSNInput(this)" autocomplete="off" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;">
+            <input type="hidden" id="${inputId}-value" class="qt-sn-value machine-sn-value" data-inv-type="${consumed.inventoryType}">
           </div>`;
       }
     });
     return html || '<p style="font-size:0.8rem;color:var(--text-tertiary);">该设备类型不需要SN码</p>';
   },
 
-  _onQtSnSelectChange(sel) {
-    const inp = document.getElementById(sel.dataset.target);
-    if (sel.value === '__custom__') { sel.style.display = 'none'; if (inp) inp.style.display = ''; }
-    else { if (inp) { inp.style.display = 'none'; inp.value = ''; } }
+  // 快速上线 SN 码自动补全（复用 _onMachineSNInput 的逻辑）
+  _onQtSNInput(inputEl) {
+    const q = inputEl.value.trim().toLowerCase();
+    this._hideSNAutocomplete();
+
+    // 根据 inventoryType 和 handType 动态获取可用 SN 列表
+    const invType = inputEl.getAttribute('data-inv-type') || '';
+    const handType = inputEl.getAttribute('data-hand-type') || '';
+    const snList = this._getAvailableSNs(invType, handType || null);
+
+    // 显示可用数量
+    const countEl = document.getElementById(`qt-sn-count-${invType}`);
+    if (countEl) countEl.textContent = `(${snList.length}个可用)`;
+
+    if (!q || q.length < 1) return;
+
+    // 子串匹配，优先开头匹配
+    const startsWith = [];
+    const contains = [];
+    snList.forEach(sn => {
+      const lower = sn.toLowerCase();
+      if (lower === q) return;
+      if (lower.startsWith(q)) startsWith.push(sn);
+      else if (lower.includes(q)) contains.push(sn);
+    });
+
+    const matches = [...startsWith, ...contains].slice(0, 15);
+    if (matches.length === 0) {
+      // 无匹配时显示"手动输入"选项
+      const dropdown = document.createElement('div');
+      dropdown.className = 'sn-autocomplete-dropdown';
+      dropdown.style.cssText = 'position:fixed;z-index:9999;max-height:260px;overflow-y:auto;background:var(--bg-primary,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.15);font-size:0.85rem;';
+
+      const customItem = document.createElement('div');
+      customItem.style.cssText = 'padding:8px 12px;cursor:pointer;color:var(--text-secondary,#6b7280);font-style:italic;';
+      customItem.textContent = '✏️ 手动输入新SN码: ' + inputEl.value.trim();
+      customItem.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        this._hideSNAutocomplete();
+        inputEl.focus();
+      });
+      dropdown.appendChild(customItem);
+
+      const rect = inputEl.getBoundingClientRect();
+      dropdown.style.left = rect.left + 'px';
+      dropdown.style.top = (rect.bottom + 2) + 'px';
+      dropdown.style.width = rect.width + 'px';
+      document.body.appendChild(dropdown);
+      this._suggestionDropdown = dropdown;
+      this._suggestionsVisible = true;
+
+      const closeHandler = (e) => {
+        if (!dropdown.contains(e.target) && e.target !== inputEl) {
+          this._hideSNAutocomplete();
+          document.removeEventListener('click', closeHandler);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeHandler), 50);
+      return;
+    }
+
+    // 创建下拉
+    const dropdown = document.createElement('div');
+    dropdown.className = 'sn-autocomplete-dropdown';
+    dropdown.style.cssText = 'position:fixed;z-index:9999;max-height:260px;overflow-y:auto;background:var(--bg-primary,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.15);font-size:0.85rem;';
+
+    matches.forEach((sn) => {
+      const item = document.createElement('div');
+      const idx = sn.toLowerCase().indexOf(q);
+      item.innerHTML = sn.substring(0, idx) + '<strong style="color:var(--color-primary,#6366f1);">' + sn.substring(idx, idx + q.length) + '</strong>' + sn.substring(idx + q.length);
+      item.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light,#f3f4f6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        inputEl.value = sn;
+        // 同步到隐藏字段
+        const hiddenInput = document.getElementById(inputEl.id + '-value');
+        if (hiddenInput) hiddenInput.value = sn;
+        this._hideSNAutocomplete();
+        inputEl.focus();
+      });
+      item.addEventListener('mouseenter', () => { item.style.background = 'var(--bg-secondary,#f3f4f6)'; });
+      item.addEventListener('mouseleave', () => { item.style.background = ''; });
+      dropdown.appendChild(item);
+    });
+
+    // "✏️ 手动输入" 选项
+    const customItem = document.createElement('div');
+    customItem.style.cssText = 'padding:8px 12px;cursor:pointer;border-top:2px solid var(--border-color,#e5e7eb);color:var(--text-secondary,#6b7280);font-style:italic;';
+    customItem.textContent = '✏️ 手动输入新SN码: ' + inputEl.value.trim();
+    customItem.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      this._hideSNAutocomplete();
+      inputEl.focus();
+    });
+    dropdown.appendChild(customItem);
+
+    const rect = inputEl.getBoundingClientRect();
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.top = (rect.bottom + 2) + 'px';
+    dropdown.style.width = rect.width + 'px';
+    document.body.appendChild(dropdown);
+    this._suggestionDropdown = dropdown;
+    this._suggestionsVisible = true;
+
+    // 点击外部关闭
+    const closeHandler = (e) => {
+      if (!dropdown.contains(e.target) && e.target !== inputEl) {
+        this._hideSNAutocomplete();
+        document.removeEventListener('click', closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 50);
   },
 
   _getTogglePreview(deviceType, status) {
