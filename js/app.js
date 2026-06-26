@@ -1588,6 +1588,8 @@ const App = {
               <span>🕐 ${fm(sn.latest.timestamp)}</span>
               <span style="margin-left:auto;display:flex;gap:6px;align-items:center;">
                 <a href="javascript:void(0)" onclick="event.stopPropagation();App._showSNAttachment('${sn.snCode}')" title="${hasImg ? '查看附件' : '点击上传附件'}" style="padding:3px 8px;border-radius:6px;background:${hasImg ? 'var(--color-success-bg, #dcfce7)' : 'var(--bg-secondary)'};color:${hasImg ? 'var(--color-success, #16a34a)' : 'var(--text-secondary)'};font-size:0.75rem;text-decoration:none;display:inline-flex;align-items:center;gap:3px;">📎 ${hasImg ? '查看' : '上传'}</a>
+                ${sn.status === '可用' ? `<button class="btn btn-xs btn-warning" onclick="event.stopPropagation();App._markAsDamaged('${sn.snCode}')" title="标记损坏" style="padding:3px 8px;border-radius:6px;background:var(--color-warning-bg, #fef3c7);color:var(--color-warning, #d97706);font-size:0.75rem;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:3px;">⚠</button>` : ''}
+                ${self._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="event.stopPropagation();App._deleteSNCode('${sn.snCode.replace(/'/g,"\\'")}')" title="删除" style="padding:3px 8px;border-radius:6px;background:var(--color-danger-bg, #fee2e2);color:var(--color-danger, #dc2626);font-size:0.75rem;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:3px;">🗑</button>` : ''}
                 <span class="ts-status-badge ${s.c}">${sn.status}</span>
               </span>
             </div>
