@@ -2041,15 +2041,15 @@ const App = {
       `<span class="ts-status-badge ts-status-pending">${k}: ${v}只</span>`
     ).join('');
 
-    const checkboxes = damaged.map(r => `
-      <label class="ship-sn-item" data-sn="${r.snCode.toLowerCase()}" data-eq="${this._equipmentLabel(r.equipmentType, r.handType).toLowerCase()}" data-reason="${(r.damageReason||'').toLowerCase()}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-radius:8px;transition:all var(--transition);" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
-        <input type="checkbox" class="ship-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" data-reason="${r.damageReason||''}" style="width:18px;height:18px;accent-color:var(--color-primary);">
-        <div style="flex:1;">
-          <div style="font-weight:600;color:var(--text-primary);font-size:0.9rem;">${r.snCode}</div>
-          <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:2px;">
-            ${this._equipmentLabel(r.equipmentType, r.handType)}
-            ${r.handType==='left'?' · 左手':r.handType==='right'?' · 右手':''}
-            ${r.damageReason?' · 损坏原因: '+r.damageReason:''}
+    const checkboxes = damaged.map((r, idx) => `
+      <label class="ship-sn-item" data-sn="${r.snCode.toLowerCase()}" data-eq="${this._equipmentLabel(r.equipmentType, r.handType).toLowerCase()}" data-reason="${(r.damageReason||'').toLowerCase()}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;border-bottom:1px solid var(--border-color);transition:background var(--transition);${idx===0?'border-top-left-radius:8px;border-top-right-radius:8px;':''}${idx===damaged.length-1?'border-bottom-left-radius:8px;border-bottom-right-radius:8px;border-bottom:none;':''}" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
+        <input type="checkbox" class="ship-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" data-reason="${r.damageReason||''}" style="width:18px;height:18px;accent-color:var(--color-primary);flex-shrink:0;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;color:var(--text-primary);font-size:0.95rem;font-family:monospace;">${r.snCode}</div>
+          <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:3px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span>${this._equipmentLabel(r.equipmentType, r.handType)}</span>
+            <span>${r.handType==='left'?'左手':r.handType==='right'?'右手':''}</span>
+            ${r.damageReason?`<span style="color:#dc2626;font-weight:500;">${r.damageReason}</span>`:''}
           </div>
         </div>
       </label>`).join('');
@@ -2067,26 +2067,29 @@ const App = {
       </div>
 
       <div class="ts-form-group">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
           <label class="ts-form-label" style="margin-bottom:0;">选择SN码 <span class="req">*</span></label>
           <div style="display:flex;gap:6px;">
             <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllShip(true)">全选</button>
             <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllShip(false)">取消</button>
           </div>
         </div>
-        <div style="margin-bottom:10px;">
-          <input type="text" id="ship-search" class="ts-form-input" placeholder="🔍 搜索SN码/设备类型/损坏原因..." oninput="App._filterShipItems()" style="padding:10px 14px;">
+        <div style="margin-bottom:12px;">
+          <div style="position:relative;">
+            <input type="text" id="ship-search" class="ts-form-input" placeholder="搜索SN码/设备类型/损坏原因" oninput="App._filterShipItems()" style="padding:10px 36px 10px 14px;">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:0.9rem;">🔍</span>
+          </div>
         </div>
-        <div id="ship-list-container" style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border-color);border-radius:var(--radius-md);padding:4px;background:var(--bg-card);">
+        <div id="ship-list-container" style="max-height:260px;overflow-y:auto;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);">
           ${checkboxes}
         </div>
-        <div id="ship-empty-tip" style="display:none;padding:20px;text-align:center;color:var(--text-tertiary);font-size:0.85rem;">没有找到匹配的SN码</div>
+        <div id="ship-empty-tip" style="display:none;padding:30px;text-align:center;color:var(--text-tertiary);font-size:0.85rem;">没有找到匹配的SN码</div>
       </div>
 
       <div class="ts-form-group">
         <label class="ts-form-label">快递单号 <span style="font-weight:normal;color:var(--text-tertiary);">(选填)</span></label>
         <input type="text" id="ship-tracking" class="ts-form-input" placeholder="多只一起寄时可填写快递单号">
-        <div class="ts-form-hint">💡 填写快递单号后便于后续追踪物流信息</div>
+        <div class="ts-form-hint">填写快递单号后便于后续追踪物流信息</div>
       </div>
     `;
     this.showModal('📦 发货给厂家', html, () => {
@@ -2152,15 +2155,15 @@ const App = {
       `<span class="ts-status-badge ts-status-responded">${k}: ${v}只</span>`
     ).join('');
 
-    const checkboxes = inRepair.map(r => `
-      <label class="repair-sn-item" data-sn="${r.snCode.toLowerCase()}" data-eq="${this._equipmentLabel(r.equipmentType, r.handType).toLowerCase()}" data-tracking="${(r.trackingNumber||'').toLowerCase()}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-radius:8px;transition:all var(--transition);" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
-        <input type="checkbox" class="repair-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" style="width:18px;height:18px;accent-color:var(--color-success);">
-        <div style="flex:1;">
-          <div style="font-weight:600;color:var(--text-primary);font-size:0.9rem;">${r.snCode}</div>
-          <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:2px;">
-            ${this._equipmentLabel(r.equipmentType, r.handType)}
-            ${r.handType==='left'?' · 左手':r.handType==='right'?' · 右手':''}
-            ${r.trackingNumber?' 📦'+r.trackingNumber:''}
+    const checkboxes = inRepair.map((r, idx) => `
+      <label class="repair-sn-item" data-sn="${r.snCode.toLowerCase()}" data-eq="${this._equipmentLabel(r.equipmentType, r.handType).toLowerCase()}" data-tracking="${(r.trackingNumber||'').toLowerCase()}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;border-bottom:1px solid var(--border-color);transition:background var(--transition);${idx===0?'border-top-left-radius:8px;border-top-right-radius:8px;':''}${idx===inRepair.length-1?'border-bottom-left-radius:8px;border-bottom-right-radius:8px;border-bottom:none;':''}" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
+        <input type="checkbox" class="repair-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" style="width:18px;height:18px;accent-color:var(--color-success);flex-shrink:0;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;color:var(--text-primary);font-size:0.95rem;font-family:monospace;">${r.snCode}</div>
+          <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:3px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span>${this._equipmentLabel(r.equipmentType, r.handType)}</span>
+            <span>${r.handType==='left'?'左手':r.handType==='right'?'右手':''}</span>
+            ${r.trackingNumber?`<span style="color:var(--color-primary);font-family:monospace;">${r.trackingNumber}</span>`:''}
           </div>
         </div>
       </label>`).join('');
@@ -2178,25 +2181,28 @@ const App = {
       </div>
 
       <div class="ts-form-group">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
           <label class="ts-form-label" style="margin-bottom:0;">选择SN码 <span class="req">*</span></label>
           <div style="display:flex;gap:6px;">
             <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllRepair(true)">全选</button>
             <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllRepair(false)">取消</button>
           </div>
         </div>
-        <div style="margin-bottom:10px;">
-          <input type="text" id="repair-search" class="ts-form-input" placeholder="🔍 搜索SN码/设备类型/快递单号..." oninput="App._filterRepairItems()" style="padding:10px 14px;">
+        <div style="margin-bottom:12px;">
+          <div style="position:relative;">
+            <input type="text" id="repair-search" class="ts-form-input" placeholder="搜索SN码/设备类型/快递单号" oninput="App._filterRepairItems()" style="padding:10px 36px 10px 14px;">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:0.9rem;">🔍</span>
+          </div>
         </div>
-        <div id="repair-list-container" style="max-height:240px;overflow-y:auto;border:1.5px solid var(--border-color);border-radius:var(--radius-md);padding:4px;background:var(--bg-card);">
+        <div id="repair-list-container" style="max-height:260px;overflow-y:auto;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);">
           ${checkboxes}
         </div>
-        <div id="repair-empty-tip" style="display:none;padding:20px;text-align:center;color:var(--text-tertiary);font-size:0.85rem;">没有找到匹配的SN码</div>
+        <div id="repair-empty-tip" style="display:none;padding:30px;text-align:center;color:var(--text-tertiary);font-size:0.85rem;">没有找到匹配的SN码</div>
       </div>
 
       <div style="padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);border-left:4px solid var(--color-success);">
         <div style="display:flex;align-items:flex-start;gap:8px;">
-          <span style="font-size:1.1rem;">💡</span>
+          <span style="font-size:1rem;">💡</span>
           <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.5;">
             维修完成后，选中的设备将从售后状态恢复为<span style="color:var(--color-success);font-weight:600;">空闲库存</span>，并自动生成入库流水记录。
           </div>
