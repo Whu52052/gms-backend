@@ -1616,14 +1616,6 @@ const App = {
     });
   },
 
-  _filterSNCards() {
-    const q = (document.getElementById('sn-filter-input')?.value || '').toLowerCase();
-    document.querySelectorAll('.ts-card[data-sn-status], tr[data-sn-status]').forEach(el => {
-      const text = el.textContent.toLowerCase();
-      el.style.display = text.includes(q) ? '' : 'none';
-    });
-  },
-
   _filterMachines() {
     const q = (document.getElementById('machine-search')?.value || '').toLowerCase();
     const cards = document.querySelectorAll('#machine-card-grid .machine-card');
@@ -1659,10 +1651,12 @@ const App = {
 
   _filterSNCards() {
     const q = (document.getElementById('sn-filter-input')?.value || '').toLowerCase();
-    const cards = document.querySelectorAll('#sn-card-grid .sn-card');
+    const cards = document.querySelectorAll('#sn-card-grid .ts-card');
     cards.forEach(card => {
-      const code = (card.querySelector('.sn-card-code')?.textContent || '').toLowerCase();
-      const type = (card.querySelector('.sn-card-type')?.textContent || '').toLowerCase();
+      const codeEl = card.querySelector('.ts-card-title code');
+      const code = (codeEl?.textContent || '').toLowerCase();
+      const subEl = card.querySelector('.ts-card-sub');
+      const type = (subEl?.textContent || '').toLowerCase();
       card.style.display = (!q || code.includes(q) || type.includes(q)) ? '' : 'none';
     });
   },
