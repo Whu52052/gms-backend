@@ -3075,6 +3075,9 @@ const App = {
       item.addEventListener('mousedown', (e) => {
         e.preventDefault();
         inputEl.value = sn;
+        // 同步设置隐藏字段，避免提交时读取不到
+        const hiddenInput = document.getElementById(inputEl.id + '-value');
+        if (hiddenInput) hiddenInput.value = sn;
         this._hideSNAutocomplete();
         inputEl.focus();
       });
