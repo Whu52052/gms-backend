@@ -7944,9 +7944,9 @@ const App = {
       }
     }
 
-    // 步骤2: 创建应用目录并设置权限
+    // 步骤2: 创建应用目录（使用用户主目录避免权限问题）
     this._deployLog(`📁 创建应用目录...`, 'info');
-    await this._sshCommand(serverIP, workingUser, 'mkdir -p /opt/glove-management && chmod 755 /opt/glove-management && echo "DIR OK"', 10000, workingPassword);
+    await this._sshCommand(serverIP, workingUser, 'mkdir -p ~/glove-management && chmod 755 ~/glove-management && echo "DIR OK"', 10000, workingPassword);
 
     // 步骤3: 获取当前工作目录
     const currentDir = window.location.hostname === 'localhost' ? 'http://localhost:8765' : window.location.origin;
@@ -7956,7 +7956,7 @@ const App = {
     // 如果是次服务器，从主服务器复制代码
     if (!isPrimary) {
       this._deployLog(`📤 从主服务器复制应用代码到 ${serverIP}...`, 'info');
-      const copyResult = await this._sshCommand('localhost', 'root', `rsync -avz --delete --exclude='node_modules' --exclude='.git' --exclude='*.log' /opt/glove-management/ ${workingUser}@${serverIP}:/opt/glove-management/ 2>&1 || echo "COPY_DONE"`, 60000);
+      const copyResult = await this._sshCommand('localhost', 'root', `rsync -avz --delete --exclude='node_modules' --exclude='.git' --exclude='*.log' /opt/glove-management/ ${workingUser}@${serverIP}:~/glove-management/ 2>&1 || echo "COPY_DONE"`, 60000);
       this._deployLog(`✅ 代码复制完成`, 'success');
     }
 
@@ -8055,16 +8055,11 @@ REDIS_URL=redis://${redisIP}:6379
 
     return `#!/bin/bash
 set -e
-cd /opt/glove-management
+cd ~/glove-management
 
 echo "[INFO] 当前目录: \$(pwd)"
 echo "[INFO] 当前用户: \$(whoami)"
-echo "[INFO] 目录权限: \$(ls -la /opt/glove-management/ 2>/dev/null | head -5)"
-
-# 确保目录权限正确
-echo "[INFO] 设置目录权限..."
-chown -R \$(whoami):\$(whoami) /opt/glove-management 2>/dev/null || sudo chown -R \$(whoami):\$(whoami) /opt/glove-management 2>/dev/null || true
-echo "[OK] 目录权限设置完成"
+echo "[INFO] 目录权限: \$(ls -la ~/glove-management/ 2>/dev/null | head -5)"
 
 # 环境变量
 echo "[INFO] 创建 .env 文件..."
@@ -8330,7 +8325,7 @@ echo "[OK] 部署完成"
 
     this._deployLog(`🔄 重启次服务器 ${config.ip}...`, 'info');
     try {
-      await this._sshCommand(config.ip, config.user, 'cd /opt/glove-management && pm2 restart all 2>&1', 30000, password);
+      await this._sshCommand(config.ip, config.user, 'cd ~/glove-management && pm2 restart all 2>&1', 30000, password);
       this._deployLog(`✅ 重启命令已执行，等待服务启动...`, 'success');
 
       await new Promise(r => setTimeout(r, 5000));
