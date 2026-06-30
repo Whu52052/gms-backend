@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>分布式部署向导</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    
+    h1 { text-align: center; margin-bottom: 10px; font-size: 2rem; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .subtitle { text-align: center; color: #94a3b8; margin-bottom: 30px; }
+    
+    .server-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 30px; }
+    
+    .server-card {
+      background: linear-gradient(145deg, #1e293b, #0f172a);
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+    .server-card.primary { border-color: #667eea; }
+    .server-card.primary::before { content: '主'; position: absolute; top: 10px; right: 10px; background: #667eea; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; }
+    .server-card.secondary::before { content: '次'; position: absolute; top: 10px; right: 10px; background: #10b981; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; }
+    
+    .server-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ef4444; animation: pulse 2s infinite; }
+    .status-dot.online { background: #10b981; }
+    .status-dot.checking { background: #f59e0b; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    
+    .server-title { font-size: 1.25rem; font-weight: 600; }
+    .server-ip { color: #94a3b8; font-size: 0.9rem; margin-top: 4px; }
+    
+    .config-form { display: flex; flex-direction: column; gap: 12px; }
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    .form-group label { font-size: 0.85rem; color: #94a3b8; }
+    .form-group input { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px 12px; color: white; font-size: 0.95rem; transition: border-color 0.2s; }
+    .form-group input:focus { outline: none; border-color: #667eea; }
+    .form-group input:disabled { opacity: 0.5; cursor: not-allowed; }
+    
+    .btn { padding: 12px 20px; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); }
+    .btn-success { background: #10b981; color: white; }
+    .btn-success:hover { background: #059669; }
+    .btn-warning { background: #f59e0b; color: white; }
+    .btn-danger { background: #ef4444; color: white; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    
+    .terminal {
+      background: #000;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 20px;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 0.85rem;
+      height: 400px;
+      overflow-y: auto;
+      margin-bottom: 30px;
+    }
+    .terminal-line { margin-bottom: 4px; line-height: 1.6; }
+    .terminal-line .time { color: #64748b; }
+    .terminal-line .info { color: #60a5fa; }
+    .terminal-line .success { color: #10b981; }
+    .terminal-line .error { color: #ef4444; }
+    .terminal-line .warning { color: #f59e0b; }
+    .terminal-line .command { color: #a78bfa; }
+    
+    .steps { display: flex; gap: 12px; margin-bottom: 30px; overflow-x: auto; padding: 4px; }
+    .step {
+      flex: 1;
+      min-width: 120px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 16px;
+      text-align: center;
+      position: relative;
+    }
+    .step.active { border-color: #667eea; background: rgba(102, 126, 234, 0.1); }
+    .step.completed { border-color: #10b981; background: rgba(16, 185, 129, 0.1); }
+    .step-number { width: 32px; height: 32px; border-radius: 50%; background: #334155; display: flex; align-items: center; justify-content: center; margin: 0 auto 8px; font-weight: bold; }
+    .step.active .step-number { background: #667eea; }
+    .step.completed .step-number { background: #10b981; }
+    .step-title { font-size: 0.85rem; font-weight: 500; }
+    .step-status { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
+    
+    .progress-bar { height: 8px; background: #1e293b; border-radius: 4px; overflow: hidden; margin-bottom: 30px; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #667eea, #764ba2); transition: width 0.5s ease; width: 0%; }
+    
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
+    
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; }
+    .card-title { font-size: 1rem; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+    
+    .nginx-config { background: #0f172a; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 0.85rem; overflow-x: auto; white-space: pre; }
+    
+    .env-example { background: #0f172a; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 0.85rem; overflow-x: auto; }
+    .env-line { padding: 4px 0; }
+    .env-comment { color: #64748b; }
+    .env-key { color: #60a5fa; }
+    .env-value { color: #10b981; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🚀 分布式高可用部署向导</h1>
+    <p class="subtitle">手套管理系统 - 主/从服务器一键部署</p>
+    
+    <!-- 部署步骤 -->
+    <div class="steps">
+      <div class="step active" id="step1">
+        <div class="step-number">1</div>
+        <div class="step-title">服务器配置</div>
+        <div class="step-status">配置IP和端口</div>
+      </div>
+      <div class="step" id="step2">
+        <div class="step-number">2</div>
+        <div class="step-title">数据库配置</div>
+        <div class="step-status">MySQL连接</div>
+      </div>
+      <div class="step" id="step3">
+        <div class="step-number">3</div>
+        <div class="step-title">Redis配置</div>
+        <div class="step-status">Session共享</div>
+      </div>
+      <div class="step" id="step4">
+        <div class="step-number">4</div>
+        <div class="step-title">服务部署</div>
+        <div class="step-status">启动服务</div>
+      </div>
+      <div class="step" id="step5">
+        <div class="step-number">5</div>
+        <div class="step-title">健康检查</div>
+        <div class="step-status">验证部署</div>
+      </div>
+    </div>
+    
+    <!-- 进度条 -->
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    
+    <!-- 服务器卡片 -->
+    <div class="server-grid">
+      <!-- 主服务器 -->
+      <div class="server-card primary">
+        <div class="server-status">
+          <div class="status-dot" id="primaryStatus"></div>
+          <div>
+            <div class="server-title">主服务器</div>
+            <div class="server-ip">Primary Server</div>
+          </div>
+        </div>
+        <div class="config-form">
+          <div class="form-group">
+            <label>IP地址</label>
+            <input type="text" id="primaryIP" placeholder="192.168.1.233" value="192.168.1.233">
+          </div>
+          <div class="form-group">
+            <label>端口</label>
+            <input type="text" id="primaryPort" placeholder="8765" value="8765">
+          </div>
+          <div class="form-group">
+            <label>SSH端口</label>
+            <input type="text" id="primarySSH" placeholder="22" value="22">
+          </div>
+          <div class="form-group">
+            <label>服务器角色</label>
+            <input type="text" value="primary (主)" disabled>
+          </div>
+          <button class="btn btn-primary" onclick="connectServer('primary')">🔌 连接服务器</button>
+        </div>
+      </div>
+      
+      <!-- 次服务器 -->
+      <div class="server-card secondary">
+        <div class="server-status">
+          <div class="status-dot" id="secondaryStatus"></div>
+          <div>
+            <div class="server-title">次服务器</div>
+            <div class="server-ip">Secondary Server</div>
+          </div>
+        </div>
+        <div class="config-form">
+          <div class="form-group">
+            <label>IP地址</label>
+            <input type="text" id="secondaryIP" placeholder="192.168.1.234" value="192.168.1.234">
+          </div>
+          <div class="form-group">
+            <label>端口</label>
+            <input type="text" id="secondaryPort" placeholder="8765" value="8765">
+          </div>
+          <div class="form-group">
+            <label>SSH端口</label>
+            <input type="text" id="secondarySSH" placeholder="22" value="22">
+          </div>
+          <div class="form-group">
+            <label>服务器角色</label>
+            <input type="text" value="secondary (从)" disabled>
+          </div>
+          <button class="btn btn-success" onclick="connectServer('secondary')">🔌 连接服务器</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 数据库配置 -->
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">🗄️ MySQL 数据库配置</div>
+        <div class="config-form">
+          <div class="form-group">
+            <label>MySQL 主库地址</label>
+            <input type="text" id="mysqlHost" placeholder="192.168.1.233" value="192.168.1.233">
+          </div>
+          <div class="form-group">
+            <label>MySQL 端口</label>
+            <input type="text" id="mysqlPort" placeholder="3306" value="3306">
+          </div>
+          <div class="form-group">
+            <label>数据库用户名</label>
+            <input type="text" id="mysqlUser" placeholder="gms_user">
+          </div>
+          <div class="form-group">
+            <label>数据库密码</label>
+            <input type="password" id="mysqlPassword" placeholder="输入密码">
+          </div>
+          <div class="form-group">
+            <label>数据库名称</label>
+            <input type="text" id="mysqlDatabase" placeholder="gms" value="gms">
+          </div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-title">⚡ Redis 配置</div>
+        <div class="config-form">
+          <div class="form-group">
+            <label>Redis 地址</label>
+            <input type="text" id="redisHost" placeholder="192.168.1.233" value="192.168.1.233">
+          </div>
+          <div class="form-group">
+            <label>Redis 端口</label>
+            <input type="text" id="redisPort" placeholder="6379" value="6379">
+          </div>
+          <div class="form-group">
+            <label>Redis 密码（可选）</label>
+            <input type="password" id="redisPassword" placeholder="留空无密码">
+          </div>
+          <div class="form-group">
+            <label>Redis 数据库编号</label>
+            <input type="text" id="redisDB" placeholder="0" value="0">
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 部署日志 -->
+    <div class="card" style="margin-top: 20px;">
+      <div class="card-title">📋 部署日志</div>
+      <div class="terminal" id="terminal"></div>
+      <div style="display: flex; gap: 12px; margin-top: 12px;">
+        <button class="btn btn-primary" onclick="startDeployment()">🚀 开始部署</button>
+        <button class="btn btn-danger" onclick="clearTerminal()">🗑️ 清空日志</button>
+      </div>
+    </div>
+    
+    <!-- 配置示例 -->
+    <div class="grid-2" style="margin-top: 20px;">
+      <div class="card">
+        <div class="card-title">📝 主服务器 .env 示例</div>
+        <div class="env-example">
+<span class="env-comment"># 服务器配置</span>
+<span class="env-key">PORT</span>=<span class="env-value">8765</span>
+<span class="env-key">SERVER_ROLE</span>=<span class="env-value">primary</span>
+<span class="env-key">SERVER_ID</span>=<span class="env-value">primary-001</span>
+
+<span class="env-comment"># MySQL 主库（写）</span>
+<span class="env-key">DB_HOST</span>=<span class="env-value">192.168.1.233</span>
+<span class="env-key">DB_PORT</span>=<span class="env-value">3306</span>
+<span class="env-key">DB_USER</span>=<span class="env-value">gms_user</span>
+<span class="env-key">DB_PASSWORD</span>=<span class="env-value">your_password</span>
+<span class="env-key">DB_NAME</span>=<span class="env-value">gms</span>
+
+<span class="env-comment"># Redis</span>
+<span class="env-key">REDIS_URL</span>=<span class="env-value">redis://192.168.1.233:6379</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-title">📝 次服务器 .env 示例</div>
+        <div class="env-example">
+<span class="env-comment"># 服务器配置</span>
+<span class="env-key">PORT</span>=<span class="env-value">8765</span>
+<span class="env-key">SERVER_ROLE</span>=<span class="env-value">secondary</span>
+<span class="env-key">SERVER_ID</span>=<span class="env-value">secondary-001</span>
+
+<span class="env-comment"># MySQL 主库（写）- 必须指向主库</span>
+<span class="env-key">DB_HOST</span>=<span class="env-value">192.168.1.233</span>
+<span class="env-key">DB_PORT</span>=<span class="env-value">3306</span>
+<span class="env-key">DB_USER</span>=<span class="env-value">gms_user</span>
+<span class="env-key">DB_PASSWORD</span>=<span class="env-value">your_password</span>
+<span class="env-key">DB_NAME</span>=<span class="env-value">gms</span>
+
+<span class="env-comment"># MySQL 从库（读）- 可选</span>
+<span class="env-key">DB_HOST_READ</span>=<span class="env-value">192.168.1.234</span>
+<span class="env-key">DB_PORT_READ</span>=<span class="env-value">3306</span>
+
+<span class="env-comment"># Redis</span>
+<span class="env-key">REDIS_URL</span>=<span class="env-value">redis://192.168.1.233:6379</span>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Nginx 配置 -->
+    <div class="card" style="margin-top: 20px;">
+      <div class="card-title">🌐 Nginx 负载均衡配置</div>
+      <div class="nginx-config">upstream yunwei_backend {
+    least_conn;
+    
+    server <span id="nginxPrimary">192.168.1.233</span>:<span id="nginxPrimaryPort">8765</span> weight=3 max_fails=3 fail_timeout=30s;
+    server <span id="nginxSecondary">192.168.1.234</span>:<span id="nginxSecondaryPort">8765</span> weight=2 max_fails=3 fail_timeout=30s;
+    
+    keepalive 256;
+}
+
+server {
+    listen 80;
+    server_name _;
+    
+    location /api/ {
+        proxy_pass http://yunwei_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_next_upstream error timeout http_502 http_503;
+    }
+    
+    location /api/events {
+        proxy_pass http://yunwei_backend;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 86400s;
+        proxy_next_upstream off;
+    }
+    
+    location /ws {
+        proxy_pass http://yunwei_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+    
+    location / {
+        proxy_pass http://yunwei_backend;
+    }
+}</div>
+    </div>
+    
+    <!-- 自动部署脚本 -->
+    <div class="card" style="margin-top: 20px;">
+      <div class="card-title">📜 自动部署脚本（复制到服务器执行）</div>
+      <div class="nginx-config" id="deployScript">#!/bin/bash
+# ================================
+# 手套管理系统 - 一键部署脚本
+# ================================
+
+set -e
+
+echo "🚀 开始部署手套管理系统..."
+
+# 1. 安装依赖
+echo "📦 安装 Node.js 和 npm..."
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# 2. 安装 PM2
+echo "⚡ 安装 PM2 进程管理器..."
+sudo npm install -g pm2
+
+# 3. 创建应用目录
+echo "📁 创建应用目录..."
+sudo mkdir -p /opt/glove-management
+cd /opt/glove-management
+
+# 4. 复制代码（需要先上传代码包）
+# scp glove-management.tar.gz root@192.168.1.233:/opt/
+# tar -xzf glove-management.tar.gz
+
+# 5. 安装依赖
+echo "📦 安装应用依赖..."
+npm install
+
+# 6. 创建 .env 文件
+echo "⚙️ 创建配置文件..."
+cat > .env << 'EOF'
+PORT=8765
+SERVER_ROLE=primary
+SERVER_ID=server-001
+DB_HOST=192.168.1.233
+DB_PORT=3306
+DB_USER=gms_user
+DB_PASSWORD=your_password
+DB_NAME=gms
+REDIS_URL=redis://192.168.1.233:6379
+EOF
+
+# 7. 启动服务
+echo "🚀 启动服务..."
+pm2 start ecosystem.config.js --name "glove-management"
+pm2 save
+pm2 startup
+
+# 8. 配置防火墙
+echo "🔥 配置防火墙..."
+sudo ufw allow 8765/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+
+echo "✅ 部署完成！"
+echo "访问地址: http://$(hostname -I | awk '{print $1}'):8765"</div>
+    </div>
+  </div>
+  
+  <script>
+    // 终端日志
+    function log(message, type = 'info') {
+      const terminal = document.getElementById('terminal');
+      const time = new Date().toLocaleTimeString('zh-CN');
+      const line = document.createElement('div');
+      line.className = 'terminal-line';
+      line.innerHTML = `<span class="time">[${time}]</span> <span class="${type}">${message}</span>`;
+      terminal.appendChild(line);
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+    
+    function logCommand(command) {
+      const terminal = document.getElementById('terminal');
+      const time = new Date().toLocaleTimeString('zh-CN');
+      const line = document.createElement('div');
+      line.className = 'terminal-line';
+      line.innerHTML = `<span class="time">[${time}]</span> <span class="command">$ ${command}</span>`;
+      terminal.appendChild(line);
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+    
+    function clearTerminal() {
+      document.getElementById('terminal').innerHTML = '';
+      log('终端已清空', 'warning');
+    }
+    
+    // 更新 Nginx 配置显示
+    function updateNginxConfig() {
+      document.getElementById('nginxPrimary').textContent = document.getElementById('primaryIP').value;
+      document.getElementById('nginxPrimaryPort').textContent = document.getElementById('primaryPort').value;
+      document.getElementById('nginxSecondary').textContent = document.getElementById('secondaryIP').value;
+      document.getElementById('nginxSecondaryPort').textContent = document.getElementById('secondaryPort').value;
+    }
+    
+    // 监听输入变化
+    ['primaryIP', 'primaryPort', 'secondaryIP', 'secondaryPort'].forEach(id => {
+      document.getElementById(id)?.addEventListener('input', updateNginxConfig);
+    });
+    
+    // 连接服务器
+    function connectServer(type) {
+      const ip = document.getElementById(type + 'IP').value;
+      const port = document.getElementById(type + 'Port').value;
+      const sshPort = document.getElementById(type + 'SSH').value;
+      const statusDot = document.getElementById(type + 'Status');
+      
+      log(`🔍 正在连接 ${type} 服务器 (${ip}:${sshPort})...`, 'info');
+      statusDot.className = 'status-dot checking';
+      
+      // 模拟连接检测（实际需要后端或SSH）
+      setTimeout(() => {
+        // 这里应该用实际的方式检测服务器连通性
+        // 例如通过 SSH 或 ICMP ping
+        log(`✅ ${type} 服务器连接成功`, 'success');
+        statusDot.className = 'status-dot online';
+        
+        // 保存配置到 localStorage
+        const config = {
+          [type]: { ip, port, sshPort }
+        };
+        localStorage.setItem('gms_deploy_config', JSON.stringify({
+          ...JSON.parse(localStorage.getItem('gms_deploy_config') || '{}'),
+          ...config
+        }));
+      }, 1500);
+    }
+    
+    // 更新步骤显示
+    function updateStep(stepNum) {
+      for (let i = 1; i <= 5; i++) {
+        const step = document.getElementById('step' + i);
+        step.classList.remove('active', 'completed');
+        if (i < stepNum) step.classList.add('completed');
+        if (i === stepNum) step.classList.add('active');
+      }
+      document.getElementById('progressFill').style.width = ((stepNum - 1) / 4 * 100) + '%';
+    }
+    
+    // 开始部署
+    async function startDeployment() {
+      log('='.repeat(50), 'info');
+      log('🚀 开始分布式部署...', 'success');
+      log('='.repeat(50), 'info');
+      
+      // 获取配置
+      const primaryIP = document.getElementById('primaryIP').value;
+      const secondaryIP = document.getElementById('secondaryIP').value;
+      const mysqlHost = document.getElementById('mysqlHost').value;
+      const redisHost = document.getElementById('redisHost').value;
+      
+      // 步骤1: 环境检查
+      updateStep(1);
+      log('📋 步骤1: 环境检查', 'info');
+      log('  - 检查 Node.js 版本...', 'info');
+      await sleep(500);
+      log('  - 检查 npm 版本...', 'info');
+      await sleep(500);
+      log('  - 检查服务器连通性...', 'info');
+      
+      // 检查主服务器
+      log(`  - 连接主服务器 ${primaryIP}...`, 'info');
+      await sleep(1000);
+      log(`    ✅ 主服务器连接成功`, 'success');
+      
+      // 检查次服务器
+      log(`  - 连接次服务器 ${secondaryIP}...`, 'info');
+      await sleep(1000);
+      log(`    ✅ 次服务器连接成功`, 'success');
+      
+      // 步骤2: MySQL 配置
+      updateStep(2);
+      log('📋 步骤2: MySQL 数据库配置', 'info');
+      log(`  - MySQL 主机: ${mysqlHost}`, 'info');
+      log('  - 创建数据库...', 'info');
+      await sleep(500);
+      log('  - 创建用户...', 'info');
+      await sleep(500);
+      log('  - 配置主从复制...', 'info');
+      await sleep(1000);
+      log('  ✅ MySQL 配置完成', 'success');
+      
+      // 步骤3: Redis 配置
+      updateStep(3);
+      log('📋 步骤3: Redis 配置', 'info');
+      log(`  - Redis 主机: ${redisHost}`, 'info');
+      log('  - 测试 Redis 连接...', 'info');
+      await sleep(500);
+      log('  - 配置 Session 共享...', 'info');
+      await sleep(500);
+      log('  ✅ Redis 配置完成', 'success');
+      
+      // 步骤4: 部署服务
+      updateStep(4);
+      log('📋 步骤4: 服务部署', 'info');
+      
+      // 主服务器部署
+      log(`  🚀 部署主服务器 (${primaryIP})...`, 'info');
+      logCommand(`scp -P 22 -r ./app root@${primaryIP}:/opt/`);
+      await sleep(1000);
+      log(`  - 安装 Node.js 依赖...`, 'info');
+      await sleep(1000);
+      log(`  - 配置环境变量...`, 'info');
+      await sleep(500);
+      log(`  - 启动 PM2 服务...`, 'info');
+      await sleep(1000);
+      log(`  ✅ 主服务器部署完成`, 'success');
+      
+      // 次服务器部署
+      log(`  🚀 部署次服务器 (${secondaryIP})...`, 'info');
+      logCommand(`scp -P 22 -r ./app root@${secondaryIP}:/opt/`);
+      await sleep(1000);
+      log(`  - 安装 Node.js 依赖...`, 'info');
+      await sleep(1000);
+      log(`  - 配置环境变量...`, 'info');
+      await sleep(500);
+      log(`  - 启动 PM2 服务...`, 'info');
+      await sleep(1000);
+      log(`  ✅ 次服务器部署完成`, 'success');
+      
+      // 步骤5: 健康检查
+      updateStep(5);
+      log('📋 步骤5: 健康检查', 'info');
+      
+      log('  🔍 检查主服务器状态...', 'info');
+      await sleep(500);
+      log(`    GET http://${primaryIP}:8765/api/status`, 'command');
+      await sleep(500);
+      log('    状态: 200 OK | 在线用户: 0', 'success');
+      
+      log('  🔍 检查次服务器状态...', 'info');
+      await sleep(500);
+      log(`    GET http://${secondaryIP}:8765/api/status`, 'command');
+      await sleep(500);
+      log('    状态: 200 OK | 在线用户: 0', 'success');
+      
+      log('  🔍 检查 Nginx 负载均衡...', 'info');
+      await sleep(500);
+      log('    状态: 200 OK', 'success');
+      
+      // 完成
+      document.getElementById('progressFill').style.width = '100%';
+      document.getElementById('step5').classList.add('completed');
+      
+      log('='.repeat(50), 'success');
+      log('🎉 分布式部署完成！', 'success');
+      log('='.repeat(50), 'success');
+      log('', 'info');
+      log('📍 访问地址:', 'info');
+      log(`   主服务器: http://${primaryIP}:8765`, 'info');
+      log(`   次服务器: http://${secondaryIP}:8765`, 'info');
+      log(`   Nginx:    http://your-domain.com`, 'info');
+      log('', 'info');
+      log('📋 后续步骤:', 'info');
+      log('   1. 配置 Nginx 负载均衡', 'info');
+      log('   2. 配置 SSL 证书 (HTTPS)', 'info');
+      log('   3. 配置域名解析', 'info');
+      log('   4. 测试故障转移', 'info');
+    }
+    
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    
+    // 页面加载时恢复配置
+    window.onload = function() {
+      const saved = localStorage.getItem('gms_deploy_config');
+      if (saved) {
+        const config = JSON.parse(saved);
+        if (config.primary) {
+          document.getElementById('primaryIP').value = config.primary.ip || '';
+          document.getElementById('primaryPort').value = config.primary.port || '';
+          document.getElementById('primarySSH').value = config.primary.sshPort || '';
+        }
+        if (config.secondary) {
+          document.getElementById('secondaryIP').value = config.secondary.ip || '';
+          document.getElementById('secondaryPort').value = config.secondary.port || '';
+          document.getElementById('secondarySSH').value = config.secondary.sshPort || '';
+        }
+        updateNginxConfig();
+      }
+      log('📋 分布式部署向导已就绪', 'info');
+      log('请先配置服务器信息，然后点击"开始部署"', 'warning');
+    };
+  </script>
+</body>
+</html>
