@@ -8060,22 +8060,45 @@ REDIS_URL=redis://${redisIP}:6379
 set -e
 cd /opt/glove-management
 
+echo "[INFO] 当前目录: \$(pwd)"
+echo "[INFO] 目录内容: \$(ls -la)"
+
 # 环境变量
+echo "[INFO] 创建 .env 文件..."
 cat > .env << 'ENVEOF'
 ${envContent}
 ENVEOF
+echo "[OK] .env 文件创建成功"
 
 # 安装依赖（如果package.json存在）
 if [ -f package.json ]; then
-  npm install --production 2>/dev/null || npm install 2>/dev/null || true
+  echo "[INFO] 安装npm依赖..."
+  npm install --production
+  if [ $? -eq 0 ]; then
+    echo "[OK] npm依赖安装成功"
+  else
+    echo "[WARN] npm依赖安装可能失败，尝试完整安装..."
+    npm install
+    if [ $? -eq 0 ]; then
+      echo "[OK] npm依赖安装成功"
+    else
+      echo "[ERROR] npm依赖安装失败"
+    fi
+  fi
+else
+  echo "[ERROR] package.json 不存在!"
+  exit 1
 fi
 
 # 检查pm2是否安装
 if ! command -v pm2 &> /dev/null; then
-  npm install -g pm2 2>/dev/null || true
+  echo "[INFO] 安装pm2..."
+  npm install -g pm2
 fi
+echo "[OK] pm2版本: \$(pm2 --version)"
 
 # 创建pm2配置
+echo "[INFO] 创建PM2配置..."
 cat > ecosystem.config.js << 'PM2EOF'
 module.exports = {
   apps: [{
@@ -8090,12 +8113,23 @@ module.exports = {
   }]
 };
 PM2EOF
+echo "[OK] PM2配置创建成功"
 
 # 启动服务
-pm2 restart ecosystem.config.js 2>/dev/null || pm2 start ecosystem.config.js
-pm2 save 2>/dev/null || true
+echo "[INFO] 启动服务..."
+if pm2 list | grep -q "glove-management"; then
+  echo "[INFO] 服务已存在，重启..."
+  pm2 restart glove-management
+else
+  echo "[INFO] 启动新服务..."
+  pm2 start ecosystem.config.js
+fi
+pm2 save
 
-echo "部署完成"
+echo "[INFO] PM2状态:"
+pm2 list
+
+echo "[OK] 部署完成"
 `;
   },
 
