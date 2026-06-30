@@ -213,11 +213,15 @@
 
         <!-- 一键部署 -->
         <div id="deploy-tab-deploy" style="display:none;">
-          <!-- SSH密码配置（用于初始密钥复制） -->
+          <!-- SSH密码配置 -->
           <div style="background:#0f172a;border-radius:12px;padding:16px;margin-bottom:20px;">
             <div style="display:grid;grid-template-columns:1fr 3fr;gap:12px;align-items:center;">
-              <label style="font-size:0.85rem;color:#94a3b8;">🔑 SSH 密码（用于首次连接配置密钥）</label>
-              <input type="password" id="deploy-ssh-password" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="输入次服务器的SSH密码">
+              <label style="font-size:0.85rem;color:#94a3b8;">🔑 SSH 密码</label>
+              <input type="password" id="deploy-ssh-password" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="输入SSH密码">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 3fr;gap:12px;align-items:center;margin-top:10px;">
+              <label style="font-size:0.85rem;color:#94a3b8;">🔐 MySQL root 密码</label>
+              <input type="password" id="deploy-mysql-root-password" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="主服务器MySQL root密码">
             </div>
           </div>
 
@@ -274,7 +278,7 @@
   <script src="js/api.js?v=40"></script>
   <script src="js/storage.js?v=9"></script>
   <script src="js/ws-client.js?v=38"></script>
-  <script src="js/app.js?v=80"></script>
+  <script src="js/app.js?v=81"></script>
   <script>
     // Update current time in topbar
     function updateTime() {
