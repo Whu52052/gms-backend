@@ -27,6 +27,7 @@
   "license": "MIT",
   "dependencies": {
     "adm-zip": "^0.5.17",
+    "dotenv": "^16.4.7",
     "mysql2": "^3.22.5",
     "redis": "^4.6.0",
     "ws": "^8.16.0",
