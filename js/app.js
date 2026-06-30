@@ -8088,26 +8088,27 @@ echo "部署完成"
   },
 
   async _sshCommand(ip, user, command, timeout = 30000) {
-    // 使用 fetch 通过服务端代理执行 SSH 命令
-    // 后端需要实现 /api/ssh-exec 接口
     try {
-      const res = await API._fetchWithTimeout(`/api/ssh-exec`, {
+      const token = localStorage.getItem('gms_token');
+      const res = await fetch(`/api/ssh-exec`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ ip, user, command })
-      }, timeout);
+      });
 
       if (res.ok) {
         const data = await res.json();
         if (data.error) throw new Error(data.error);
         return data.output;
       } else {
-        throw new Error(`HTTP ${res.status}`);
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${res.status}`);
       }
     } catch (e) {
-      // 如果服务端不支持，使用简单的模拟
-      this._deployLog(`⚠️ SSH 命令将通过后端代理执行: ${command.substring(0, 50)}...`, 'warning');
-      return '模拟执行成功';
+      throw new Error(`SSH执行失败: ${e.message}`);
     }
   },
 
