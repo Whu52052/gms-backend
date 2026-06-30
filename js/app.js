@@ -8281,7 +8281,12 @@ echo "[OK] 部署完成"
       return;
     }
 
-    this._deployLog(`🔍 检查次服务器 ${config.ip} 状态...`, 'info');
+    if (!password) {
+      this.notify('请先输入SSH密码', 'warning');
+      return;
+    }
+
+    this._deployLog(`🔍 检查次服务器 ${config.user}@${config.ip} 状态...`, 'info');
 
     try {
       const pm2Status = await this._sshCommand(config.ip, config.user, 'pm2 list 2>&1', 10000, password);
@@ -8294,46 +8299,44 @@ echo "[OK] 部署完成"
     }
 
     try {
-      const pm2Logs = await this._sshCommand(config.ip, config.user, 'cd ~/glove-management && pm2 logs --lines 20 --nostream 2>&1', 30000, password);
-      this._deployLog(`📋 PM2日志(最近20行):`, 'info');
-      pm2Logs.split('\n').slice(-10).forEach(line => {
-        if (line.trim()) {
-          if (line.includes('error') || line.includes('Error') || line.includes('ERROR')) {
-            this._deployLog(`   🔴 ${line.substring(0, 150)}`, 'error');
-          } else {
-            this._deployLog(`   ${line.substring(0, 150)}`, 'info');
-          }
-        }
-      });
-    } catch (e) {
-      this._deployLog(`❌ 无法获取PM2日志: ${e.message}`, 'error');
-    }
-
-    try {
-      const envCheck = await this._sshCommand(config.ip, config.user, 'cat ~/glove-management/.env 2>&1 | head -15', 10000, password);
-      this._deployLog(`📝 .env配置(前15行):`, 'info');
-      envCheck.split('\n').forEach(line => {
-        if (line.trim()) {
-          if (line.includes('PASSWORD')) {
-            this._deployLog(`   ${line.split('=')[0]}=***`, 'info');
-          } else {
-            this._deployLog(`   ${line}`, 'info');
-          }
-        }
-      });
-    } catch (e) {
-      this._deployLog(`❌ 无法读取.env: ${e.message}`, 'error');
-    }
-
-    try {
-      const portStatus = await this._sshCommand(config.ip, config.user, 'netstat -tlnp 2>/dev/null | grep 8765 || ss -tlnp 2>/dev/null | grep 8765 || echo "PORT_NOT_FOUND"', 10000, password);
+      const portStatus = await this._sshCommand(config.ip, config.user, 'ss -tlnp 2>/dev/null | grep -E "8765|LISTEN" || netstat -tlnp 2>/dev/null | grep -E "8765|LISTEN" || echo "PORT_NOT_FOUND"', 10000, password);
+      this._deployLog(`📡 端口监听状态:`, 'info');
       if (portStatus.includes('8765')) {
-        this._deployLog(`✅ 端口8765正在监听`, 'success');
+        this._deployLog(`   ✅ 端口8765正在监听`, 'success');
+        portStatus.split('\n').forEach(line => {
+          if (line.trim()) this._deployLog(`   ${line.substring(0, 100)}`, 'info');
+        });
       } else {
-        this._deployLog(`⚠️ 端口8765未监听`, 'warning');
+        this._deployLog(`   ⚠️ 端口8765未监听`, 'warning');
       }
     } catch (e) {
-      // 忽略
+      this._deployLog(`❌ 无法检查端口: ${e.message}`, 'error');
+    }
+
+    try {
+      const fwStatus = await this._sshCommand(config.ip, config.user, 'sudo ufw status 2>/dev/null || ufw status 2>/dev/null || iptables -L -n 2>/dev/null | head -20 || echo "FW_CHECK_FAILED"', 10000, password);
+      this._deployLog(`🔥 防火墙状态:`, 'info');
+      if (fwStatus.includes('Status: active') || fwStatus.includes('ACCEPT') || fwStatus.includes('DROP')) {
+        fwStatus.split('\n').slice(0, 15).forEach(line => {
+          if (line.trim()) this._deployLog(`   ${line.substring(0, 100)}`, 'warning');
+        });
+      } else {
+        this._deployLog(`   ✅ 防火墙未启用或状态未知`, 'success');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 无法检查防火墙: ${e.message}`, 'warning');
+    }
+
+    try {
+      const curlTest = await this._sshCommand(config.ip, config.user, 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8765/api/status 2>&1 || echo "CURL_FAILED"', 10000, password);
+      this._deployLog(`🌐 本地HTTP测试:`, 'info');
+      if (curlTest === '200') {
+        this._deployLog(`   ✅ 本地访问正常 (HTTP 200)`, 'success');
+      } else {
+        this._deployLog(`   ⚠️ 本地访问返回: ${curlTest}`, 'warning');
+      }
+    } catch (e) {
+      this._deployLog(`❌ 本地HTTP测试失败: ${e.message}`, 'error');
     }
 
     try {
@@ -8347,11 +8350,12 @@ echo "[OK] 部署完成"
         } else {
           this._deployLog(`✅ 服务正常运行中`, 'success');
         }
+        this._deployLog(`💡 提示: 服务已运行，如外部无法访问请检查防火墙设置`, 'info');
       } else {
         this._deployLog(`⚠️ 服务返回错误: ${statusRes.status}`, 'warning');
       }
     } catch (e) {
-      this._deployLog(`❌ 无法访问服务: ${e.message}`, 'error');
+      this._deployLog(`❌ 代理无法访问服务: ${e.message}`, 'error');
     }
   },
 
@@ -8418,6 +8422,11 @@ echo "[OK] 部署完成"
       return;
     }
 
+    if (!password) {
+      this.notify('请先输入SSH密码', 'warning');
+      return;
+    }
+
     if (!confirm('确定要重启次服务器吗？')) return;
 
     this._deployLog(`🔄 重启次服务器 ${config.ip}...`, 'info');
@@ -8429,6 +8438,36 @@ echo "[OK] 部署完成"
       this._checkSecondaryStatus();
     } catch (e) {
       this._deployLog(`❌ 重启失败: ${e.message}`, 'error');
+    }
+  },
+
+  async _openFirewallPort() {
+    const config = this._getSecondaryConfig();
+    const password = document.getElementById('deploy-ssh-password').value;
+    
+    if (!config.ip) {
+      this.notify('请先配置次服务器IP', 'warning');
+      return;
+    }
+
+    if (!password) {
+      this.notify('请先输入SSH密码', 'warning');
+      return;
+    }
+
+    if (!confirm('确定要开放8765端口吗？')) return;
+
+    this._deployLog(`🔓 开放8765端口...`, 'info');
+    try {
+      const ufwResult = await this._sshCommand(config.ip, config.user, 'sudo ufw allow 8765/tcp 2>&1 || ufw allow 8765/tcp 2>&1 || echo "UFW_NOT_AVAILABLE"', 10000, password);
+      this._deployLog(`📝 UFW结果: ${ufwResult.substring(0, 100)}`, 'info');
+
+      const iptablesResult = await this._sshCommand(config.ip, config.user, 'sudo iptables -I INPUT -p tcp --dport 8765 -j ACCEPT 2>&1 && sudo iptables-save 2>&1 | head -3 || echo "IPTABLES_DONE"', 10000, password);
+      this._deployLog(`📝 iptables结果: ${iptablesResult.substring(0, 100)}`, 'info');
+
+      this._deployLog(`✅ 端口开放操作完成，请尝试访问 http://${config.ip}:8765`, 'success');
+    } catch (e) {
+      this._deployLog(`❌ 开放端口失败: ${e.message}`, 'error');
     }
   },
 };
