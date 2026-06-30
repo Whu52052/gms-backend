@@ -60,17 +60,22 @@ fi
 # 2. 创建应用目录
 log_info "步骤2: 创建应用目录..."
 APP_DIR="/opt/glove-management"
-if [ -d "$APP_DIR" ]; then
+if [ -d "$APP_DIR" ] && [ -f "$APP_DIR/package.json" ]; then
+    log_success "应用目录已存在且包含代码: $APP_DIR"
+    cd $APP_DIR
+elif [ -d "$APP_DIR" ]; then
     log_warning "应用目录已存在: $APP_DIR"
     read -p "是否删除并重新创建? (y/N): " confirm
     if [ "$confirm" = "y" ]; then
         pm2 delete all 2>/dev/null || true
         rm -rf $APP_DIR
+        mkdir -p $APP_DIR
         log_success "已删除旧目录"
     fi
+else
+    mkdir -p $APP_DIR
 fi
 
-mkdir -p $APP_DIR
 cd $APP_DIR
 log_success "应用目录: $APP_DIR"
 
