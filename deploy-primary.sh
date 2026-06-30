@@ -76,14 +76,24 @@ log_success "应用目录: $APP_DIR"
 
 # 3. 复制代码
 log_info "步骤3: 复制应用代码..."
-# 检查当前目录是否有 package.json
-if [ -f "/workspace/package.json" ]; then
-    log_info "从 /workspace 复制代码..."
-    cp -r /workspace/* $APP_DIR/
-    log_success "代码复制完成"
+# 尝试从多个可能的源码目录复制
+SRC_DIR=""
+if [ -f "$(pwd)/package.json" ]; then
+    SRC_DIR="$(pwd)"
+elif [ -f "$HOME/gms-backend/package.json" ]; then
+    SRC_DIR="$HOME/gms-backend"
+elif [ -f "/workspace/package.json" ]; then
+    SRC_DIR="/workspace"
+fi
+
+if [ -n "$SRC_DIR" ] && [ "$SRC_DIR" != "$APP_DIR" ]; then
+    log_info "从 $SRC_DIR 复制代码..."
+    cp -r "$SRC_DIR"/* $APP_DIR/
+    log_success "代码复制完成 ($SRC_DIR → $APP_DIR)"
 else
     log_info "请将代码包上传到: $APP_DIR"
-    log_info "可以使用: scp -r ./glove-management.tar.gz root@$(hostname -I | awk '{print $1}'):/opt/"
+    log_info "当前目录: $(pwd)"
+    log_info "当前目录文件: $(ls -1 | head -5)"
 fi
 
 # 4. 安装依赖
