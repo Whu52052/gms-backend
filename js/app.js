@@ -7766,19 +7766,45 @@ const App = {
     const secondary = servers.find(s => s.role === 'secondary');
     if (secondary) {
       try {
-        const res = await fetch(`http://${secondary.ip}:8765/api/status`, { timeout: 3000 });
+        const res = await fetch(`/api/proxy-status?ip=${secondary.ip}&port=${secondary.port || 8765}`);
         if (res.ok) {
           const data = await res.json();
-          document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
-          document.getElementById('deploy-secondary-role').textContent = `角色: ${data.serverRole} | 版本: ${data.version}`;
+          if (data.serverRole) {
+            document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+            document.getElementById('deploy-secondary-role').textContent = `角色: ${data.serverRole} | 版本: ${data.version}`;
+          } else {
+            document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#f59e0b;">启动中</span>';
+            document.getElementById('deploy-secondary-role').textContent = '服务启动中...';
+          }
         }
       } catch (e) {
         document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#ef4444;">离线</span>';
         document.getElementById('deploy-secondary-role').textContent = '无法连接';
       }
     } else {
-      document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#f59e0b;">未配置</span>';
-      document.getElementById('deploy-secondary-role').textContent = '请添加次服务器';
+      // 如果没有配置，从表单获取次服务器IP检查
+      const secondaryIP = document.getElementById('deploy-secondary-ip').value;
+      if (secondaryIP) {
+        try {
+          const res = await fetch(`/api/proxy-status?ip=${secondaryIP}&port=8765`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.serverRole) {
+              document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+              document.getElementById('deploy-secondary-role').textContent = `角色: ${data.serverRole} | 版本: ${data.version}`;
+            } else {
+              document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#f59e0b;">启动中</span>';
+              document.getElementById('deploy-secondary-role').textContent = '服务启动中...';
+            }
+          }
+        } catch (e) {
+          document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#ef4444;">离线</span>';
+          document.getElementById('deploy-secondary-role').textContent = '无法连接';
+        }
+      } else {
+        document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#f59e0b;">未配置</span>';
+        document.getElementById('deploy-secondary-role').textContent = '请添加次服务器';
+      }
     }
   },
 
@@ -8273,10 +8299,14 @@ echo "[OK] 部署完成"
     }
 
     try {
-      const statusRes = await fetch(`http://${config.ip}:8765/api/status`, { timeout: 5000 });
+      const statusRes = await fetch(`/api/proxy-status?ip=${config.ip}&port=8765`);
       if (statusRes.ok) {
         const data = await statusRes.json();
-        this._deployLog(`✅ 服务正常 | 版本: ${data.version} | 角色: ${data.serverRole}`, 'success');
+        if (data.serverRole) {
+          this._deployLog(`✅ 服务正常 | 版本: ${data.version} | 角色: ${data.serverRole}`, 'success');
+        } else {
+          this._deployLog(`⚠️ 服务启动中: ${data.error || '未知状态'}`, 'warning');
+        }
       } else {
         this._deployLog(`⚠️ 服务返回错误: ${statusRes.status}`, 'warning');
       }

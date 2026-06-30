@@ -3155,6 +3155,31 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ========== 检查远程服务器状态（代理） ==========
+    if (req.url.startsWith('/api/proxy-status') && req.method === 'GET') {
+      const urlParams = new URL(req.url, `http://${req.headers.host}`);
+      const targetIP = urlParams.searchParams.get('ip');
+      const targetPort = urlParams.searchParams.get('port') || 8765;
+
+      if (!targetIP) {
+        sendJSON(res, { error: 'Missing ip parameter' }, 400);
+        return;
+      }
+
+      try {
+        const statusRes = await fetch(`http://${targetIP}:${targetPort}/api/status`, { timeout: 5000 });
+        if (statusRes.ok) {
+          const data = await statusRes.json();
+          sendJSON(res, data);
+        } else {
+          sendJSON(res, { online: false, error: `HTTP ${statusRes.status}` });
+        }
+      } catch (e) {
+        sendJSON(res, { online: false, error: e.message });
+      }
+      return;
+    }
+
     if (req.url === '/api/events' && req.method === 'GET') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
