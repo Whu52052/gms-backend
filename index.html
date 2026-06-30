@@ -10,7 +10,7 @@
 <body>
   <!-- ==================== SIDEBAR ==================== -->
   <aside class="sidebar" style="display:none;">
-    <div class="sidebar-brand">📦 设备管理系统</div>
+    <div class="sidebar-brand" onclick="App._deployAdminClick()" style="cursor:pointer;" title="连续点击5次打开部署管理">📦 设备管理系统</div>
     <nav class="sidebar-nav">
       <div class="nav-section">
         <div class="nav-section-title">概览</div>
@@ -75,8 +75,7 @@
     </nav>
     <div class="sidebar-footer">
       <button id="theme-toggle" title="切换深色/浅色模式">🌓 切换主题</button>
-      <!-- 隐藏的部署管理入口：点击Logo 5次显示 -->
-      <button id="deploy-admin-trigger" style="position:absolute;top:0;left:0;width:60px;height:60px;opacity:0;cursor:pointer;" onclick="App._deployAdminClick()"></button>
+
     </div>
   </aside>
 

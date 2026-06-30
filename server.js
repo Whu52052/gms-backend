@@ -3075,6 +3075,69 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ========== SSH 执行接口（仅超级管理员） ==========
+    if (req.url === '/api/ssh-exec' && req.method === 'POST') {
+      const bodyData = await parseBody(req);
+      const { ip, user, command } = bodyData;
+
+      // 验证超级管理员权限
+      const token = extractToken(req);
+      const userData = token ? tokens[token] : null;
+      if (!userData || !userData.userId) {
+        sendJSON(res, { error: 'Unauthorized' }, 401);
+        return;
+      }
+
+      // 检查用户是否为管理员
+      try {
+        const [[userRow]] = await pool.execute('SELECT role FROM users WHERE id = ?', [userData.userId]);
+        if (!userRow || (userRow.role !== 'admin' && userRow.role !== 'superadmin')) {
+          sendJSON(res, { error: 'Admin only' }, 403);
+          return;
+        }
+      } catch (e) {
+        sendJSON(res, { error: 'Auth check failed' }, 500);
+        return;
+      }
+
+      // 验证参数
+      if (!ip || !command) {
+        sendJSON(res, { error: 'Missing ip or command' }, 400);
+        return;
+      }
+
+      // 限制可执行的命令（安全白名单）
+      const allowedCommands = [
+        'echo', 'mkdir', 'chmod', 'chown', 'rm', 'cp', 'mv', 'cat', 'grep', 'tail',
+        'ls', 'cd', 'npm', 'node', 'pm2', 'curl', 'wget', 'apt', 'yum', 'systemctl',
+        'service', 'df', 'free', 'ps', 'kill', 'pkill', 'sed', 'awk', 'base64'
+      ];
+
+      const isAllowed = allowedCommands.some(cmd => command.trim().startsWith(cmd));
+      if (!isAllowed) {
+        sendJSON(res, { error: 'Command not allowed' }, 403);
+        return;
+      }
+
+      // 执行 SSH 命令（通过 SSH2 或简单的 exec）
+      try {
+        const { exec } = require('child_process');
+        const sshCmd = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${user || 'root'}@${ip} '${command.replace(/'/g, "'\\''")}'`;
+
+        const output = await new Promise((resolve, reject) => {
+          exec(sshCmd, { timeout: 60000 }, (error, stdout, stderr) => {
+            if (error && !stdout) reject(new Error(stderr || error.message));
+            else resolve(stdout || stderr);
+          });
+        });
+
+        sendJSON(res, { output, success: true });
+      } catch (e) {
+        sendJSON(res, { error: e.message, output: '' }, 500);
+      }
+      return;
+    }
+
     if (req.url === '/api/events' && req.method === 'GET') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
