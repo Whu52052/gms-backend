@@ -7973,17 +7973,43 @@ const App = {
     this._deployLog(`⚙️ 执行部署脚本...`, 'info');
     const result = await this._sshCommand(serverIP, sshUser, 'bash /tmp/deploy.sh 2>&1', 180000);
 
+    // 输出部署脚本的详细日志
+    if (result) {
+      const logLines = result.split('\n').filter(l => l.trim());
+      logLines.forEach(line => {
+        if (line.includes('ERROR') || line.includes('error') || line.includes('fail')) {
+          this._deployLog(`   🔴 ${line.substring(0, 120)}`, 'error');
+        } else if (line.includes('WARN') || line.includes('warn')) {
+          this._deployLog(`   🟡 ${line.substring(0, 120)}`, 'warning');
+        } else {
+          this._deployLog(`   📝 ${line.substring(0, 120)}`, 'info');
+        }
+      });
+    }
+
     // 分析结果
     if (result.includes('部署完成') || result.includes('Deployment complete')) {
       this._deployLog(`✅ ${role} 部署成功`, 'success');
     } else if (result.includes('ERROR') || result.includes('error')) {
-      // 提取错误信息
       const errorLines = result.split('\n').filter(l => l.includes('ERROR') || l.includes('error')).slice(0, 3);
       this._deployLog(`⚠️ 部署部分完成: ${errorLines.join(', ')}`, 'warning');
     }
 
-    // 步骤6: 检查服务状态
-    await new Promise(r => setTimeout(r, 3000));
+    // 步骤6: 检查PM2状态
+    this._deployLog(`🔍 检查服务状态...`, 'info');
+    try {
+      const pm2Status = await this._sshCommand(serverIP, sshUser, 'pm2 list 2>&1', 10000);
+      if (pm2Status.includes('glove-management')) {
+        this._deployLog(`✅ PM2服务已注册`, 'success');
+      } else {
+        this._deployLog(`⚠️ PM2服务未找到`, 'warning');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 无法检查PM2状态: ${e.message}`, 'warning');
+    }
+
+    // 步骤7: 检查服务状态
+    await new Promise(r => setTimeout(r, 5000));
     try {
       const statusRes = await fetch(`http://${serverIP}:8765/api/status`, { timeout: 5000 });
       if (statusRes.ok) {
@@ -7992,6 +8018,18 @@ const App = {
       }
     } catch (e) {
       this._deployLog(`⚠️ 服务可能未启动，请检查`, 'warning');
+      // 尝试查看PM2日志
+      try {
+        const pm2Logs = await this._sshCommand(serverIP, sshUser, 'pm2 logs --lines 20 --nostream 2>&1', 10000);
+        if (pm2Logs) {
+          this._deployLog(`📋 PM2日志(最近20行):`, 'info');
+          pm2Logs.split('\n').slice(0, 10).forEach(line => {
+            this._deployLog(`   ${line.substring(0, 100)}`, 'warning');
+          });
+        }
+      } catch (e2) {
+        // 忽略
+      }
     }
   },
 
@@ -8155,6 +8193,109 @@ echo "部署完成"
   _refreshDeployLogs() {
     this._deployLog('🔄 刷新服务器状态...', 'info');
     this._checkServerStatus();
+  },
+
+  _getSecondaryConfig() {
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    const secondary = servers.find(s => s.role === 'secondary');
+    if (secondary) return secondary;
+    // 如果没有配置，从表单获取
+    const ip = document.getElementById('deploy-secondary-ip').value;
+    const user = document.getElementById('deploy-secondary-user').value || 'we';
+    return { ip, user, role: 'secondary' };
+  },
+
+  async _checkSecondaryStatus() {
+    const config = this._getSecondaryConfig();
+    if (!config.ip) {
+      this.notify('请先配置次服务器IP', 'warning');
+      return;
+    }
+
+    this._deployLog(`🔍 检查次服务器 ${config.ip} 状态...`, 'info');
+
+    // 检查PM2状态
+    try {
+      const pm2Status = await this._sshCommand(config.ip, config.user, 'pm2 list 2>&1', 10000);
+      this._deployLog(`📊 PM2状态:`, 'info');
+      pm2Status.split('\n').forEach(line => {
+        if (line.trim()) this._deployLog(`   ${line.substring(0, 100)}`, 'info');
+      });
+    } catch (e) {
+      this._deployLog(`❌ 无法获取PM2状态: ${e.message}`, 'error');
+    }
+
+    // 检查端口是否监听
+    try {
+      const portStatus = await this._sshCommand(config.ip, config.user, 'netstat -tlnp 2>/dev/null | grep 8765 || ss -tlnp 2>/dev/null | grep 8765 || echo "PORT_NOT_FOUND"', 10000);
+      if (portStatus.includes('8765')) {
+        this._deployLog(`✅ 端口8765正在监听`, 'success');
+      } else {
+        this._deployLog(`⚠️ 端口8765未监听`, 'warning');
+      }
+    } catch (e) {
+      // 忽略
+    }
+
+    // 检查HTTP服务
+    try {
+      const statusRes = await fetch(`http://${config.ip}:8765/api/status`, { timeout: 5000 });
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        this._deployLog(`✅ 服务正常 | 版本: ${data.version} | 角色: ${data.serverRole}`, 'success');
+      } else {
+        this._deployLog(`⚠️ 服务返回错误: ${statusRes.status}`, 'warning');
+      }
+    } catch (e) {
+      this._deployLog(`❌ 无法访问服务: ${e.message}`, 'error');
+    }
+  },
+
+  async _viewSecondaryPM2Logs() {
+    const config = this._getSecondaryConfig();
+    if (!config.ip) {
+      this.notify('请先配置次服务器IP', 'warning');
+      return;
+    }
+
+    this._deployLog(`📋 获取PM2日志...`, 'info');
+    try {
+      const logs = await this._sshCommand(config.ip, config.user, 'pm2 logs --lines 30 --nostream 2>&1', 10000);
+      this._deployLog(`📋 PM2日志(最近30行):`, 'info');
+      logs.split('\n').forEach(line => {
+        if (line.trim()) {
+          if (line.includes('Error') || line.includes('error') || line.includes('ERROR')) {
+            this._deployLog(`   🔴 ${line.substring(0, 150)}`, 'error');
+          } else {
+            this._deployLog(`   ${line.substring(0, 150)}`, 'info');
+          }
+        }
+      });
+    } catch (e) {
+      this._deployLog(`❌ 获取日志失败: ${e.message}`, 'error');
+    }
+  },
+
+  async _restartSecondaryServer() {
+    const config = this._getSecondaryConfig();
+    if (!config.ip) {
+      this.notify('请先配置次服务器IP', 'warning');
+      return;
+    }
+
+    if (!confirm('确定要重启次服务器吗？')) return;
+
+    this._deployLog(`🔄 重启次服务器 ${config.ip}...`, 'info');
+    try {
+      await this._sshCommand(config.ip, config.user, 'cd /opt/glove-management && pm2 restart all 2>&1', 30000);
+      this._deployLog(`✅ 重启命令已执行，等待服务启动...`, 'success');
+
+      // 等待后检查状态
+      await new Promise(r => setTimeout(r, 5000));
+      this._checkSecondaryStatus();
+    } catch (e) {
+      this._deployLog(`❌ 重启失败: ${e.message}`, 'error');
+    }
   },
 };
 

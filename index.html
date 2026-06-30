@@ -253,9 +253,11 @@
           <div style="background:#000;border-radius:12px;padding:20px;font-family:monospace;font-size:0.85rem;max-height:400px;overflow-y:auto;" id="deploy-log-output">
             <div style="color:#64748b;">部署日志将显示在这里...</div>
           </div>
-          <div style="margin-top:12px;display:flex;gap:8px;">
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
             <button onclick="App._clearDeployLogs()" style="padding:8px 16px;background:#334155;border:none;color:#e2e8f0;border-radius:6px;cursor:pointer;">🗑 清空日志</button>
-            <button onclick="App._refreshDeployLogs()" style="padding:8px 16px;background:#334155;border:none;color:#e2e8f0;border-radius:6px;cursor:pointer;">🔄 刷新状态</button>
+            <button onclick="App._checkSecondaryStatus()" style="padding:8px 16px;background:#3b82f6;border:none;color:#fff;border-radius:6px;cursor:pointer;">🔍 检查次服务器状态</button>
+            <button onclick="App._viewSecondaryPM2Logs()" style="padding:8px 16px;background:#8b5cf6;border:none;color:#fff;border-radius:6px;cursor:pointer;">📋 查看PM2日志</button>
+            <button onclick="App._restartSecondaryServer()" style="padding:8px 16px;background:#f59e0b;border:none;color:#fff;border-radius:6px;cursor:pointer;">🔄 重启次服务器</button>
           </div>
         </div>
       </div>
@@ -269,7 +271,7 @@
   <script src="js/api.js?v=40"></script>
   <script src="js/storage.js?v=9"></script>
   <script src="js/ws-client.js?v=38"></script>
-  <script src="js/app.js?v=69"></script>
+  <script src="js/app.js?v=70"></script>
   <script>
     // Update current time in topbar
     function updateTime() {
