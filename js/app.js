@@ -7865,42 +7865,16 @@ const App = {
   },
 
   async _deployServer(type) {
-    let targetIP, targetUser, dbIP, isPrimary;
+    let targetIP, targetUser, dbIP, redisIP, isPrimary;
 
-    if (type === 'primary') {
-      targetIP = document.getElementById('deploy-primary-ip').value;
-      targetUser = document.getElementById('deploy-primary-user').value || 'we';
-      dbIP = targetIP;
-      isPrimary = true;
-    } else if (type === 'secondary') {
+    if (type === 'secondary') {
       targetIP = document.getElementById('deploy-secondary-ip').value;
       targetUser = document.getElementById('deploy-secondary-user').value || 'we';
       dbIP = document.getElementById('deploy-master-db-ip').value || '10.5.50.30';
+      redisIP = document.getElementById('deploy-secondary-redis').value || '10.5.50.30';
       isPrimary = false;
     } else {
-      // 批量部署
-      const primaryIP = document.getElementById('deploy-batch-primary').value;
-      const secondaryIP = document.getElementById('deploy-batch-secondary').value;
-      const batchDB = document.getElementById('deploy-batch-db').value;
-      const batchRedis = document.getElementById('deploy-batch-redis').value;
-      const batchUser = document.getElementById('deploy-batch-user').value || 'we';
-
-      if (!primaryIP || !secondaryIP) {
-        this.notify('请填写服务器 IP', 'error');
-        return;
-      }
-
-      this._deployLog('🚀 开始批量部署...', 'info');
-
-      // 1. 先部署主服务器
-      this._deployLog('📦 部署主服务器...', 'info');
-      await this._doSSHDeploy(primaryIP, batchUser, batchDB || primaryIP, batchRedis || primaryIP, true);
-
-      // 2. 再部署次服务器
-      this._deployLog('📦 部署次服务器...', 'info');
-      await this._doSSHDeploy(secondaryIP, batchUser, batchDB || primaryIP, batchRedis || primaryIP, false);
-
-      this._deployLog('🎉 批量部署完成!', 'success');
+      this.notify('仅支持部署次服务器', 'error');
       return;
     }
 
@@ -7913,21 +7887,21 @@ const App = {
     btn.disabled = true;
     btn.textContent = '部署中...';
 
-    this._deployLog(`🚀 开始部署 ${isPrimary ? '主' : '次'}服务器: ${targetIP}`, 'info');
+    this._deployLog(`🚀 开始部署次服务器: ${targetIP}`, 'info');
 
     try {
-      await this._doSSHDeploy(targetIP, targetUser, dbIP, dbIP, isPrimary);
-      this._deployLog(`🎉 ${isPrimary ? '主' : '次'}服务器部署完成!`, 'success');
+      await this._doSSHDeploy(targetIP, targetUser, dbIP, redisIP, isPrimary);
+      this._deployLog(`🎉 次服务器部署完成!`, 'success');
 
       // 保存服务器配置
       const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
       const existing = servers.findIndex(s => s.ip === targetIP);
       const serverConfig = {
         id: existing >= 0 ? servers[existing].id : Date.now().toString(),
-        name: isPrimary ? '主服务器' : '次服务器',
+        name: '次服务器',
         ip: targetIP,
         port: 8765,
-        role: isPrimary ? 'primary' : 'secondary'
+        role: 'secondary'
       };
       if (existing >= 0) servers[existing] = serverConfig;
       else servers.push(serverConfig);
@@ -7939,7 +7913,7 @@ const App = {
     }
 
     btn.disabled = false;
-    btn.textContent = `🚀 开始部署 ${isPrimary ? '主' : '次'}服务器`;
+    btn.textContent = '🚀 开始部署次服务器';
   },
 
   async _doSSHDeploy(targetIP, sshUser, dbIP, redisIP, isPrimary) {

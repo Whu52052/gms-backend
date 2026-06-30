@@ -217,31 +217,15 @@
           <div style="background:#0f172a;border-radius:12px;padding:16px;margin-bottom:20px;">
             <div style="display:grid;grid-template-columns:1fr 3fr;gap:12px;align-items:center;">
               <label style="font-size:0.85rem;color:#94a3b8;">🔑 SSH 密码（用于首次连接配置密钥）</label>
-              <input type="password" id="deploy-ssh-password" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="输入目标服务器的SSH密码">
+              <input type="password" id="deploy-ssh-password" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="输入次服务器的SSH密码">
             </div>
           </div>
 
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
-            <!-- 部署主服务器 -->
-            <div style="background:#0f172a;border-radius:12px;padding:20px;">
-              <h4 style="margin:0 0 16px;color:#667eea;">🚀 部署主服务器</h4>
-              <div style="display:grid;gap:12px;">
-                <div>
-                  <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">服务器 IP</label>
-                  <input type="text" id="deploy-primary-ip" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.30">
-                </div>
-                <div>
-                  <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">SSH 用户</label>
-                  <input type="text" id="deploy-primary-user" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="we">
-                </div>
-              </div>
-              <button onclick="App._deployServer('primary')" id="deploy-primary-btn" style="margin-top:16px;width:100%;padding:14px;background:#667eea;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:1rem;">🚀 开始部署主服务器</button>
-            </div>
-
+          <div style="display:grid;grid-template-columns:1fr;gap:20px;">
             <!-- 部署次服务器 -->
             <div style="background:#0f172a;border-radius:12px;padding:20px;">
               <h4 style="margin:0 0 16px;color:#10b981;">🚀 部署次服务器</h4>
-              <div style="display:grid;gap:12px;">
+              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">
                 <div>
                   <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">服务器 IP</label>
                   <input type="text" id="deploy-secondary-ip" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.35">
@@ -254,38 +238,13 @@
                   <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">连接主库 IP</label>
                   <input type="text" id="deploy-master-db-ip" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.30">
                 </div>
+                <div>
+                  <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">Redis IP</label>
+                  <input type="text" id="deploy-secondary-redis" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.30">
+                </div>
               </div>
               <button onclick="App._deployServer('secondary')" id="deploy-secondary-btn" style="margin-top:16px;width:100%;padding:14px;background:#10b981;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:1rem;">🚀 开始部署次服务器</button>
             </div>
-          </div>
-
-          <!-- 批量部署 -->
-          <div style="background:#0f172a;border-radius:12px;padding:20px;margin-top:20px;">
-            <h4 style="margin:0 0 16px;color:#f59e0b;">⚡ 批量部署</h4>
-            <p style="color:#94a3b8;font-size:0.9rem;margin-bottom:16px;">同时部署主服务器和次服务器，配置共享数据库</p>
-            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;">
-              <div>
-                <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">SSH 用户</label>
-                <input type="text" id="deploy-batch-user" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="we">
-              </div>
-              <div>
-                <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">主服务器 IP</label>
-                <input type="text" id="deploy-batch-primary" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.30">
-              </div>
-              <div>
-                <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">次服务器 IP</label>
-                <input type="text" id="deploy-batch-secondary" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.35">
-              </div>
-              <div>
-                <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">数据库 IP</label>
-                <input type="text" id="deploy-batch-db" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.30">
-              </div>
-              <div>
-                <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">Redis IP</label>
-                <input type="text" id="deploy-batch-redis" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.30">
-              </div>
-            </div>
-            <button onclick="App._deployServer('batch')" id="deploy-batch-btn" style="margin-top:16px;width:100%;padding:14px;background:#f59e0b;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:1rem;">🚀 一键批量部署（主+次）</button>
           </div>
         </div>
 
@@ -310,7 +269,7 @@
   <script src="js/api.js?v=40"></script>
   <script src="js/storage.js?v=9"></script>
   <script src="js/ws-client.js?v=38"></script>
-  <script src="js/app.js?v=68"></script>
+  <script src="js/app.js?v=69"></script>
   <script>
     // Update current time in topbar
     function updateTime() {

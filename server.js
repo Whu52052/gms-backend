@@ -3081,22 +3081,12 @@ const server = http.createServer(async (req, res) => {
       const { ip, user, command } = bodyData;
 
       // 验证超级管理员权限
-      const token = extractToken(req);
-      const userData = token ? tokens[token] : null;
-      if (!userData || !userData.userId) {
-        sendJSON(res, { error: 'Unauthorized' }, 401);
-        return;
-      }
+      const userData = await requireAuth(req, res);
+      if (!userData) return;
 
       // 检查用户是否为管理员
-      try {
-        const [[userRow]] = await pool.execute('SELECT role FROM users WHERE id = ?', [userData.userId]);
-        if (!userRow || (userRow.role !== 'admin' && userRow.role !== 'superadmin')) {
-          sendJSON(res, { error: 'Admin only' }, 403);
-          return;
-        }
-      } catch (e) {
-        sendJSON(res, { error: 'Auth check failed' }, 500);
+      if (userData.role !== 'admin' && userData.role !== 'superadmin') {
+        sendJSON(res, { error: 'Admin only' }, 403);
         return;
       }
 
