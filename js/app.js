@@ -7705,16 +7705,27 @@ const App = {
   },
 
   _verifyDeployPassword() {
+    // 检查当前用户是否为Yunwei
+    if (!API.currentUser || API.currentUser.username !== 'Yunwei') {
+      document.getElementById('deploy-password-error').textContent = '此功能仅限Yunwei使用';
+      document.getElementById('deploy-password-error').style.display = 'block';
+      setTimeout(() => {
+        document.getElementById('deploy-password-error').style.display = 'none';
+      }, 3000);
+      return;
+    }
+
     const password = document.getElementById('deploy-admin-password').value;
-    // 管理员密码（可以在后端配置更安全的）
+    // Yunwei专用密码
     const adminPassword = localStorage.getItem('gms_deploy_admin_password') || 'yunwei2024';
-    
+
     if (password === adminPassword) {
       document.getElementById('deploy-password-form').style.display = 'none';
       document.getElementById('deploy-admin-content').style.display = 'block';
       this._loadDeployConfig();
       this._checkServerStatus();
     } else {
+      document.getElementById('deploy-password-error').textContent = '密码错误';
       document.getElementById('deploy-password-error').style.display = 'block';
       setTimeout(() => {
         document.getElementById('deploy-password-error').style.display = 'none';
@@ -7872,6 +7883,7 @@ const App = {
       const secondaryIP = document.getElementById('deploy-batch-secondary').value;
       const batchDB = document.getElementById('deploy-batch-db').value;
       const batchRedis = document.getElementById('deploy-batch-redis').value;
+      const batchUser = document.getElementById('deploy-batch-user').value || 'we';
 
       if (!primaryIP || !secondaryIP) {
         this.notify('请填写服务器 IP', 'error');
@@ -7882,11 +7894,11 @@ const App = {
 
       // 1. 先部署主服务器
       this._deployLog('📦 部署主服务器...', 'info');
-      await this._doSSHDeploy(primaryIP, targetUser || 'we', batchDB, batchRedis, true);
+      await this._doSSHDeploy(primaryIP, batchUser, batchDB || primaryIP, batchRedis || primaryIP, true);
 
       // 2. 再部署次服务器
       this._deployLog('📦 部署次服务器...', 'info');
-      await this._doSSHDeploy(secondaryIP, targetUser || 'we', batchDB, batchRedis, false);
+      await this._doSSHDeploy(secondaryIP, batchUser, batchDB || primaryIP, batchRedis || primaryIP, false);
 
       this._deployLog('🎉 批量部署完成!', 'success');
       return;
@@ -7993,6 +8005,10 @@ const App = {
   },
 
   _generateDeployScript(dbIP, redisIP, role, serverIP) {
+    // 从保存的配置中获取数据库密码
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+    const dbPassword = dbConfig.password || 'gms_password_2024';
+
     const envContent = `
 # 服务器配置
 PORT=8765
@@ -8003,9 +8019,9 @@ SERVER_ID=${role}-${serverIP}
 # MySQL
 DB_HOST=${dbIP}
 DB_PORT=3306
-DB_USER=gms_user
-DB_PASSWORD=${localStorage.getItem('gms_deploy_db_password') || 'gms_password_2024'}
-DB_NAME=gms
+DB_USER=${dbConfig.user || 'gms_user'}
+DB_PASSWORD=${dbPassword}
+DB_NAME=${dbConfig.database || 'gms'}
 
 # Redis
 REDIS_URL=redis://${redisIP}:6379
