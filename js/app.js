@@ -7923,30 +7923,30 @@ const App = {
 
     this._deployLog(`🔌 连接 ${serverIP}...`, 'info');
 
-    // 步骤1: 检查 SSH 连接（优先使用密码登录）
-    let workingUser = sshUser;
+    // 步骤1: 检查 SSH 连接（优先使用 root 用户）
+    let workingUser = 'root';
     let workingPassword = sshPassword;
     
     try {
       this._deployLog(`🔍 测试连接 ${workingUser}@${serverIP}...`, 'info');
       const pingRes = await this._sshCommand(serverIP, workingUser, 'echo "SSH OK"', 10000, workingPassword);
       if (!pingRes.includes('SSH OK')) throw new Error('SSH 连接失败');
-      this._deployLog(`✅ SSH 连接成功`, 'success');
+      this._deployLog(`✅ SSH 连接成功 (root)`, 'success');
     } catch (e) {
-      this._deployLog(`⚠️ ${workingUser} 用户连接失败，尝试 root...`, 'warning');
+      this._deployLog(`⚠️ root 用户连接失败，尝试 ${sshUser}...`, 'warning');
       try {
-        workingUser = 'root';
+        workingUser = sshUser;
         const pingRes = await this._sshCommand(serverIP, workingUser, 'echo "SSH OK"', 10000, workingPassword);
         if (!pingRes.includes('SSH OK')) throw new Error('SSH 连接失败');
-        this._deployLog(`✅ SSH 连接成功 (root)`, 'success');
+        this._deployLog(`✅ SSH 连接成功 (${workingUser})`, 'success');
       } catch (e2) {
         throw new Error(`无法连接到 ${serverIP}: ${e2.message}`);
       }
     }
 
-    // 步骤2: 创建应用目录
+    // 步骤2: 创建应用目录并设置权限
     this._deployLog(`📁 创建应用目录...`, 'info');
-    await this._sshCommand(serverIP, workingUser, 'mkdir -p /opt/glove-management && echo "DIR OK"', 10000, workingPassword);
+    await this._sshCommand(serverIP, workingUser, 'mkdir -p /opt/glove-management && chmod 755 /opt/glove-management && echo "DIR OK"', 10000, workingPassword);
 
     // 步骤3: 获取当前工作目录
     const currentDir = window.location.hostname === 'localhost' ? 'http://localhost:8765' : window.location.origin;
@@ -8016,7 +8016,6 @@ const App = {
       }
     } catch (e) {
       this._deployLog(`⚠️ 服务可能未启动，请检查`, 'warning');
-      // 尝试查看PM2日志
       try {
         const pm2Logs = await this._sshCommand(serverIP, workingUser, 'pm2 logs --lines 20 --nostream 2>&1', 10000, workingPassword);
         if (pm2Logs) {
@@ -8059,13 +8058,20 @@ set -e
 cd /opt/glove-management
 
 echo "[INFO] 当前目录: \$(pwd)"
-echo "[INFO] 目录内容: \$(ls -la)"
+echo "[INFO] 当前用户: \$(whoami)"
+echo "[INFO] 目录权限: \$(ls -la /opt/glove-management/ 2>/dev/null | head -5)"
+
+# 确保目录权限正确
+echo "[INFO] 设置目录权限..."
+chown -R \$(whoami):\$(whoami) /opt/glove-management 2>/dev/null || sudo chown -R \$(whoami):\$(whoami) /opt/glove-management 2>/dev/null || true
+echo "[OK] 目录权限设置完成"
 
 # 环境变量
 echo "[INFO] 创建 .env 文件..."
 cat > .env << 'ENVEOF'
 ${envContent}
 ENVEOF
+chmod 644 .env
 echo "[OK] .env 文件创建成功"
 
 # 安装依赖（如果package.json存在）
@@ -8115,7 +8121,7 @@ echo "[OK] PM2配置创建成功"
 
 # 启动服务
 echo "[INFO] 启动服务..."
-if pm2 list | grep -q "glove-management"; then
+if pm2 list 2>/dev/null | grep -q "glove-management"; then
   echo "[INFO] 服务已存在，重启..."
   pm2 restart glove-management
 else
