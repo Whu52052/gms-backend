@@ -3078,7 +3078,7 @@ const server = http.createServer(async (req, res) => {
     // ========== SSH 执行接口（仅超级管理员） ==========
     if (req.url === '/api/ssh-exec' && req.method === 'POST') {
       const bodyData = await parseBody(req);
-      const { ip, user, command } = bodyData;
+      const { ip, user, command, password } = bodyData;
 
       // 验证超级管理员权限
       const userData = await requireAuth(req, res);
@@ -3120,7 +3120,7 @@ const server = http.createServer(async (req, res) => {
         'service', 'df', 'free', 'ps', 'kill', 'pkill', 'sed', 'awk', 'base64',
         'ssh-keygen', 'ssh-copy-id', 'sshpass', 'ssh', 'scp', 'git',
         'tar', 'unzip', 'zip', 'rsync', 'hostname', 'date',
-        'bash', 'sh', 'touch', 'netstat', 'ss', 'whoami', 'id', 'pwd'
+        'bash', 'sh', 'touch', 'netstat', 'ss', 'whoami', 'id', 'pwd', 'chmod'
       ];
 
       const isAllowed = allowedCommands.some(cmd => command.trim().startsWith(cmd));
@@ -3129,10 +3129,17 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // 执行 SSH 命令（通过 SSH2 或简单的 exec）
+      // 执行 SSH 命令（支持密码登录）
       try {
         const { exec } = require('child_process');
-        const sshCmd = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${user || 'root'}@${ip} '${command.replace(/'/g, "'\\''")}'`;
+        const sshUser = user || 'root';
+        let sshCmd;
+        
+        if (password) {
+          sshCmd = `sshpass -p '${password.replace(/'/g, "'\\''")}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${sshUser}@${ip} '${command.replace(/'/g, "'\\''")}'`;
+        } else {
+          sshCmd = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${sshUser}@${ip} '${command.replace(/'/g, "'\\''")}'`;
+        }
 
         const output = await new Promise((resolve, reject) => {
           exec(sshCmd, { timeout: 60000 }, (error, stdout, stderr) => {

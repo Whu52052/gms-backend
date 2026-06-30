@@ -7919,38 +7919,34 @@ const App = {
   async _doSSHDeploy(targetIP, sshUser, dbIP, redisIP, isPrimary) {
     const role = isPrimary ? 'primary' : 'secondary';
     const serverIP = targetIP;
+    const sshPassword = document.getElementById('deploy-ssh-password').value;
 
     this._deployLog(`🔌 连接 ${serverIP}...`, 'info');
 
-    // 步骤0: 先尝试配置SSH免密登录（如果还没有的话）
-    this._deployLog(`🔑 配置SSH免密登录...`, 'info');
+    // 步骤1: 检查 SSH 连接（优先使用密码登录）
+    let workingUser = sshUser;
+    let workingPassword = sshPassword;
+    
     try {
-      await this._setupSSHKey(serverIP, sshUser);
-      this._deployLog(`✅ SSH密钥配置成功`, 'success');
-    } catch (e) {
-      this._deployLog(`⚠️ SSH密钥配置失败，尝试密码登录: ${e.message}`, 'warning');
-    }
-
-    // 步骤1: 检查 SSH 连接
-    try {
-      const pingRes = await this._sshCommand(serverIP, sshUser, 'echo "SSH OK"', 10000);
+      this._deployLog(`🔍 测试连接 ${workingUser}@${serverIP}...`, 'info');
+      const pingRes = await this._sshCommand(serverIP, workingUser, 'echo "SSH OK"', 10000, workingPassword);
       if (!pingRes.includes('SSH OK')) throw new Error('SSH 连接失败');
       this._deployLog(`✅ SSH 连接成功`, 'success');
     } catch (e) {
-      // 尝试 root 用户
+      this._deployLog(`⚠️ ${workingUser} 用户连接失败，尝试 root...`, 'warning');
       try {
-        const pingRes = await this._sshCommand(serverIP, 'root', 'echo "SSH OK"', 10000);
+        workingUser = 'root';
+        const pingRes = await this._sshCommand(serverIP, workingUser, 'echo "SSH OK"', 10000, workingPassword);
         if (!pingRes.includes('SSH OK')) throw new Error('SSH 连接失败');
-        sshUser = 'root';
         this._deployLog(`✅ SSH 连接成功 (root)`, 'success');
       } catch (e2) {
-        throw new Error(`无法连接到 ${serverIP}: ${e.message}`);
+        throw new Error(`无法连接到 ${serverIP}: ${e2.message}`);
       }
     }
 
     // 步骤2: 创建应用目录
     this._deployLog(`📁 创建应用目录...`, 'info');
-    await this._sshCommand(serverIP, sshUser, 'mkdir -p /opt/glove-management && echo "DIR OK"', 10000);
+    await this._sshCommand(serverIP, workingUser, 'mkdir -p /opt/glove-management && echo "DIR OK"', 10000, workingPassword);
 
     // 步骤3: 获取当前工作目录
     const currentDir = window.location.hostname === 'localhost' ? 'http://localhost:8765' : window.location.origin;
@@ -7960,27 +7956,29 @@ const App = {
     // 如果是次服务器，从主服务器复制代码
     if (!isPrimary) {
       this._deployLog(`📤 从主服务器复制应用代码到 ${serverIP}...`, 'info');
-      const copyResult = await this._sshCommand('localhost', 'root', `rsync -avz --delete --exclude='node_modules' --exclude='.git' --exclude='*.log' /opt/glove-management/ ${sshUser}@${serverIP}:/opt/glove-management/ 2>&1 || echo "COPY_DONE"`, 60000);
+      const copyResult = await this._sshCommand('localhost', 'root', `rsync -avz --delete --exclude='node_modules' --exclude='.git' --exclude='*.log' /opt/glove-management/ ${workingUser}@${serverIP}:/opt/glove-management/ 2>&1 || echo "COPY_DONE"`, 60000);
       this._deployLog(`✅ 代码复制完成`, 'success');
     }
 
     // 步骤4: 生成并写入部署脚本
     const deployScript = this._generateDeployScript(dbIP, redisIP, role, serverIP);
     const encodedScript = btoa(unescape(encodeURIComponent(deployScript)));
-    await this._sshCommand(serverIP, sshUser, `echo "${encodedScript}" | base64 -d > /tmp/deploy.sh && chmod +x /tmp/deploy.sh`, 15000);
+    await this._sshCommand(serverIP, workingUser, `echo "${encodedScript}" | base64 -d > /tmp/deploy.sh && chmod +x /tmp/deploy.sh`, 15000, workingPassword);
 
     // 步骤5: 执行部署脚本
     this._deployLog(`⚙️ 执行部署脚本...`, 'info');
-    const result = await this._sshCommand(serverIP, sshUser, 'bash /tmp/deploy.sh 2>&1', 180000);
+    const result = await this._sshCommand(serverIP, workingUser, 'bash /tmp/deploy.sh 2>&1', 180000, workingPassword);
 
     // 输出部署脚本的详细日志
     if (result) {
       const logLines = result.split('\n').filter(l => l.trim());
       logLines.forEach(line => {
-        if (line.includes('ERROR') || line.includes('error') || line.includes('fail')) {
+        if (line.includes('[ERROR]') || line.includes('error') || line.includes('fail')) {
           this._deployLog(`   🔴 ${line.substring(0, 120)}`, 'error');
-        } else if (line.includes('WARN') || line.includes('warn')) {
+        } else if (line.includes('[WARN]') || line.includes('warn')) {
           this._deployLog(`   🟡 ${line.substring(0, 120)}`, 'warning');
+        } else if (line.includes('[OK]')) {
+          this._deployLog(`   ✅ ${line.substring(0, 120)}`, 'success');
         } else {
           this._deployLog(`   📝 ${line.substring(0, 120)}`, 'info');
         }
@@ -7988,17 +7986,17 @@ const App = {
     }
 
     // 分析结果
-    if (result.includes('部署完成') || result.includes('Deployment complete')) {
+    if (result.includes('部署完成') || result.includes('[OK] 部署完成')) {
       this._deployLog(`✅ ${role} 部署成功`, 'success');
-    } else if (result.includes('ERROR') || result.includes('error')) {
-      const errorLines = result.split('\n').filter(l => l.includes('ERROR') || l.includes('error')).slice(0, 3);
+    } else if (result.includes('[ERROR]') || result.includes('error')) {
+      const errorLines = result.split('\n').filter(l => l.includes('[ERROR]') || l.includes('error')).slice(0, 3);
       this._deployLog(`⚠️ 部署部分完成: ${errorLines.join(', ')}`, 'warning');
     }
 
     // 步骤6: 检查PM2状态
     this._deployLog(`🔍 检查服务状态...`, 'info');
     try {
-      const pm2Status = await this._sshCommand(serverIP, sshUser, 'pm2 list 2>&1', 10000);
+      const pm2Status = await this._sshCommand(serverIP, workingUser, 'pm2 list 2>&1', 10000, workingPassword);
       if (pm2Status.includes('glove-management')) {
         this._deployLog(`✅ PM2服务已注册`, 'success');
       } else {
@@ -8020,7 +8018,7 @@ const App = {
       this._deployLog(`⚠️ 服务可能未启动，请检查`, 'warning');
       // 尝试查看PM2日志
       try {
-        const pm2Logs = await this._sshCommand(serverIP, sshUser, 'pm2 logs --lines 20 --nostream 2>&1', 10000);
+        const pm2Logs = await this._sshCommand(serverIP, workingUser, 'pm2 logs --lines 20 --nostream 2>&1', 10000, workingPassword);
         if (pm2Logs) {
           this._deployLog(`📋 PM2日志(最近20行):`, 'info');
           pm2Logs.split('\n').slice(0, 10).forEach(line => {
@@ -8133,16 +8131,19 @@ echo "[OK] 部署完成"
 `;
   },
 
-  async _sshCommand(ip, user, command, timeout = 30000) {
+  async _sshCommand(ip, user, command, timeout = 30000, password = null) {
     try {
       const token = localStorage.getItem('gms_token');
+      const body = { ip, user, command };
+      if (password) body.password = password;
+      
       const res = await fetch(`/api/ssh-exec`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ ip, user, command })
+        body: JSON.stringify(body)
       });
 
       if (res.ok) {
@@ -8233,7 +8234,6 @@ echo "[OK] 部署完成"
     const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
     const secondary = servers.find(s => s.role === 'secondary');
     if (secondary) return secondary;
-    // 如果没有配置，从表单获取
     const ip = document.getElementById('deploy-secondary-ip').value;
     const user = document.getElementById('deploy-secondary-user').value || 'we';
     return { ip, user, role: 'secondary' };
@@ -8241,6 +8241,8 @@ echo "[OK] 部署完成"
 
   async _checkSecondaryStatus() {
     const config = this._getSecondaryConfig();
+    const password = document.getElementById('deploy-ssh-password').value;
+    
     if (!config.ip) {
       this.notify('请先配置次服务器IP', 'warning');
       return;
@@ -8248,9 +8250,8 @@ echo "[OK] 部署完成"
 
     this._deployLog(`🔍 检查次服务器 ${config.ip} 状态...`, 'info');
 
-    // 检查PM2状态
     try {
-      const pm2Status = await this._sshCommand(config.ip, config.user, 'pm2 list 2>&1', 10000);
+      const pm2Status = await this._sshCommand(config.ip, config.user, 'pm2 list 2>&1', 10000, password);
       this._deployLog(`📊 PM2状态:`, 'info');
       pm2Status.split('\n').forEach(line => {
         if (line.trim()) this._deployLog(`   ${line.substring(0, 100)}`, 'info');
@@ -8259,9 +8260,8 @@ echo "[OK] 部署完成"
       this._deployLog(`❌ 无法获取PM2状态: ${e.message}`, 'error');
     }
 
-    // 检查端口是否监听
     try {
-      const portStatus = await this._sshCommand(config.ip, config.user, 'netstat -tlnp 2>/dev/null | grep 8765 || ss -tlnp 2>/dev/null | grep 8765 || echo "PORT_NOT_FOUND"', 10000);
+      const portStatus = await this._sshCommand(config.ip, config.user, 'netstat -tlnp 2>/dev/null | grep 8765 || ss -tlnp 2>/dev/null | grep 8765 || echo "PORT_NOT_FOUND"', 10000, password);
       if (portStatus.includes('8765')) {
         this._deployLog(`✅ 端口8765正在监听`, 'success');
       } else {
@@ -8271,7 +8271,6 @@ echo "[OK] 部署完成"
       // 忽略
     }
 
-    // 检查HTTP服务
     try {
       const statusRes = await fetch(`http://${config.ip}:8765/api/status`, { timeout: 5000 });
       if (statusRes.ok) {
@@ -8287,6 +8286,8 @@ echo "[OK] 部署完成"
 
   async _viewSecondaryPM2Logs() {
     const config = this._getSecondaryConfig();
+    const password = document.getElementById('deploy-ssh-password').value;
+    
     if (!config.ip) {
       this.notify('请先配置次服务器IP', 'warning');
       return;
@@ -8294,7 +8295,7 @@ echo "[OK] 部署完成"
 
     this._deployLog(`📋 获取PM2日志...`, 'info');
     try {
-      const logs = await this._sshCommand(config.ip, config.user, 'pm2 logs --lines 30 --nostream 2>&1', 10000);
+      const logs = await this._sshCommand(config.ip, config.user, 'pm2 logs --lines 30 --nostream 2>&1', 10000, password);
       this._deployLog(`📋 PM2日志(最近30行):`, 'info');
       logs.split('\n').forEach(line => {
         if (line.trim()) {
@@ -8312,6 +8313,8 @@ echo "[OK] 部署完成"
 
   async _restartSecondaryServer() {
     const config = this._getSecondaryConfig();
+    const password = document.getElementById('deploy-ssh-password').value;
+    
     if (!config.ip) {
       this.notify('请先配置次服务器IP', 'warning');
       return;
@@ -8321,10 +8324,9 @@ echo "[OK] 部署完成"
 
     this._deployLog(`🔄 重启次服务器 ${config.ip}...`, 'info');
     try {
-      await this._sshCommand(config.ip, config.user, 'cd /opt/glove-management && pm2 restart all 2>&1', 30000);
+      await this._sshCommand(config.ip, config.user, 'cd /opt/glove-management && pm2 restart all 2>&1', 30000, password);
       this._deployLog(`✅ 重启命令已执行，等待服务启动...`, 'success');
 
-      // 等待后检查状态
       await new Promise(r => setTimeout(r, 5000));
       this._checkSecondaryStatus();
     } catch (e) {
