@@ -8377,6 +8377,33 @@ echo "[OK] 部署完成"
           }
         }
       });
+
+      const appLogs = await this._sshCommand(config.ip, config.user, 'ls -la ~/.pm2/logs/ 2>&1', 10000, password);
+      this._deployLog(`📁 PM2日志目录:`, 'info');
+      appLogs.split('\n').forEach(line => {
+        if (line.trim()) this._deployLog(`   ${line.substring(0, 100)}`, 'info');
+      });
+
+      const errorLog = await this._sshCommand(config.ip, config.user, 'cat ~/.pm2/logs/glove-management-error.log 2>&1 | tail -30', 10000, password);
+      this._deployLog(`🔴 应用错误日志(最近30行):`, 'error');
+      if (errorLog && !errorLog.includes('No such file')) {
+        errorLog.split('\n').forEach(line => {
+          if (line.trim()) this._deployLog(`   ${line.substring(0, 150)}`, 'error');
+        });
+      } else {
+        this._deployLog(`   无错误日志文件或文件为空`, 'info');
+      }
+
+      const outLog = await this._sshCommand(config.ip, config.user, 'cat ~/.pm2/logs/glove-management-out.log 2>&1 | tail -30', 10000, password);
+      this._deployLog(`📝 应用输出日志(最近30行):`, 'info');
+      if (outLog && !outLog.includes('No such file')) {
+        outLog.split('\n').forEach(line => {
+          if (line.trim()) this._deployLog(`   ${line.substring(0, 150)}`, 'info');
+        });
+      } else {
+        this._deployLog(`   无输出日志文件或文件为空`, 'info');
+      }
+
     } catch (e) {
       this._deployLog(`❌ 获取日志失败: ${e.message}`, 'error');
     }
