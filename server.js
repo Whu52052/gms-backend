@@ -3118,8 +3118,9 @@ const server = http.createServer(async (req, res) => {
         'echo', 'mkdir', 'chmod', 'chown', 'rm', 'cp', 'mv', 'cat', 'grep', 'tail',
         'ls', 'cd', 'npm', 'node', 'pm2', 'curl', 'wget', 'apt', 'yum', 'systemctl',
         'service', 'df', 'free', 'ps', 'kill', 'pkill', 'sed', 'awk', 'base64',
-        'ssh-keygen', 'ssh-copy-id', 'sshpass', 'ssh', 'scp', 'mkdir', 'chown', 'git',
-        'tar', 'unzip', 'zip', 'rsync', 'mkdir', 'chmod', 'chown', 'hostname', 'date'
+        'ssh-keygen', 'ssh-copy-id', 'sshpass', 'ssh', 'scp', 'git',
+        'tar', 'unzip', 'zip', 'rsync', 'hostname', 'date',
+        'bash', 'sh', 'chmod', 'chown', 'mkdir', 'touch', 'ls'
       ];
 
       const isAllowed = allowedCommands.some(cmd => command.trim().startsWith(cmd));
