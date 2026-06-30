@@ -1,19 +1,17 @@
 #!/bin/bash
 # ===================================================================
 # 手套管理系统 - 次服务器一键部署脚本
-# 使用: bash deploy-secondary.sh
+# 使用: bash deploy-secondary.sh <主服务器IP> <主数据库IP> <RedisIP> <SSH密码(可选)>
 # ===================================================================
 
 set -e
 
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# 日志函数
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
@@ -25,15 +23,14 @@ echo "   手套管理系统 - 次服务器部署脚本"
 echo "============================================"
 echo ""
 
-# 检查 root 权限
-if [ "$EUID" -ne 0 ]; then
-    log_warning "建议使用 root 权限运行: sudo bash $0"
-fi
+MASTER_IP="${1:-10.5.50.30}"
+DB_IP="${2:-10.5.50.30}"
+REDIS_IP="${3:-10.5.50.30}"
+SSH_PASSWORD="${4:-}"
 
 # 1. 检查系统环境
 log_info "步骤1: 检查系统环境..."
 
-# 检查 Node.js
 if command -v node &> /dev/null; then
     NODE_VERSION=$(node -v)
     log_success "Node.js 已安装: $NODE_VERSION"
@@ -44,11 +41,9 @@ else
     log_success "Node.js 安装完成: $(node -v)"
 fi
 
-# 检查 npm
 NPM_VERSION=$(npm -v)
 log_success "npm 版本: $NPM_VERSION"
 
-# 检查 PM2
 if command -v pm2 &> /dev/null; then
     log_success "PM2 已安装"
 else
@@ -57,9 +52,9 @@ else
     log_success "PM2 安装完成"
 fi
 
-# 2. 创建应用目录
+# 2. 创建应用目录（使用用户主目录避免权限问题）
 log_info "步骤2: 创建应用目录..."
-APP_DIR="/opt/glove-management"
+APP_DIR="$HOME/glove-management"
 if [ -d "$APP_DIR" ] && [ -f "$APP_DIR/package.json" ]; then
     log_success "应用目录已存在且包含代码: $APP_DIR"
     cd $APP_DIR
@@ -79,16 +74,14 @@ fi
 cd $APP_DIR
 log_success "应用目录: $APP_DIR"
 
-# 3. 复制代码
-log_info "步骤3: 复制应用代码..."
-if [ -f "/workspace/package.json" ]; then
-    log_info "从 /workspace 复制代码..."
-    cp -r /workspace/* $APP_DIR/
-    log_success "代码复制完成"
+# 3. 复制代码（从主服务器）
+log_info "步骤3: 从主服务器复制应用代码..."
+if [ -n "$SSH_PASSWORD" ]; then
+    sshpass -p "$SSH_PASSWORD" rsync -avz --delete --exclude='node_modules' --exclude='.git' --exclude='*.log' $MASTER_IP:/opt/glove-management/ $APP_DIR/ 2>&1 || true
 else
-    log_info "请将代码包上传到: $APP_DIR"
-    log_info "可以使用: scp -r ./glove-management.tar.gz root@$(hostname -I | awk '{print $1}'):/opt/"
+    rsync -avz --delete --exclude='node_modules' --exclude='.git' --exclude='*.log' $MASTER_IP:/opt/glove-management/ $APP_DIR/ 2>&1 || true
 fi
+log_success "代码复制完成"
 
 # 4. 安装依赖
 log_info "步骤4: 安装应用依赖..."
@@ -105,83 +98,75 @@ fi
 log_info "步骤5: 配置环境变量..."
 ENV_FILE="$APP_DIR/.env"
 
-cat > $ENV_FILE << 'EOF'
-# ===================================================================
-# 手套管理系统 - 环境配置 (次服务器)
-# ===================================================================
-
+cat > $ENV_FILE << EOF
 # 服务器配置
 PORT=8765
 NODE_ENV=production
-
-# 服务器角色 (重要: 设置为 secondary)
 SERVER_ROLE=secondary
 SERVER_ID=secondary-$(hostname)-$(date +%Y%m%d)
 
-# ===================================================================
-# MySQL 数据库配置 (连接主库，所有写操作必须走主库)
-# ===================================================================
-DB_HOST=10.5.50.30
+# MySQL 数据库配置（连接主库）
+DB_HOST=$DB_IP
 DB_PORT=3306
 DB_USER=gms_user
-DB_PASSWORD=your_password_here
+DB_PASSWORD=gms_password_2024
 DB_NAME=gms
 
-# 可选: MySQL 从库 (用于读写分离 - 减轻主库压力)
-# 如果有独立的从库，取消下面的注释并配置
-DB_HOST_READ=10.5.50.35
-DB_PORT_READ=3306
-# DB_USER_READ=gms_readonly
-# DB_PASSWORD_READ=readonly_password
+# Redis 配置（连接主服务器 Redis）
+REDIS_URL=redis://$REDIS_IP:6379
 
-# ===================================================================
-# Redis 配置 (连接主服务器 Redis，用于 Session 共享)
-# ===================================================================
-REDIS_URL=redis://10.5.50.30:6379
-# REDIS_PASSWORD=your_redis_password
-
-# ===================================================================
 # 日志配置
-# ===================================================================
 LOG_LEVEL=info
 EOF
 
 log_success "配置文件已创建: $ENV_FILE"
-log_warning "请编辑 $ENV_FILE 设置数据库密码"
+log_warning "数据库密码为默认值，请根据需要修改"
 
-# 6. 启动服务
-log_info "步骤6: 启动服务..."
+# 6. 安装 MySQL 客户端（用于测试连接）
+log_info "步骤6: 安装MySQL客户端..."
+if ! command -v mysql &> /dev/null; then
+    apt-get install -y mysql-client
+    log_success "MySQL客户端安装完成"
+else
+    log_success "MySQL客户端已安装"
+fi
 
-# 如果已有进程，先删除
+# 7. 测试数据库连接
+log_info "步骤7: 测试数据库连接..."
+if mysql -h $DB_IP -u gms_user -pgms_password_2024 -e "SELECT 1" 2>/dev/null; then
+    log_success "✅ 数据库连接测试通过!"
+else
+    log_warning "⚠️ 数据库连接测试失败"
+    log_warning "请确保主服务器MySQL已开启远程访问"
+    log_warning "可以在主服务器执行: mysql -u root -e \"GRANT ALL ON gms.* TO 'gms_user'@'%'; FLUSH PRIVILEGES;\""
+fi
+
+# 8. 启动服务
+log_info "步骤8: 启动服务..."
+
 pm2 delete glove-management 2>/dev/null || true
 
-# 启动服务
 cd $APP_DIR
 pm2 start ecosystem.config.js --name "glove-management"
 
-# 保存 PM2 配置
 pm2 save
 
-# 设置开机自启
 log_info "配置开机自启..."
 pm2 startup 2>/dev/null || log_warning "请手动设置开机自启: pm2 startup"
 
-# 7. 配置防火墙
-log_info "步骤7: 配置防火墙..."
+# 9. 配置防火墙
+log_info "步骤9: 配置防火墙..."
 if command -v ufw &> /dev/null; then
     ufw allow 8765/tcp comment 'GMS Secondary'
-    ufw allow 80/tcp comment 'HTTP'
-    ufw allow 443/tcp comment 'HTTPS'
     log_success "防火墙规则已添加"
 else
     log_warning "未检测到 UFW，请手动配置防火墙"
 fi
 
-# 8. 检查服务状态
-log_info "步骤8: 检查服务状态..."
-sleep 2
+# 10. 检查服务状态
+log_info "步骤10: 检查服务状态..."
+sleep 3
 
-# 检查 API 状态
 API_URL="http://localhost:8765/api/status"
 log_info "检查 API: $API_URL"
 
@@ -192,7 +177,6 @@ for i in {1..5}; do
         echo "$RESPONSE" | head -c 300
         echo ""
         
-        # 检查服务器角色
         if echo "$RESPONSE" | grep -q '"serverRole":"secondary"'; then
             log_success "服务器角色确认: secondary (次服务器)"
         fi
@@ -203,7 +187,7 @@ for i in {1..5}; do
     fi
 done
 
-# 9. 显示结果
+# 11. 显示结果
 echo ""
 echo "============================================"
 echo "   次服务器部署完成!"
@@ -211,26 +195,17 @@ echo "============================================"
 echo ""
 log_info "应用目录: $APP_DIR"
 log_info "服务器角色: secondary (次服务器)"
-log_info "访问地址: http://localhost:8765"
+log_info "主数据库: $DB_IP:3306"
+log_info "Redis: $REDIS_IP:6379"
+log_info "访问地址: http://$(hostname -I | awk '{print $1}'):8765"
 log_info "API 状态: http://localhost:8765/api/status"
 log_info "PM2 日志: pm2 logs glove-management"
 log_info "PM2 状态: pm2 status"
 echo ""
 log_warning "请确保:"
-log_warning "  1. MySQL 主库 (192.168.1.233) 已正常运行"
-log_warning "  2. Redis (192.168.1.233:6379) 已正常运行"
-log_warning "  3. MySQL 主从复制已配置"
+log_warning "  1. MySQL 主库 ($DB_IP) 已开启远程访问"
+log_warning "  2. Redis ($REDIS_IP:6379) 已正常运行"
+log_warning "  3. 防火墙已开放 8765 和 3306 端口"
 echo ""
 
-# 显示 PM2 状态
 pm2 status
-
-# 10. 与主服务器建立连接测试
-echo ""
-log_info "步骤9: 与主服务器连接测试..."
-if curl -s --connect-timeout 3 http://192.168.1.233:8765/api/status | grep -q "ok"; then
-    log_success "与主服务器连接成功!"
-else
-    log_warning "无法连接到主服务器 (192.168.1.233:8765)"
-    log_warning "请检查网络连接和主服务器状态"
-fi

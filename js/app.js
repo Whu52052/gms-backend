@@ -8063,7 +8063,6 @@ const App = {
   },
 
   _generateDeployScript(dbIP, redisIP, role, serverIP) {
-    // 从保存的配置中获取数据库密码
     const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
     const dbPassword = dbConfig.password || 'gms_password_2024';
 
@@ -8150,7 +8149,7 @@ echo "[OK] PM2配置创建成功"
 echo "[INFO] 启动服务..."
 if pm2 list 2>/dev/null | grep -q "glove-management"; then
   echo "[INFO] 服务已存在，重启..."
-  pm2 restart glove-management
+  pm2 restart glove-management --update-env
 else
   echo "[INFO] 启动新服务..."
   pm2 start ecosystem.config.js
@@ -8469,6 +8468,174 @@ echo "[OK] 部署完成"
     } catch (e) {
       this._deployLog(`❌ 开放端口失败: ${e.message}`, 'error');
     }
+  },
+
+  async _enableMySQLRemote() {
+    const dbIP = document.getElementById('deploy-master-db-ip').value || '10.5.50.30';
+    const password = document.getElementById('deploy-ssh-password').value;
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+    const dbUser = dbConfig.user || 'gms_user';
+    const dbPassword = dbConfig.password || 'gms_password_2024';
+    const dbName = dbConfig.database || 'gms';
+
+    if (!password) {
+      this.notify('请先输入SSH密码', 'warning');
+      return;
+    }
+
+    if (!confirm(`确定要在主数据库 ${dbIP} 上开启远程访问吗？\n\n这将允许次服务器通过网络连接到主数据库。`)) return;
+
+    this._deployLog(`🔑 在主数据库 ${dbIP} 上开启远程访问...`, 'info');
+
+    try {
+      this._deployLog(`📝 步骤1: 创建数据库用户 ${dbUser}@%`, 'info');
+      const createUser = await this._sshCommand(dbIP, 'root', `mysql -u root -p'${dbPassword}' -e "CREATE USER IF NOT EXISTS '${dbUser}'@'%' IDENTIFIED BY '${dbPassword}'; GRANT ALL PRIVILEGES ON ${dbName}.* TO '${dbUser}'@'%'; FLUSH PRIVILEGES;" 2>&1`, 15000, password);
+      if (createUser.includes('ERROR')) {
+        this._deployLog(`⚠️ 创建用户可能已存在: ${createUser.substring(0, 100)}`, 'warning');
+      } else {
+        this._deployLog(`✅ 用户 ${dbUser}@% 创建成功`, 'success');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 创建用户失败(可能需要root密码): ${e.message}`, 'warning');
+    }
+
+    try {
+      this._deployLog(`📝 步骤2: 更新现有用户权限`, 'info');
+      const grantPriv = await this._sshCommand(dbIP, 'root', `mysql -u root -p'${dbPassword}' -e "GRANT ALL PRIVILEGES ON ${dbName}.* TO '${dbUser}'@'%'; FLUSH PRIVILEGES;" 2>&1`, 15000, password);
+      if (!grantPriv.includes('ERROR')) {
+        this._deployLog(`✅ 权限授予成功`, 'success');
+      } else {
+        this._deployLog(`⚠️ 权限授予失败: ${grantPriv.substring(0, 100)}`, 'warning');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 权限授予失败: ${e.message}`, 'warning');
+    }
+
+    try {
+      this._deployLog(`📝 步骤3: 检查MySQL绑定地址`, 'info');
+      const bindAddr = await this._sshCommand(dbIP, 'root', `grep -E "^bind-address" /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null || grep -E "^bind-address" /etc/mysql/my.cnf 2>/dev/null || echo "BIND_NOT_FOUND"`, 10000, password);
+      if (bindAddr.includes('127.0.0.1')) {
+        this._deployLog(`⚠️ MySQL仅绑定到本地，需要修改配置`, 'warning');
+        const updateBind = await this._sshCommand(dbIP, 'root', `sudo sed -i "s/^bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/mysql.conf.d/mysqld.cnf 2>&1 || sudo sed -i "s/^bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/my.cnf 2>&1 || echo "BIND_UPDATE_FAILED"`, 10000, password);
+        if (!updateBind.includes('FAILED')) {
+          this._deployLog(`✅ 已修改绑定地址为 0.0.0.0`, 'success');
+        } else {
+          this._deployLog(`⚠️ 修改绑定地址失败，请手动修改`, 'warning');
+        }
+      } else if (bindAddr.includes('0.0.0.0')) {
+        this._deployLog(`✅ MySQL已绑定到所有地址`, 'success');
+      } else {
+        this._deployLog(`ℹ️ MySQL配置未找到bind-address（可能已默认监听所有地址）`, 'info');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 检查绑定地址失败: ${e.message}`, 'warning');
+    }
+
+    try {
+      this._deployLog(`📝 步骤4: 开放MySQL端口(3306)防火墙`, 'info');
+      const fwResult = await this._sshCommand(dbIP, 'root', `sudo ufw allow 3306/tcp 2>&1 || sudo iptables -I INPUT -p tcp --dport 3306 -j ACCEPT 2>&1 || echo "FW_OK"`, 10000, password);
+      this._deployLog(`✅ 防火墙规则已添加: ${fwResult.substring(0, 50)}`, 'success');
+    } catch (e) {
+      this._deployLog(`⚠️ 开放端口失败: ${e.message}`, 'warning');
+    }
+
+    try {
+      this._deployLog(`📝 步骤5: 重启MySQL服务`, 'info');
+      const restartResult = await this._sshCommand(dbIP, 'root', `sudo systemctl restart mysql 2>&1 || sudo service mysql restart 2>&1 || echo "RESTART_DONE"`, 30000, password);
+      if (restartResult.includes('failed')) {
+        this._deployLog(`⚠️ MySQL重启失败: ${restartResult.substring(0, 100)}`, 'warning');
+      } else {
+        this._deployLog(`✅ MySQL服务已重启`, 'success');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 重启MySQL失败: ${e.message}`, 'warning');
+    }
+
+    this._deployLog(`✅ MySQL远程访问配置完成`, 'success');
+    this._deployLog(`💡 提示: 现在可以从次服务器测试连接: mysql -h ${dbIP} -u ${dbUser} -p`, 'info');
+  },
+
+  async _testDbConnection() {
+    const config = this._getSecondaryConfig();
+    const password = document.getElementById('deploy-ssh-password').value;
+    const dbIP = document.getElementById('deploy-master-db-ip').value || '10.5.50.30';
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+    const dbUser = dbConfig.user || 'gms_user';
+    const dbPassword = dbConfig.password || 'gms_password_2024';
+    const dbName = dbConfig.database || 'gms';
+
+    if (!config.ip) {
+      this.notify('请先配置次服务器IP', 'warning');
+      return;
+    }
+
+    if (!password) {
+      this.notify('请先输入SSH密码', 'warning');
+      return;
+    }
+
+    this._deployLog(`🔌 从次服务器 ${config.ip} 测试连接主数据库 ${dbIP}...`, 'info');
+
+    try {
+      this._deployLog(`📝 步骤1: 检查MySQL客户端是否安装`, 'info');
+      const mysqlCheck = await this._sshCommand(config.ip, config.user, 'which mysql 2>&1 || echo "MYSQL_NOT_FOUND"', 5000, password);
+      if (mysqlCheck.includes('NOT_FOUND')) {
+        this._deployLog(`📝 安装MySQL客户端...`, 'info');
+        await this._sshCommand(config.ip, config.user, 'sudo apt-get install -y mysql-client 2>&1 || echo "INSTALL_DONE"', 60000, password);
+        this._deployLog(`✅ MySQL客户端安装完成`, 'success');
+      } else {
+        this._deployLog(`✅ MySQL客户端已安装`, 'success');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ MySQL客户端检查失败: ${e.message}`, 'warning');
+    }
+
+    try {
+      this._deployLog(`📝 步骤2: 测试TCP连接(端口3306)`, 'info');
+      const tcpTest = await this._sshCommand(config.ip, config.user, `timeout 3 bash -c "echo '' > /dev/tcp/${dbIP}/3306" 2>&1 && echo 'TCP_OK' || echo 'TCP_FAILED'`, 10000, password);
+      if (tcpTest.includes('TCP_OK')) {
+        this._deployLog(`✅ TCP连接成功 (${dbIP}:3306)`, 'success');
+      } else {
+        this._deployLog(`❌ TCP连接失败，请检查主服务器防火墙和MySQL监听配置`, 'error');
+        return;
+      }
+    } catch (e) {
+      this._deployLog(`❌ TCP测试失败: ${e.message}`, 'error');
+      return;
+    }
+
+    try {
+      this._deployLog(`📝 步骤3: 测试MySQL认证`, 'info');
+      const authTest = await this._sshCommand(config.ip, config.user, `mysql -h ${dbIP} -u ${dbUser} -p'${dbPassword}' -e "SELECT 1 AS test" 2>&1 || echo 'AUTH_FAILED'`, 15000, password);
+      if (authTest.includes('test') || authTest.includes('1')) {
+        this._deployLog(`✅ MySQL认证成功`, 'success');
+      } else {
+        this._deployLog(`❌ MySQL认证失败: ${authTest.substring(0, 100)}`, 'error');
+        return;
+      }
+    } catch (e) {
+      this._deployLog(`❌ MySQL认证测试失败: ${e.message}`, 'error');
+      return;
+    }
+
+    try {
+      this._deployLog(`📝 步骤4: 测试数据库访问`, 'info');
+      const dbTest = await this._sshCommand(config.ip, config.user, `mysql -h ${dbIP} -u ${dbUser} -p'${dbPassword}' ${dbName} -e "SELECT COUNT(*) AS table_count FROM information_schema.tables WHERE table_schema='${dbName}'" 2>&1`, 15000, password);
+      if (dbTest.includes('table_count')) {
+        const match = dbTest.match(/(\d+)/);
+        const count = match ? match[1] : '0';
+        this._deployLog(`✅ 数据库访问成功! 表数量: ${count}`, 'success');
+      } else {
+        this._deployLog(`❌ 数据库访问失败: ${dbTest.substring(0, 100)}`, 'error');
+        return;
+      }
+    } catch (e) {
+      this._deployLog(`❌ 数据库访问测试失败: ${e.message}`, 'error');
+      return;
+    }
+
+    this._deployLog(`🎉 所有数据库连接测试通过!`, 'success');
+    this._deployLog(`💡 次服务器可以正常连接主数据库了`, 'info');
   },
 };
 
