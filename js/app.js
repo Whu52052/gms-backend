@@ -8294,6 +8294,38 @@ echo "[OK] 部署完成"
     }
 
     try {
+      const pm2Logs = await this._sshCommand(config.ip, config.user, 'cd ~/glove-management && pm2 logs --lines 20 --nostream 2>&1', 30000, password);
+      this._deployLog(`📋 PM2日志(最近20行):`, 'info');
+      pm2Logs.split('\n').slice(-10).forEach(line => {
+        if (line.trim()) {
+          if (line.includes('error') || line.includes('Error') || line.includes('ERROR')) {
+            this._deployLog(`   🔴 ${line.substring(0, 150)}`, 'error');
+          } else {
+            this._deployLog(`   ${line.substring(0, 150)}`, 'info');
+          }
+        }
+      });
+    } catch (e) {
+      this._deployLog(`❌ 无法获取PM2日志: ${e.message}`, 'error');
+    }
+
+    try {
+      const envCheck = await this._sshCommand(config.ip, config.user, 'cat ~/glove-management/.env 2>&1 | head -15', 10000, password);
+      this._deployLog(`📝 .env配置(前15行):`, 'info');
+      envCheck.split('\n').forEach(line => {
+        if (line.trim()) {
+          if (line.includes('PASSWORD')) {
+            this._deployLog(`   ${line.split('=')[0]}=***`, 'info');
+          } else {
+            this._deployLog(`   ${line}`, 'info');
+          }
+        }
+      });
+    } catch (e) {
+      this._deployLog(`❌ 无法读取.env: ${e.message}`, 'error');
+    }
+
+    try {
       const portStatus = await this._sshCommand(config.ip, config.user, 'netstat -tlnp 2>/dev/null | grep 8765 || ss -tlnp 2>/dev/null | grep 8765 || echo "PORT_NOT_FOUND"', 10000, password);
       if (portStatus.includes('8765')) {
         this._deployLog(`✅ 端口8765正在监听`, 'success');
