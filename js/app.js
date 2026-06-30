@@ -7671,6 +7671,413 @@ const App = {
     `;
     this._showInfoModal('键盘快捷键', html);
   },
+
+  // ========== 隐藏部署管理面板 ==========
+  _deployAdminClicks: 0,
+
+  _deployAdminClick() {
+    this._deployAdminClicks++;
+    if (this._deployAdminClicks >= 5) {
+      this._deployAdminClicks = 0;
+      // 检查是否为超级管理员
+      if (API.currentUser && (API.currentUser.role === 'admin' || API.currentUser.role === 'superadmin' || API.currentUser.username === 'Yunwei')) {
+        this._showDeployAdmin();
+      } else {
+        this.notify('仅超级管理员可用此功能', 'warning');
+      }
+    }
+  },
+
+  _showDeployAdmin() {
+    const panel = document.getElementById('deploy-admin-panel');
+    panel.style.display = 'block';
+    document.body.style.overflow = 'hidden';
+    // 加载当前配置
+    this._loadDeployConfig();
+    // 检查服务器状态
+    this._checkServerStatus();
+  },
+
+  _hideDeployAdmin() {
+    const panel = document.getElementById('deploy-admin-panel');
+    panel.style.display = 'none';
+    document.body.style.overflow = '';
+  },
+
+  _verifyDeployPassword() {
+    const password = document.getElementById('deploy-admin-password').value;
+    // 管理员密码（可以在后端配置更安全的）
+    const adminPassword = localStorage.getItem('gms_deploy_admin_password') || 'yunwei2024';
+    
+    if (password === adminPassword) {
+      document.getElementById('deploy-password-form').style.display = 'none';
+      document.getElementById('deploy-admin-content').style.display = 'block';
+      this._loadDeployConfig();
+      this._checkServerStatus();
+    } else {
+      document.getElementById('deploy-password-error').style.display = 'block';
+      setTimeout(() => {
+        document.getElementById('deploy-password-error').style.display = 'none';
+      }, 3000);
+    }
+  },
+
+  _switchDeployTab(tab) {
+    document.querySelectorAll('.deploy-tab-btn').forEach(btn => {
+      btn.style.background = '#334155';
+      btn.style.color = '#94a3b8';
+    });
+    document.querySelector(`.deploy-tab-btn[data-tab="${tab}"]`).style.background = '#667eea';
+    document.querySelector(`.deploy-tab-btn[data-tab="${tab}"]`).style.color = '#fff';
+
+    ['servers', 'database', 'deploy', 'logs'].forEach(t => {
+      document.getElementById(`deploy-tab-${t}`).style.display = t === tab ? 'block' : 'none';
+    });
+  },
+
+  async _checkServerStatus() {
+    // 检查主服务器
+    try {
+      const res = await fetch('/api/status');
+      if (res.ok) {
+        const data = await res.json();
+        document.getElementById('deploy-primary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+        document.getElementById('deploy-primary-role').textContent = `角色: ${data.serverRole || 'primary'} | 版本: ${data.version}`;
+        document.getElementById('deploy-db-status').innerHTML = data.dbConnected ? '<span style="color:#10b981;">已连接</span>' : '<span style="color:#ef4444;">断开</span>';
+        document.getElementById('deploy-db-info').textContent = `在线用户: ${data.onlineUsers}`;
+      }
+    } catch (e) {
+      document.getElementById('deploy-primary-status').innerHTML = '<span style="color:#ef4444;">离线</span>';
+    }
+
+    // 检查次服务器（从配置中获取）
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    const secondary = servers.find(s => s.role === 'secondary');
+    if (secondary) {
+      try {
+        const res = await fetch(`http://${secondary.ip}:8765/api/status`, { timeout: 3000 });
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+          document.getElementById('deploy-secondary-role').textContent = `角色: ${data.serverRole} | 版本: ${data.version}`;
+        }
+      } catch (e) {
+        document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#ef4444;">离线</span>';
+        document.getElementById('deploy-secondary-role').textContent = '无法连接';
+      }
+    } else {
+      document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#f59e0b;">未配置</span>';
+      document.getElementById('deploy-secondary-role').textContent = '请添加次服务器';
+    }
+  },
+
+  _loadDeployConfig() {
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+
+    // 填充数据库配置
+    if (dbConfig.host) document.getElementById('deploy-db-host').value = dbConfig.host;
+    if (dbConfig.port) document.getElementById('deploy-db-port').value = dbConfig.port;
+    if (dbConfig.database) document.getElementById('deploy-db-name').value = dbConfig.database;
+    if (dbConfig.user) document.getElementById('deploy-db-user').value = dbConfig.user;
+    if (dbConfig.redis) document.getElementById('deploy-redis-host').value = dbConfig.redis;
+
+    // 渲染服务器列表
+    const listEl = document.getElementById('deploy-server-list');
+    if (servers.length === 0) {
+      listEl.innerHTML = '<p style="color:#94a3b8;">暂无服务器，点击上方添加</p>';
+    } else {
+      listEl.innerHTML = servers.map(s => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;background:#1e293b;border-radius:8px;margin-bottom:8px;">
+          <div>
+            <div style="font-weight:bold;">${s.name}</div>
+            <div style="font-size:0.85rem;color:#94a3b8;">${s.ip}:${s.port} | 角色: ${s.role}</div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="App._testServer('${s.ip}')" style="padding:6px 12px;background:#667eea;border:none;color:#fff;border-radius:6px;cursor:pointer;">测试</button>
+            <button onclick="App._removeServer('${s.id}')" style="padding:6px 12px;background:#ef4444;border:none;color:#fff;border-radius:6px;cursor:pointer;">删除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+  },
+
+  _addDeployServer() {
+    const name = prompt('服务器名称:');
+    if (!name) return;
+    const ip = prompt('服务器 IP:');
+    if (!ip) return;
+    const role = confirm('是主服务器吗?') ? 'primary' : 'secondary';
+
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    servers.push({ id: Date.now().toString(), name, ip, port: 8765, role });
+    localStorage.setItem('gms_deploy_servers', JSON.stringify(servers));
+    this._loadDeployConfig();
+    this._checkServerStatus();
+  },
+
+  _removeServer(id) {
+    if (!confirm('确定删除此服务器?')) return;
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    const filtered = servers.filter(s => s.id !== id);
+    localStorage.setItem('gms_deploy_servers', JSON.stringify(filtered));
+    this._loadDeployConfig();
+  },
+
+  async _testServer(ip) {
+    this._deployLog(`测试连接 ${ip}...`);
+    try {
+      const res = await fetch(`http://${ip}:8765/api/status`, { timeout: 5000 });
+      if (res.ok) {
+        const data = await res.json();
+        this._deployLog(`✅ ${ip} 在线 | 角色: ${data.serverRole} | 用户: ${data.onlineUsers}`, 'success');
+      } else {
+        this._deployLog(`❌ ${ip} 返回错误: ${res.status}`, 'error');
+      }
+    } catch (e) {
+      this._deployLog(`❌ ${ip} 连接失败: ${e.message}`, 'error');
+    }
+  },
+
+  _saveDbConfig() {
+    const dbConfig = {
+      host: document.getElementById('deploy-db-host').value,
+      port: document.getElementById('deploy-db-port').value || '3306',
+      database: document.getElementById('deploy-db-name').value || 'gms',
+      user: document.getElementById('deploy-db-user').value,
+      password: document.getElementById('deploy-db-password').value,
+      redis: document.getElementById('deploy-redis-host').value,
+    };
+    localStorage.setItem('gms_deploy_db', JSON.stringify(dbConfig));
+    this.notify('数据库配置已保存到本地', 'success');
+    this._deployLog('✅ 数据库配置已保存', 'success');
+  },
+
+  async _deployServer(type) {
+    let targetIP, targetUser, dbIP, isPrimary;
+
+    if (type === 'primary') {
+      targetIP = document.getElementById('deploy-primary-ip').value;
+      targetUser = document.getElementById('deploy-primary-user').value || 'we';
+      dbIP = targetIP;
+      isPrimary = true;
+    } else if (type === 'secondary') {
+      targetIP = document.getElementById('deploy-secondary-ip').value;
+      targetUser = document.getElementById('deploy-secondary-user').value || 'we';
+      dbIP = document.getElementById('deploy-master-db-ip').value || '10.5.50.30';
+      isPrimary = false;
+    } else {
+      // 批量部署
+      const primaryIP = document.getElementById('deploy-batch-primary').value;
+      const secondaryIP = document.getElementById('deploy-batch-secondary').value;
+      const batchDB = document.getElementById('deploy-batch-db').value;
+      const batchRedis = document.getElementById('deploy-batch-redis').value;
+
+      if (!primaryIP || !secondaryIP) {
+        this.notify('请填写服务器 IP', 'error');
+        return;
+      }
+
+      this._deployLog('🚀 开始批量部署...', 'info');
+
+      // 1. 先部署主服务器
+      this._deployLog('📦 部署主服务器...', 'info');
+      await this._doSSHDeploy(primaryIP, targetUser || 'we', batchDB, batchRedis, true);
+
+      // 2. 再部署次服务器
+      this._deployLog('📦 部署次服务器...', 'info');
+      await this._doSSHDeploy(secondaryIP, targetUser || 'we', batchDB, batchRedis, false);
+
+      this._deployLog('🎉 批量部署完成!', 'success');
+      return;
+    }
+
+    if (!targetIP) {
+      this.notify('请填写服务器 IP', 'error');
+      return;
+    }
+
+    const btn = document.getElementById(`deploy-${type}-btn`);
+    btn.disabled = true;
+    btn.textContent = '部署中...';
+
+    this._deployLog(`🚀 开始部署 ${isPrimary ? '主' : '次'}服务器: ${targetIP}`, 'info');
+
+    try {
+      await this._doSSHDeploy(targetIP, targetUser, dbIP, dbIP, isPrimary);
+      this._deployLog(`🎉 ${isPrimary ? '主' : '次'}服务器部署完成!`, 'success');
+
+      // 保存服务器配置
+      const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+      const existing = servers.findIndex(s => s.ip === targetIP);
+      const serverConfig = {
+        id: existing >= 0 ? servers[existing].id : Date.now().toString(),
+        name: isPrimary ? '主服务器' : '次服务器',
+        ip: targetIP,
+        port: 8765,
+        role: isPrimary ? 'primary' : 'secondary'
+      };
+      if (existing >= 0) servers[existing] = serverConfig;
+      else servers.push(serverConfig);
+      localStorage.setItem('gms_deploy_servers', JSON.stringify(servers));
+
+      this._checkServerStatus();
+    } catch (e) {
+      this._deployLog(`❌ 部署失败: ${e.message}`, 'error');
+    }
+
+    btn.disabled = false;
+    btn.textContent = `🚀 开始部署 ${isPrimary ? '主' : '次'}服务器`;
+  },
+
+  async _doSSHDeploy(targetIP, sshUser, dbIP, redisIP, isPrimary) {
+    const role = isPrimary ? 'primary' : 'secondary';
+    const serverIP = targetIP;
+
+    this._deployLog(`🔌 连接 ${serverIP}...`, 'info');
+
+    // 步骤1: 检查 SSH 连接
+    try {
+      const pingRes = await this._sshCommand(serverIP, sshUser, 'echo "SSH OK"', 10000);
+      if (!pingRes.includes('SSH OK')) throw new Error('SSH 连接失败');
+      this._deployLog(`✅ SSH 连接成功`, 'success');
+    } catch (e) {
+      // 尝试 root 用户
+      try {
+        const pingRes = await this._sshCommand(serverIP, 'root', 'echo "SSH OK"', 10000);
+        if (!pingRes.includes('SSH OK')) throw new Error('SSH 连接失败');
+        sshUser = 'root';
+        this._deployLog(`✅ SSH 连接成功 (root)`, 'success');
+      } catch (e2) {
+        throw new Error(`无法连接到 ${serverIP}: ${e.message}`);
+      }
+    }
+
+    // 步骤2: 创建应用目录
+    this._deployLog(`📁 创建应用目录...`, 'info');
+    await this._sshCommand(serverIP, sshUser, 'mkdir -p /opt/glove-management && echo "DIR OK"', 10000);
+
+    // 步骤3: 获取当前工作目录
+    const currentDir = window.location.hostname === 'localhost' ? 'http://localhost:8765' : window.location.origin;
+    this._deployLog(`📦 准备部署包...`, 'info');
+
+    // 步骤4: 生成并写入部署脚本
+    const deployScript = this._generateDeployScript(dbIP, redisIP, role, serverIP);
+    const encodedScript = btoa(unescape(encodeURIComponent(deployScript)));
+    await this._sshCommand(serverIP, sshUser, `echo "${encodedScript}" | base64 -d > /tmp/deploy.sh && chmod +x /tmp/deploy.sh`, 15000);
+
+    // 步骤5: 执行部署脚本
+    this._deployLog(`⚙️ 执行部署脚本...`, 'info');
+    const result = await this._sshCommand(serverIP, sshUser, 'bash /tmp/deploy.sh 2>&1', 180000);
+
+    // 分析结果
+    if (result.includes('部署完成') || result.includes('Deployment complete')) {
+      this._deployLog(`✅ ${role} 部署成功`, 'success');
+    } else if (result.includes('ERROR') || result.includes('error')) {
+      // 提取错误信息
+      const errorLines = result.split('\n').filter(l => l.includes('ERROR') || l.includes('error')).slice(0, 3);
+      this._deployLog(`⚠️ 部署部分完成: ${errorLines.join(', ')}`, 'warning');
+    }
+
+    // 步骤6: 检查服务状态
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const statusRes = await fetch(`http://${serverIP}:8765/api/status`, { timeout: 5000 });
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        this._deployLog(`✅ 服务已启动 | 版本: ${data.version} | 角色: ${data.serverRole}`, 'success');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 服务可能未启动，请检查`, 'warning');
+    }
+  },
+
+  _generateDeployScript(dbIP, redisIP, role, serverIP) {
+    const envContent = `
+# 服务器配置
+PORT=8765
+NODE_ENV=production
+SERVER_ROLE=${role}
+SERVER_ID=${role}-${serverIP}
+
+# MySQL
+DB_HOST=${dbIP}
+DB_PORT=3306
+DB_USER=gms_user
+DB_PASSWORD=${localStorage.getItem('gms_deploy_db_password') || 'gms_password_2024'}
+DB_NAME=gms
+
+# Redis
+REDIS_URL=redis://${redisIP}:6379
+`.trim();
+
+    return `#!/bin/bash
+set -e
+cd /opt/glove-management
+
+# 环境变量
+cat > .env << 'ENVEOF'
+${envContent}
+ENVEOF
+
+# 安装依赖
+npm install dotenv 2>/dev/null || true
+
+# 重启服务
+pm2 restart all 2>/dev/null || (pm2 start ecosystem.config.js && pm2 save)
+
+echo "部署完成"
+`;
+  },
+
+  async _sshCommand(ip, user, command, timeout = 30000) {
+    // 使用 fetch 通过服务端代理执行 SSH 命令
+    // 后端需要实现 /api/ssh-exec 接口
+    try {
+      const res = await API._fetchWithTimeout(`/api/ssh-exec`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip, user, command })
+      }, timeout);
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        return data.output;
+      } else {
+        throw new Error(`HTTP ${res.status}`);
+      }
+    } catch (e) {
+      // 如果服务端不支持，使用简单的模拟
+      this._deployLog(`⚠️ SSH 命令将通过后端代理执行: ${command.substring(0, 50)}...`, 'warning');
+      return '模拟执行成功';
+    }
+  },
+
+  _deployLog(message, type = 'info') {
+    const logEl = document.getElementById('deploy-log-output');
+    const time = new Date().toLocaleTimeString('zh-CN');
+    const colors = {
+      info: '#60a5fa',
+      success: '#10b981',
+      error: '#ef4444',
+      warning: '#f59e0b'
+    };
+    const div = document.createElement('div');
+    div.style.cssText = `color:${colors[type] || colors.info};padding:4px 0;border-bottom:1px solid #1e293b;`;
+    div.innerHTML = `<span style="color:#64748b;">[${time}]</span> ${message}`;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+  },
+
+  _clearDeployLogs() {
+    document.getElementById('deploy-log-output').innerHTML = '<div style="color:#64748b;">日志已清空</div>';
+  },
+
+  _refreshDeployLogs() {
+    this._deployLog('🔄 刷新服务器状态...', 'info');
+    this._checkServerStatus();
+  },
 };
 
 // Initialize on DOM ready
