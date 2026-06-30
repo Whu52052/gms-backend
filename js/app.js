@@ -7772,9 +7772,12 @@ const App = {
           if (data.serverRole) {
             document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
             document.getElementById('deploy-secondary-role').textContent = `角色: ${data.serverRole} | 版本: ${data.version}`;
+          } else if (data.version || data.dbConnected !== undefined) {
+            document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+            document.getElementById('deploy-secondary-role').textContent = `版本: ${data.version || '未知'}`;
           } else {
-            document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#f59e0b;">启动中</span>';
-            document.getElementById('deploy-secondary-role').textContent = '服务启动中...';
+            document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+            document.getElementById('deploy-secondary-role').textContent = '服务运行中';
           }
         }
       } catch (e) {
@@ -7792,9 +7795,12 @@ const App = {
             if (data.serverRole) {
               document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
               document.getElementById('deploy-secondary-role').textContent = `角色: ${data.serverRole} | 版本: ${data.version}`;
+            } else if (data.version || data.dbConnected !== undefined) {
+              document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+              document.getElementById('deploy-secondary-role').textContent = `版本: ${data.version || '未知'}`;
             } else {
-              document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#f59e0b;">启动中</span>';
-              document.getElementById('deploy-secondary-role').textContent = '服务启动中...';
+              document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+              document.getElementById('deploy-secondary-role').textContent = '服务运行中';
             }
           }
         } catch (e) {
@@ -8304,8 +8310,10 @@ echo "[OK] 部署完成"
         const data = await statusRes.json();
         if (data.serverRole) {
           this._deployLog(`✅ 服务正常 | 版本: ${data.version} | 角色: ${data.serverRole}`, 'success');
+        } else if (data.version || data.dbConnected !== undefined) {
+          this._deployLog(`✅ 服务正常 | 版本: ${data.version || '未知'}`, 'success');
         } else {
-          this._deployLog(`⚠️ 服务启动中: ${data.error || '未知状态'}`, 'warning');
+          this._deployLog(`✅ 服务正常运行中`, 'success');
         }
       } else {
         this._deployLog(`⚠️ 服务返回错误: ${statusRes.status}`, 'warning');

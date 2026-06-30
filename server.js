@@ -4,6 +4,8 @@
  * Performance: Node.js cluster (multi-core) + Redis Pub/Sub + gzip + memory cache
  * Target: 500 concurrent users
  */
+require('dotenv').config();
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
