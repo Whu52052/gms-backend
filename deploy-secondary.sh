@@ -116,7 +116,7 @@ SERVER_ID=secondary-$(hostname)-$(date +%Y%m%d)
 # ===================================================================
 # MySQL 数据库配置 (连接主库，所有写操作必须走主库)
 # ===================================================================
-DB_HOST=192.168.1.233
+DB_HOST=10.5.50.30
 DB_PORT=3306
 DB_USER=gms_user
 DB_PASSWORD=your_password_here
@@ -124,7 +124,7 @@ DB_NAME=gms
 
 # 可选: MySQL 从库 (用于读写分离 - 减轻主库压力)
 # 如果有独立的从库，取消下面的注释并配置
-DB_HOST_READ=192.168.1.234
+DB_HOST_READ=10.5.50.35
 DB_PORT_READ=3306
 # DB_USER_READ=gms_readonly
 # DB_PASSWORD_READ=readonly_password
@@ -132,7 +132,7 @@ DB_PORT_READ=3306
 # ===================================================================
 # Redis 配置 (连接主服务器 Redis，用于 Session 共享)
 # ===================================================================
-REDIS_URL=redis://192.168.1.233:6379
+REDIS_URL=redis://10.5.50.30:6379
 # REDIS_PASSWORD=your_redis_password
 
 # ===================================================================

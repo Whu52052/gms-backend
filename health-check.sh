@@ -20,8 +20,8 @@ log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # 服务器列表
-PRIMARY_URL="http://192.168.1.233:8765"
-SECONDARY_URL="http://192.168.1.233:8765"  # 通过 Nginx 或直连
+PRIMARY_URL="http://10.5.50.30:8765"
+SECONDARY_URL="http://10.5.50.35:8765"  # 通过 Nginx 或直连
 
 # 模拟分布式健康检查
 check_server() {
@@ -112,10 +112,10 @@ check_database() {
     
     log_info "请手动检查 MySQL 主从复制:"
     echo ""
-    echo "  登录主库: mysql -h 192.168.1.233 -u root -p"
+    echo "  登录主库: mysql -h 10.5.50.30 -u root -p"
     echo "  执行命令: SHOW MASTER STATUS;"
     echo ""
-    echo "  登录从库: mysql -h 192.168.1.234 -u root -p"
+    echo "  登录从库: mysql -h 10.5.50.35 -u root -p"
     echo "  执行命令: SHOW SLAVE STATUS\G"
     echo ""
     echo "  确认以下状态:"
@@ -135,14 +135,14 @@ check_redis() {
     
     # 测试 Redis 连接
     if command -v redis-cli &> /dev/null; then
-        if redis-cli -h 192.168.1.233 -p 6379 ping 2>/dev/null | grep -q PONG; then
+        if redis-cli -h 10.5.50.30 -p 6379 ping 2>/dev/null | grep -q PONG; then
             log_success "Redis 连接成功"
         else
             log_error "Redis 连接失败"
         fi
     else
         log_warning "未安装 redis-cli，请手动检查"
-        echo "  redis-cli -h 192.168.1.233 -p 6379 ping"
+        echo "  redis-cli -h 10.5.50.30 -p 6379 ping"
     fi
 }
 

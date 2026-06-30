@@ -166,7 +166,7 @@
         <div class="config-form">
           <div class="form-group">
             <label>IP地址</label>
-            <input type="text" id="primaryIP" placeholder="192.168.1.233" value="192.168.1.233">
+            <input type="text" id="primaryIP" placeholder="192.168.1.233" value="10.5.50.30">
           </div>
           <div class="form-group">
             <label>端口</label>
@@ -196,7 +196,7 @@
         <div class="config-form">
           <div class="form-group">
             <label>IP地址</label>
-            <input type="text" id="secondaryIP" placeholder="192.168.1.234" value="192.168.1.234">
+            <input type="text" id="secondaryIP" placeholder="192.168.1.234" value="10.5.50.35">
           </div>
           <div class="form-group">
             <label>端口</label>
@@ -222,7 +222,7 @@
         <div class="config-form">
           <div class="form-group">
             <label>MySQL 主库地址</label>
-            <input type="text" id="mysqlHost" placeholder="192.168.1.233" value="192.168.1.233">
+            <input type="text" id="mysqlHost" placeholder="192.168.1.233" value="10.5.50.30">
           </div>
           <div class="form-group">
             <label>MySQL 端口</label>
@@ -248,7 +248,7 @@
         <div class="config-form">
           <div class="form-group">
             <label>Redis 地址</label>
-            <input type="text" id="redisHost" placeholder="192.168.1.233" value="192.168.1.233">
+            <input type="text" id="redisHost" placeholder="192.168.1.233" value="10.5.50.30">
           </div>
           <div class="form-group">
             <label>Redis 端口</label>
@@ -329,8 +329,8 @@
       <div class="nginx-config">upstream yunwei_backend {
     least_conn;
     
-    server <span id="nginxPrimary">192.168.1.233</span>:<span id="nginxPrimaryPort">8765</span> weight=3 max_fails=3 fail_timeout=30s;
-    server <span id="nginxSecondary">192.168.1.234</span>:<span id="nginxSecondaryPort">8765</span> weight=2 max_fails=3 fail_timeout=30s;
+    server <span id="nginxPrimary">10.5.50.30</span>:<span id="nginxPrimaryPort">8765</span> weight=3 max_fails=3 fail_timeout=30s;
+    server <span id="nginxSecondary">10.5.50.35</span>:<span id="nginxSecondaryPort">8765</span> weight=2 max_fails=3 fail_timeout=30s;
     
     keepalive 256;
 }
