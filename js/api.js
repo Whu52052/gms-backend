@@ -14,7 +14,20 @@ const API = {
   async init() {
     this.token = localStorage.getItem('gms_token') || sessionStorage.getItem('gms_token');
     this.currentUser = JSON.parse(localStorage.getItem('gms_user') || sessionStorage.getItem('gms_user') || 'null');
-    this.baseURL = window.__GMS_SERVER_URL__ || window.location.origin;
+
+    // ========== 分布式配置初始化 ==========
+    // 初始化分布式模块，选择最佳服务器
+    if (typeof DistributedConfig !== 'undefined') {
+      const server = DistributedConfig.init();
+      if (server && server.url) {
+        this.baseURL = server.url;
+        console.log('[API] 分布式模式，当前服务器:', server.name, server.url);
+      } else {
+        this.baseURL = window.__GMS_SERVER_URL__ || window.location.origin;
+      }
+    } else {
+      this.baseURL = window.__GMS_SERVER_URL__ || window.location.origin;
+    }
 
     // Fast switch: system switcher set this flag — skip health check, assume online
     const fastSwitch = localStorage.getItem('gms_fast_switch');

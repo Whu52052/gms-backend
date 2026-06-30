@@ -78,16 +78,30 @@ async function _redisDel(key) {
 const PORT = process.env.PORT || 8765;
 // SECURITY WARNING: Database credentials should be set via environment variables in production!
 // Do NOT hardcode credentials in source code. Use DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME env vars.
+
+// ========== 主库（写） ==========
 const DB_HOST = process.env.DB_HOST || process.env.MYSQL_HOST || '';
 const DB_PORT = parseInt(process.env.DB_PORT || process.env.MYSQL_PORT || '3306');
 const DB_USER = process.env.DB_USER || process.env.MYSQL_USER || '';
 const DB_PASSWORD = process.env.DB_PASSWORD || process.env.MYSQL_PASSWORD || '';
 const DB_NAME = process.env.DB_NAME || process.env.MYSQL_DATABASE || 'gms';
+
+// ========== 从库（读） - 可选，用于读写分离 ==========
+const DB_HOST_READ = process.env.DB_HOST_READ || process.env.MYSQL_HOST_READ || '';
+const DB_PORT_READ = parseInt(process.env.DB_PORT_READ || process.env.MYSQL_PORT_READ || '3306');
+const DB_USER_READ = process.env.DB_USER_READ || process.env.MYSQL_USER_READ || '';
+const DB_PASSWORD_READ = process.env.DB_PASSWORD_READ || process.env.MYSQL_PASSWORD_READ || '';
+
 // Validate required database config
 if (!DB_HOST || !DB_USER || !DB_PASSWORD) {
   console.error('[FATAL] Database credentials not configured. Set DB_HOST, DB_USER, DB_PASSWORD environment variables.');
   process.exit(1);
 }
+
+// ========== 服务器角色标识 ==========
+const SERVER_ROLE = process.env.SERVER_ROLE || 'primary'; // primary | secondary
+const SERVER_ID = process.env.SERVER_ID || `server-${PORT}-${Date.now()}`;
+
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DATA_DIR = path.join(__dirname, 'data');
 const TOKEN_EXPIRY = 2 * 60 * 60 * 1000; // 2 hours sliding window
@@ -98,7 +112,8 @@ const mysql = require('mysql2/promise');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-let pool;
+let pool; // 主连接池（写）
+let readPool; // 读连接池（从库，可选）
 let poolStats = {
   acquired: 0,
   leaked: 0,
@@ -137,8 +152,13 @@ async function initPool() {
     try { await pool.end(); } catch {}
     pool = null;
   }
+  if (readPool) {
+    try { await readPool.end(); } catch {}
+    readPool = null;
+  }
   activeConnections.clear();
 
+  // ========== 主库连接池 ==========
   const initConn = await mysql.createConnection({
     host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD,
     charset: 'utf8mb4',
@@ -160,6 +180,34 @@ async function initPool() {
     idleTimeout: 60000,
     maxIdle: 20,
   });
+
+  // ========== 从库连接池（可选，用于读写分离） ==========
+  if (DB_HOST_READ && DB_USER_READ && DB_PASSWORD_READ) {
+    try {
+      readPool = mysql.createPool({
+        host: DB_HOST_READ,
+        port: DB_PORT_READ,
+        user: DB_USER_READ,
+        password: DB_PASSWORD_READ,
+        database: DB_NAME,
+        charset: 'utf8mb4',
+        waitForConnections: true,
+        connectionLimit: 50, // 读库连接数较少
+        queueLimit: 100,
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 10000,
+        connectTimeout: 10000,
+        idleTimeout: 60000,
+        maxIdle: 15,
+      });
+      console.log(`[DB] 从库连接池已创建: ${DB_HOST_READ}:${DB_PORT_READ}`);
+    } catch (e) {
+      console.warn('[DB] 从库连接失败，所有查询走主库:', e.message);
+      readPool = null;
+    }
+  } else {
+    console.log('[DB] 无从库配置，所有查询走主库');
+  }
 
   pool.on('connection', async (conn) => {
     try {
@@ -3001,6 +3049,11 @@ const server = http.createServer(async (req, res) => {
           loadLevel: level,
           loadLabel: label,
           version: '3.9.0',
+          // ========== 分布式信息 ==========
+          serverRole: SERVER_ROLE,
+          serverId: SERVER_ID,
+          dbConnected: !!pool,
+          readPoolConnected: !!readPool,
         });
       }).catch(e => {
         // 降级：使用内存统计
@@ -3012,6 +3065,11 @@ const server = http.createServer(async (req, res) => {
           loadLevel: 'idle',
           loadLabel: '空闲',
           version: '3.9.0',
+          // ========== 分布式信息 ==========
+          serverRole: SERVER_ROLE,
+          serverId: SERVER_ID,
+          dbConnected: !!pool,
+          readPoolConnected: !!readPool,
         });
       });
       return;
