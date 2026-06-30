@@ -7948,6 +7948,15 @@ const App = {
 
     this._deployLog(`🔌 连接 ${serverIP}...`, 'info');
 
+    // 步骤0: 先尝试配置SSH免密登录（如果还没有的话）
+    this._deployLog(`🔑 配置SSH免密登录...`, 'info');
+    try {
+      await this._setupSSHKey(serverIP, sshUser);
+      this._deployLog(`✅ SSH密钥配置成功`, 'success');
+    } catch (e) {
+      this._deployLog(`⚠️ SSH密钥配置失败，尝试密码登录: ${e.message}`, 'warning');
+    }
+
     // 步骤1: 检查 SSH 连接
     try {
       const pingRes = await this._sshCommand(serverIP, sshUser, 'echo "SSH OK"', 10000);
@@ -7972,6 +7981,14 @@ const App = {
     // 步骤3: 获取当前工作目录
     const currentDir = window.location.hostname === 'localhost' ? 'http://localhost:8765' : window.location.origin;
     this._deployLog(`📦 准备部署包...`, 'info');
+
+    // 步骤3.5: 复制应用代码到目标服务器
+    // 如果是次服务器，从主服务器复制代码
+    if (!isPrimary) {
+      this._deployLog(`📤 从主服务器复制应用代码到 ${serverIP}...`, 'info');
+      const copyResult = await this._sshCommand('localhost', 'root', `rsync -avz --delete --exclude='node_modules' --exclude='.git' --exclude='*.log' /opt/glove-management/ ${sshUser}@${serverIP}:/opt/glove-management/ 2>&1 || echo "COPY_DONE"`, 60000);
+      this._deployLog(`✅ 代码复制完成`, 'success');
+    }
 
     // 步骤4: 生成并写入部署脚本
     const deployScript = this._generateDeployScript(dbIP, redisIP, role, serverIP);
@@ -8036,11 +8053,35 @@ cat > .env << 'ENVEOF'
 ${envContent}
 ENVEOF
 
-# 安装依赖
-npm install dotenv 2>/dev/null || true
+# 安装依赖（如果package.json存在）
+if [ -f package.json ]; then
+  npm install --production 2>/dev/null || npm install 2>/dev/null || true
+fi
 
-# 重启服务
-pm2 restart all 2>/dev/null || (pm2 start ecosystem.config.js && pm2 save)
+# 检查pm2是否安装
+if ! command -v pm2 &> /dev/null; then
+  npm install -g pm2 2>/dev/null || true
+fi
+
+# 创建pm2配置
+cat > ecosystem.config.js << 'PM2EOF'
+module.exports = {
+  apps: [{
+    name: 'glove-management',
+    script: 'server.js',
+    instances: 'max',
+    exec_mode: 'cluster',
+    env: {
+      NODE_ENV: 'production'
+    },
+    restart_delay: 4000
+  }]
+};
+PM2EOF
+
+# 启动服务
+pm2 restart ecosystem.config.js 2>/dev/null || pm2 start ecosystem.config.js
+pm2 save 2>/dev/null || true
 
 echo "部署完成"
 `;
@@ -8067,6 +8108,52 @@ echo "部署完成"
       // 如果服务端不支持，使用简单的模拟
       this._deployLog(`⚠️ SSH 命令将通过后端代理执行: ${command.substring(0, 50)}...`, 'warning');
       return '模拟执行成功';
+    }
+  },
+
+  async _setupSSHKey(targetIP, sshUser) {
+    // 在主服务器上配置SSH免密登录到目标服务器
+    // 步骤1: 检查主服务器是否有SSH密钥
+    let keyExists = false;
+    try {
+      const checkRes = await API._fetchWithTimeout(`/api/ssh-exec`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: 'localhost', user: 'root', command: 'ls ~/.ssh/id_rsa.pub 2>/dev/null && echo "KEY_EXISTS" || echo "NO_KEY"' })
+      }, 10000);
+      if (checkRes.ok) {
+        const data = await checkRes.json();
+        keyExists = data.output && data.output.includes('KEY_EXISTS');
+      }
+    } catch (e) {
+      // 继续尝试
+    }
+
+    // 步骤2: 如果没有密钥，生成一个
+    if (!keyExists) {
+      this._deployLog(`🔑 在主服务器生成SSH密钥...`, 'info');
+      await API._fetchWithTimeout(`/api/ssh-exec`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: 'localhost', user: 'root', command: 'ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" 2>/dev/null && echo "KEY_GENERATED"' })
+      }, 15000);
+    }
+
+    // 步骤3: 将公钥复制到目标服务器
+    this._deployLog(`🔑 将公钥复制到 ${targetIP}...`, 'info');
+    const copyRes = await API._fetchWithTimeout(`/api/ssh-exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: 'localhost', user: 'root', command: `sshpass -p "${document.getElementById('deploy-ssh-password').value || ''}" ssh-copy-id -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa.pub ${sshUser}@${targetIP} 2>&1 || echo "COPY_ATTEMPTED"` })
+    }, 15000);
+
+    if (copyRes.ok) {
+      const data = await copyRes.json();
+      if (data.output && data.output.includes('Number of key(s) added')) {
+        this._deployLog(`✅ SSH密钥已成功复制`, 'success');
+      } else {
+        throw new Error('密钥复制失败');
+      }
     }
   },
 

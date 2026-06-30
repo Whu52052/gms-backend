@@ -3106,11 +3106,30 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      // 如果是localhost，直接执行本地命令
+      if (ip === 'localhost' || ip === '127.0.0.1' || ip === '::1') {
+        try {
+          const { exec } = require('child_process');
+          const output = await new Promise((resolve, reject) => {
+            exec(command, { timeout: 60000 }, (error, stdout, stderr) => {
+              if (error && !stdout) reject(new Error(stderr || error.message));
+              else resolve(stdout || stderr);
+            });
+          });
+          sendJSON(res, { output, success: true });
+        } catch (e) {
+          sendJSON(res, { error: e.message, output: '' }, 500);
+        }
+        return;
+      }
+
       // 限制可执行的命令（安全白名单）
       const allowedCommands = [
         'echo', 'mkdir', 'chmod', 'chown', 'rm', 'cp', 'mv', 'cat', 'grep', 'tail',
         'ls', 'cd', 'npm', 'node', 'pm2', 'curl', 'wget', 'apt', 'yum', 'systemctl',
-        'service', 'df', 'free', 'ps', 'kill', 'pkill', 'sed', 'awk', 'base64'
+        'service', 'df', 'free', 'ps', 'kill', 'pkill', 'sed', 'awk', 'base64',
+        'ssh-keygen', 'ssh-copy-id', 'sshpass', 'ssh', 'scp', 'mkdir', 'chown', 'git',
+        'tar', 'unzip', 'zip', 'rsync', 'mkdir', 'chmod', 'chown', 'hostname', 'date'
       ];
 
       const isAllowed = allowedCommands.some(cmd => command.trim().startsWith(cmd));
