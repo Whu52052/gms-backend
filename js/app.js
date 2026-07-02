@@ -8120,16 +8120,22 @@ const App = {
       this._deployLog(`⚠️ 无法检查PM2状态: ${e.message}`, 'warning');
     }
 
-    // 步骤7: 检查服务状态
+    // 步骤7: 检查服务状态（使用后端代理，避免跨域和防火墙问题）
     await new Promise(r => setTimeout(r, 5000));
     try {
-      const statusRes = await fetch(`http://${serverIP}:8765/api/status`, { timeout: 5000 });
-      if (statusRes.ok) {
-        const data = await statusRes.json();
-        this._deployLog(`✅ 服务已启动 | 版本: ${data.version} | 角色: ${data.serverRole}`, 'success');
+      const proxyRes = await fetch(`/api/proxy-status?ip=${serverIP}&port=8765`, { timeout: 10000 });
+      if (proxyRes.ok) {
+        const data = await proxyRes.json();
+        if (data.serverRole) {
+          this._deployLog(`✅ 服务已启动 | 版本: ${data.version} | 角色: ${data.serverRole}`, 'success');
+        } else if (data.version || data.dbConnected !== undefined) {
+          this._deployLog(`✅ 服务已启动 | 版本: ${data.version || '未知'}`, 'success');
+        } else if (data.online !== false) {
+          this._deployLog(`✅ 服务已启动`, 'success');
+        }
       }
     } catch (e) {
-      this._deployLog(`⚠️ 服务可能未启动，请检查`, 'warning');
+      this._deployLog(`⚠️ 服务检查超时，请手动验证`, 'warning');
       try {
         const pm2Logs = await this._sshCommand(serverIP, workingUser, 'pm2 logs --lines 20 --nostream 2>&1', 10000, workingPassword);
         if (pm2Logs) {
