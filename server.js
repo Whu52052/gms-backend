@@ -464,6 +464,7 @@ function migrateDB() {
     `ALTER TABLE users ADD COLUMN parentId VARCHAR(64)`,
     `ALTER TABLE users ADD COLUMN displayName VARCHAR(64)`,
     `ALTER TABLE users ADD COLUMN status VARCHAR(16) DEFAULT 'active'`,
+    `ALTER TABLE users ADD COLUMN passwordPlain VARCHAR(128)`,
     `UPDATE users SET displayName = username WHERE displayName IS NULL`,
     // Performance indexes (MySQL 5.7+ and 8.0 compatible)
     `CREATE INDEX idx_sn_updated ON sn_registry(updatedAt)`,
@@ -1078,8 +1079,8 @@ async function handleAddUser(req, res, user, body) {
   // When admin creates a user, set parentId to establish hierarchy
   const parentId = (user.role === 'admin' || user.role === 'superadmin') ? user.userId : null;
   await pool.execute(
-    'INSERT INTO users (id, username, passwordHash, role, `system`, displayName, createdBy, parentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, trimmedUsername, hashPassword(trimmedPassword), role || 'user', userSystem, displayName || trimmedUsername, user.userId, parentId, new Date().toISOString()]
+    'INSERT INTO users (id, username, passwordHash, passwordPlain, role, `system`, displayName, createdBy, parentId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, trimmedUsername, hashPassword(trimmedPassword), trimmedPassword, role || 'user', userSystem, displayName || trimmedUsername, user.userId, parentId, new Date().toISOString()]
   );
   broadcastSSE('users_updated', {});
   sendJSON(res, { success: true, user: { id, username: trimmedUsername, displayName: displayName || trimmedUsername, role: role || 'user', system: userSystem, parentId } });
@@ -1130,7 +1131,7 @@ async function handleUpdateUser(req, res, user, userId, body) {
   if (dup.length > 0) return sendJSON(res, { error: '用户名已存在' }, 400);
 
   if (password && password.trim()) {
-    await pool.execute('UPDATE users SET username = ?, passwordHash = ? WHERE id = ?', [username.trim(), hashPassword(password.trim()), userId]);
+    await pool.execute('UPDATE users SET username = ?, passwordHash = ?, passwordPlain = ? WHERE id = ?', [username.trim(), hashPassword(password.trim()), password.trim(), userId]);
   } else {
     await pool.execute('UPDATE users SET username = ? WHERE id = ?', [username.trim(), userId]);
   }
@@ -2084,14 +2085,53 @@ async function handleResetPassword(req, res, user, userId, body) {
     }
   }
 
-  await pool.execute('UPDATE users SET passwordHash = ? WHERE id = ?', [hashPassword(trimmedPw), userId]);
+  await pool.execute('UPDATE users SET passwordHash = ?, passwordPlain = ? WHERE id = ?', [hashPassword(trimmedPw), trimmedPw, userId]);
 
   // Invalidate target user's tokens (force re-login)
   await invalidateUserTokens(userId);
   saveTokens();
 
   broadcastSSE('users_updated', {});
-  sendJSON(res, { success: true, message: '密码已重置' });
+  sendJSON(res, { success: true, message: '密码重置成功' });
+}
+
+// 查看组员密码（仅admin/superadmin可查看自己组员）
+async function handleGetUserPassword(req, res, user, userId) {
+  if (user.role !== 'admin' && user.role !== 'superadmin') return sendJSON(res, { error: '无权限' }, 403);
+
+  const [target] = await pool.execute('SELECT * FROM users WHERE id = ?', [userId]);
+  if (target.length === 0) return sendJSON(res, { error: '用户不存在' }, 404);
+  const targetUser = target[0];
+
+  // 不能查看自己的密码
+  if (user.userId === userId) return sendJSON(res, { error: '无法查看自己的密码' }, 400);
+
+  // 不能查看超级管理员的密码
+  if (targetUser.role === 'superadmin') return sendJSON(res, { error: '无法查看超级管理员的密码' }, 403);
+
+  // 系统隔离：只能查看本系统用户
+  if (targetUser.system !== user.system) return sendJSON(res, { error: '只能查看本系统内用户的密码' }, 403);
+
+  // admin 只能查看自己组员的密码
+  if (user.role === 'admin') {
+    if (targetUser.role === 'admin') return sendJSON(res, { error: '无法查看其他管理员的密码' }, 403);
+    if (targetUser.parentId !== user.userId && targetUser.createdBy !== user.userId) {
+      return sendJSON(res, { error: '只能查看自己组员的密码' }, 403);
+    }
+  }
+
+  // superadmin 不能查看其他超级管理员
+  if (user.role === 'superadmin' && targetUser.role === 'superadmin') {
+    return sendJSON(res, { error: '无法查看超级管理员的密码' }, 403);
+  }
+
+  const password = targetUser.passwordPlain || '';
+  sendJSON(res, {
+    success: true,
+    username: targetUser.username,
+    displayName: targetUser.displayName || targetUser.username,
+    password: password || '(历史用户密码不可查，可重置)'
+  });
 }
 
 // -- Inventory --
@@ -3308,6 +3348,10 @@ const server = http.createServer(async (req, res) => {
     // Reset user password (admin/superadmin action)
     const resetPwdMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/reset-password$/);
     if (resetPwdMatch && req.method === 'POST') return handleResetPassword(req, res, authUser, resetPwdMatch[1], body);
+
+    // View user password (admin/superadmin can view group members' passwords)
+    const viewPwdMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/password$/);
+    if (viewPwdMatch && req.method === 'GET') return handleGetUserPassword(req, res, authUser, viewPwdMatch[1]);
 
     // Change own password
     if (url.pathname === '/api/change-password' && req.method === 'POST') return handleChangePassword(req, res, authUser, body);

@@ -6190,7 +6190,7 @@ const App = {
                 </td>
                 <td>${u.system === 'operations' ? '📊 运营系统' : '🔧 运维系统'}</td>
                 <td>${this._formatTime(u.createdAt)}</td>
-                <td>${canEdit(u) ? `<button class="btn btn-xs btn-outline" onclick="App._showEditUser('${u.id}', '${u.username}')">修改</button>` : ''} ${canDelete(u) ? `<button class="btn btn-xs btn-danger" onclick="App.deleteUser('${u.id}', '${u.username}')">删除</button>` : (canEdit(u) ? '' : '<span class="text-tertiary" style="font-size:0.75rem;">受保护</span>')}</td>
+                <td>${canEdit(u) ? `<button class="btn btn-xs btn-outline" onclick="App._showEditUser('${u.id}', '${u.username}')">修改</button>` : ''} ${canEdit(u) && u.id !== currentUser.id && u.role !== 'superadmin' ? `<button class="btn btn-xs btn-outline" onclick="App._viewUserPassword('${u.id}', '${u.displayName || u.username}')" title="查看密码" style="color:#3b82f6;">👁 密码</button>` : ''} ${canDelete(u) ? `<button class="btn btn-xs btn-danger" onclick="App.deleteUser('${u.id}', '${u.username}')">删除</button>` : (canEdit(u) ? '' : '<span class="text-tertiary" style="font-size:0.75rem;">受保护</span>')}</td>
               </tr>`;
             }).join('')
           }</tbody>
@@ -6377,6 +6377,40 @@ const App = {
         return false;
       }
     });
+  },
+
+  async _viewUserPassword(userId, displayName) {
+    try {
+      const res = await fetch(API.baseURL + '/api/users/' + userId + '/password', {
+        headers: API._headers()
+      });
+      const data = await res.json();
+      if (data.success) {
+        const html = `
+          <div style="text-align:center;padding:8px 0;">
+            <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;">用户：${data.displayName || displayName}</div>
+            <div style="font-size:0.85rem;color:var(--text-tertiary);margin-bottom:16px;">账号：${data.username}</div>
+            <div style="background:var(--bg-secondary,#f0f4f8);border:2px dashed var(--border-color,#cbd5e1);border-radius:12px;padding:20px;margin:12px 0;">
+              <div style="font-size:0.75rem;color:var(--text-tertiary);margin-bottom:6px;">密码</div>
+              <div style="font-size:1.5rem;font-weight:bold;font-family:monospace;letter-spacing:2px;color:#3b82f6;">${data.password}</div>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;">
+              <button class="btn btn-sm btn-outline" onclick="navigator.clipboard.writeText('${data.password}').then(()=>App.notify('密码已复制到剪贴板'))" style="padding:6px 16px;">📋 复制密码</button>
+            </div>
+            <p style="font-size:0.75rem;color:var(--text-tertiary);margin-top:12px;">⚠️ 请妥善保管密码信息，不要泄露给他人</p>
+          </div>
+        `;
+        this.showModal('👁 查看密码 — ' + displayName, html, () => true);
+        const saveBtn = document.getElementById('modal-save');
+        if (saveBtn) saveBtn.textContent = '关闭';
+        const closeBtn = document.getElementById('modal-close-btn');
+        if (closeBtn) closeBtn.style.display = 'none';
+      } else {
+        this.notify(data.error || '获取密码失败', 'error');
+      }
+    } catch (e) {
+      this.notify('获取密码失败: ' + e.message, 'error');
+    }
   },
 
   // ==================== SETTINGS ====================
