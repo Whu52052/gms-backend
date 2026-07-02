@@ -6386,25 +6386,73 @@ const App = {
       });
       const data = await res.json();
       if (data.success) {
-        const html = `
-          <div style="text-align:center;padding:8px 0;">
-            <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;">用户：${data.displayName || displayName}</div>
-            <div style="font-size:0.85rem;color:var(--text-tertiary);margin-bottom:16px;">账号：${data.username}</div>
-            <div style="background:var(--bg-secondary,#f0f4f8);border:2px dashed var(--border-color,#cbd5e1);border-radius:12px;padding:20px;margin:12px 0;">
-              <div style="font-size:0.75rem;color:var(--text-tertiary);margin-bottom:6px;">密码</div>
-              <div style="font-size:1.5rem;font-weight:bold;font-family:monospace;letter-spacing:2px;color:#3b82f6;">${data.password}</div>
+        // 如果密码可查，直接显示
+        if (data.password && !data.password.includes('不可查')) {
+          const html = `
+            <div style="text-align:center;padding:8px 0;">
+              <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;">用户：${data.displayName || displayName}</div>
+              <div style="font-size:0.85rem;color:var(--text-tertiary);margin-bottom:16px;">账号：${data.username}</div>
+              <div style="background:var(--bg-secondary,#f0f4f8);border:2px dashed var(--border-color,#cbd5e1);border-radius:12px;padding:20px;margin:12px 0;">
+                <div style="font-size:0.75rem;color:var(--text-tertiary);margin-bottom:6px;">密码</div>
+                <div style="font-size:1.5rem;font-weight:bold;font-family:monospace;letter-spacing:2px;color:#3b82f6;">${data.password}</div>
+              </div>
+              <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;">
+                <button class="btn btn-sm btn-outline" onclick="navigator.clipboard.writeText('${data.password}').then(()=>App.notify('密码已复制到剪贴板'))" style="padding:6px 16px;">📋 复制密码</button>
+              </div>
+              <p style="font-size:0.75rem;color:var(--text-tertiary);margin-top:12px;">⚠️ 请妥善保管密码信息，不要泄露给他人</p>
             </div>
-            <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;">
-              <button class="btn btn-sm btn-outline" onclick="navigator.clipboard.writeText('${data.password}').then(()=>App.notify('密码已复制到剪贴板'))" style="padding:6px 16px;">📋 复制密码</button>
+          `;
+          this.showModal('👁 查看密码 — ' + displayName, html, () => true);
+          const saveBtn = document.getElementById('modal-save');
+          if (saveBtn) saveBtn.textContent = '关闭';
+          const closeBtn = document.getElementById('modal-close-btn');
+          if (closeBtn) closeBtn.style.display = 'none';
+        } else {
+          // 密码不可查，提供立即重置选项
+          const html = `
+            <div style="text-align:center;padding:8px 0;">
+              <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;">用户：${data.displayName || displayName}</div>
+              <div style="font-size:0.85rem;color:var(--text-tertiary);margin-bottom:16px;">账号：${data.username}</div>
+              <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:12px;padding:16px;margin:12px 0;">
+                <div style="font-size:0.85rem;color:#92400e;">⚠️ 该用户为历史创建，密码未记录</div>
+                <div style="font-size:0.75rem;color:#a16207;margin-top:6px;">请重置密码后即可查看</div>
+              </div>
+              <div class="form-group" style="margin-top:16px;">
+                <label style="font-size:0.85rem;">设置新密码</label>
+                <input type="password" id="view-pwd-reset-new" placeholder="输入新密码（至少6位，含字母和数字）" style="width:100%;padding:10px;border:1px solid var(--border-color);border-radius:8px;">
+              </div>
+              <div class="form-group">
+                <label style="font-size:0.85rem;">确认新密码</label>
+                <input type="password" id="view-pwd-reset-confirm" placeholder="再次输入新密码" style="width:100%;padding:10px;border:1px solid var(--border-color);border-radius:8px;">
+              </div>
             </div>
-            <p style="font-size:0.75rem;color:var(--text-tertiary);margin-top:12px;">⚠️ 请妥善保管密码信息，不要泄露给他人</p>
-          </div>
-        `;
-        this.showModal('👁 查看密码 — ' + displayName, html, () => true);
-        const saveBtn = document.getElementById('modal-save');
-        if (saveBtn) saveBtn.textContent = '关闭';
-        const closeBtn = document.getElementById('modal-close-btn');
-        if (closeBtn) closeBtn.style.display = 'none';
+          `;
+          this.showModal('🔑 设置密码 — ' + displayName, html, async () => {
+            const newPw = document.getElementById('view-pwd-reset-new')?.value;
+            const confirmPw = document.getElementById('view-pwd-reset-confirm')?.value;
+            if (!newPw || newPw.length < 6) { this.notify('密码至少6个字符', 'warning'); return false; }
+            if (!/[A-Za-z]/.test(newPw) || !/[0-9]/.test(newPw)) { this.notify('密码需包含字母和数字', 'warning'); return false; }
+            if (newPw !== confirmPw) { this.notify('两次输入不一致', 'warning'); return false; }
+            
+            const result = await fetch(API.baseURL + '/api/users/' + userId + '/reset-password', {
+              method: 'POST',
+              headers: API._headers(),
+              body: JSON.stringify({ newPassword: newPw })
+            }).then(r => r.json());
+            
+            if (result?.success) {
+              this.notify('密码已设置');
+              // 立即再次查看，显示新密码
+              setTimeout(() => this._viewUserPassword(userId, displayName), 300);
+              return true;
+            } else {
+              this.notify(result?.error || '设置失败', 'error');
+              return false;
+            }
+          });
+          const saveBtn = document.getElementById('modal-save');
+          if (saveBtn) saveBtn.textContent = '设置密码';
+        }
       } else {
         this.notify(data.error || '获取密码失败', 'error');
       }
