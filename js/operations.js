@@ -60,24 +60,24 @@ const OpsApp = {
       const machineData = JSON.parse(localStorage.getItem('ops_current_machine_data') || 'null');
       if (machineData) {
         this._currentMachine = machineData.machineNumber;
-        this._currentEquipmentType = machineData.equipmentType || '';
-        this._currentEquipmentName = machineData.equipmentName || '';
+        this._currentDeviceType = machineData.deviceType || '';
+        this._currentDeviceLabel = machineData.deviceLabel || '';
       } else {
         this._currentMachine = localStorage.getItem('ops_current_machine') || null;
-        this._currentEquipmentType = '';
-        this._currentEquipmentName = '';
+        this._currentDeviceType = '';
+        this._currentDeviceLabel = '';
       }
       this._tsFilter = localStorage.getItem('ops_ts_filter') || 'all';
       this._tsViewMode = localStorage.getItem('ops_ts_view_mode') || 'card';
       console.log('[TechSupport] _loadLocalData: _tsFilter=', this._tsFilter, '_tsViewMode=', this._tsViewMode);
-    } catch { this._tasks = []; this._requirements = []; this._currentMachine = null; this._currentEquipmentType = ''; this._currentEquipmentName = ''; this._tsFilter = 'all'; this._tsViewMode = 'card'; }
+    } catch { this._tasks = []; this._requirements = []; this._currentMachine = null; this._currentDeviceType = ''; this._currentDeviceLabel = ''; this._tsFilter = 'all'; this._tsViewMode = 'card'; }
   },
-  _saveCurrentMachine(machineNumber, equipmentType = '', equipmentName = '') {
+  _saveCurrentMachine(machineNumber, deviceType = '', deviceLabel = '') {
     this._currentMachine = machineNumber;
-    this._currentEquipmentType = equipmentType;
-    this._currentEquipmentName = equipmentName;
+    this._currentDeviceType = deviceType;
+    this._currentDeviceLabel = deviceLabel;
     if (machineNumber) {
-      localStorage.setItem('ops_current_machine_data', JSON.stringify({ machineNumber, equipmentType, equipmentName }));
+      localStorage.setItem('ops_current_machine_data', JSON.stringify({ machineNumber, deviceType, deviceLabel }));
       localStorage.removeItem('ops_current_machine');
     } else {
       localStorage.removeItem('ops_current_machine_data');
@@ -2349,17 +2349,19 @@ const OpsApp = {
             <option value="">-- 请选择设备 --</option>
             ${machines.map(m => {
               const num = m.machineNumber || m.id;
-              const eqType = m.equipmentType || m.equipment || '未知设备';
-              const eqName = m.equipmentName || '';
-              const displayName = eqName ? `${num} - ${eqName} (${eqType})` : `${num} - ${eqType}`;
-              return `<option value="${num}" data-equipment="${eqType}" data-equipment-name="${eqName}" ${num === current ? 'selected' : ''}>${displayName}</option>`;
+              const devType = m.deviceType || '';
+              const devLabel = devType === 'glove' ? '纯手套设备'
+                : devType === 'dexterous' ? '灵巧手设备'
+                : devType === 'gripper' ? '夹爪设备'
+                : devType || '未知设备';
+              return `<option value="${num}" data-device-type="${devType}" data-device-label="${devLabel}" ${num === current ? 'selected' : ''}>${num} - ${devLabel}</option>`;
             }).join('')}
           </select>
         </div>
         ${current && !forceSelect && currentMachineObj ? `
           <div style="padding:12px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;">
             <p style="margin:0;font-size:0.85rem;color:var(--text-secondary);">当前设备：</p>
-            <p style="margin:4px 0 0;font-weight:600;">${current} - ${currentMachineObj.equipmentName || currentMachineObj.equipmentType || '未知设备'}</p>
+            <p style="margin:4px 0 0;font-weight:600;">${current} - ${currentMachineObj.deviceType === 'glove' ? '纯手套设备' : currentMachineObj.deviceType === 'dexterous' ? '灵巧手设备' : currentMachineObj.deviceType === 'gripper' ? '夹爪设备' : (currentMachineObj.deviceType || '未知设备')}</p>
           </div>` : ''}
       </div>
     `;
@@ -2371,9 +2373,9 @@ const OpsApp = {
         return false;
       }
       const selectedOption = select.options[select.selectedIndex];
-      const equipmentType = selectedOption?.getAttribute('data-equipment') || '';
-      const equipmentName = selectedOption?.getAttribute('data-equipment-name') || '';
-      this._saveCurrentMachine(val, equipmentType, equipmentName);
+      const deviceType = selectedOption?.getAttribute('data-device-type') || '';
+      const deviceLabel = selectedOption?.getAttribute('data-device-label') || '';
+      this._saveCurrentMachine(val, deviceType, deviceLabel);
       this.notify('当前设备已设置为：' + val);
       if (this.currentTab === 'personal-analysis' || this.currentTab === 'tech-support-submit') {
         this.renderCurrentTab();
@@ -2439,19 +2441,19 @@ const OpsApp = {
           <div>
             <span style="font-size:0.8rem;color:var(--text-secondary);">当前设备：</span>
             <span style="font-weight:600;margin-left:4px;">${currentMachine || '未选择'}</span>
-            ${this._currentEquipmentName ? '<span style="font-size:0.8rem;color:var(--text-secondary);margin-left:8px;">(' + this._currentEquipmentName + ')</span>' : ''}
+            ${this._currentDeviceLabel ? '<span style="font-size:0.8rem;color:var(--text-secondary);margin-left:8px;">(' + this._currentDeviceLabel + ')</span>' : ''}
           </div>
           <button class="btn btn-xs btn-outline" onclick="OpsApp._showMachineSelector()">🔄 切换设备</button>
         </div>` : ''}
         <div class="ts-form-group">
           <label class="ts-form-label">故障设备类型 <span class="req">*</span></label>
-          ${isNormalUser && this._currentEquipmentType ? `
+          ${isNormalUser && this._currentDeviceType ? `
             <div style="padding:10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-secondary,#f8f9fb);">
-              <span style="font-weight:500;">${this._currentEquipmentName || this._currentEquipmentType}</span>
-              <input type="hidden" id="ts-equipment-type" value="${this._currentEquipmentType}">
+              <span style="font-weight:500;">${this._currentDeviceLabel || this._currentDeviceType}</span>
+              <input type="hidden" id="ts-equipment-type" value="${this._currentDeviceType}">
             </div>
           ` : `
-            <select id="ts-equipment-type" class="ts-form-select"><option value="">-- 请选择故障设备 --</option>${equipmentList.map(e => `<option value="${e.id}" data-name="${(e.name||e.id).replace(/"/g,'&quot;')}" ${this._currentEquipmentType === e.id ? 'selected' : ''}>${e.icon||'📦'} ${e.name||e.id}</option>`).join('')}</select>
+            <select id="ts-equipment-type" class="ts-form-select"><option value="">-- 请选择故障设备 --</option>${equipmentList.map(e => `<option value="${e.id}" data-name="${(e.name||e.id).replace(/"/g,'&quot;')}" ${this._currentDeviceType === e.id ? 'selected' : ''}>${e.icon||'📦'} ${e.name||e.id}</option>`).join('')}</select>
           `}
         </div>
         <div class="ts-form-group" style="position:relative;">
@@ -2563,8 +2565,15 @@ const OpsApp = {
     }
 
     const sel = document.getElementById('ts-equipment-type');
-    const selectedOpt = sel ? sel.options[sel.selectedIndex] : null;
-    const equipmentTypeName = selectedOpt?.dataset?.name || selectedOpt?.text?.replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s_-]/g, '').trim() || equipmentType;
+    let equipmentTypeName = '';
+    const user = API.currentUser;
+    const isNormalUser = user && user.role === 'user';
+    if (isNormalUser && this._currentDeviceLabel) {
+      equipmentTypeName = this._currentDeviceLabel;
+    } else {
+      const selectedOpt = sel ? sel.options[sel.selectedIndex] : null;
+      equipmentTypeName = selectedOpt?.dataset?.name || selectedOpt?.text?.replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s_-]/g, '').trim() || equipmentType;
+    }
 
     const btn = document.getElementById('ts-submit-btn');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ 提交中...'; }
