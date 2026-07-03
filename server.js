@@ -974,6 +974,36 @@ async function runDeployment(taskId, config) {
       5000);
     push(`  ✅ .env 配置已写入 (DB: ${dbUser}@${dbHost})`, 'success');
 
+    // ====== 步骤6.5: 测试数据库连接 ======
+    push(`🔌 步骤6.5/9: 测试远程数据库连接...`, 'info');
+    try {
+      const dbTestCmd = `cd ~/glove-management && node -e "
+        const mysql = require('mysql2/promise');
+        (async () => {
+          try {
+            const conn = await mysql.createConnection({
+              host: '${dbHost}', port: ${dbPort}, user: '${dbUser}', password: '${dbPassword}', database: '${dbName}', connectTimeout: 10000
+            });
+            await conn.end();
+            console.log('DB_OK');
+          } catch(e) {
+            console.log('DB_FAIL:', e.message);
+            process.exit(1);
+          }
+        })();
+      " 2>&1`;
+      const dbTestResult = await sshExec(targetIP, workingUser, workingPass, dbTestCmd, 15000);
+      if (dbTestResult.includes('DB_OK')) {
+        push(`  ✅ 数据库连接成功`, 'success');
+      } else {
+        const errMsg = dbTestResult.match(/DB_FAIL:\s*(.+)/)?.[1] || dbTestResult;
+        push(`  ❌ 数据库连接失败: ${errMsg.substring(0, 100)}`, 'error');
+        push(`  ⚠️ 请确认：1)主服务器MySQL已开启远程访问 2)数据库用户密码正确 3)主服务器防火墙已开放3306端口`, 'warning');
+      }
+    } catch (e) {
+      push(`  ⚠️ 数据库连接测试超时，请手动确认数据库配置`, 'warning');
+    }
+
     const pm2Config = `module.exports={apps:[{name:'glove-management',script:'server.js',instances:'max',exec_mode:'cluster',env:{NODE_ENV:'production'},restart_delay:4000}]}`;
     const pm2B64 = Buffer.from(pm2Config).toString('base64');
     await sshExec(targetIP, workingUser, workingPass,
