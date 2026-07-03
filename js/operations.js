@@ -57,17 +57,30 @@ const OpsApp = {
     try {
       this._tasks = JSON.parse(localStorage.getItem('ops_tasks') || '[]');
       this._requirements = JSON.parse(localStorage.getItem('ops_requirements') || '[]');
-      this._currentMachine = localStorage.getItem('ops_current_machine') || null;
+      const machineData = JSON.parse(localStorage.getItem('ops_current_machine_data') || 'null');
+      if (machineData) {
+        this._currentMachine = machineData.machineNumber;
+        this._currentEquipmentType = machineData.equipmentType || '';
+        this._currentEquipmentName = machineData.equipmentName || '';
+      } else {
+        this._currentMachine = localStorage.getItem('ops_current_machine') || null;
+        this._currentEquipmentType = '';
+        this._currentEquipmentName = '';
+      }
       this._tsFilter = localStorage.getItem('ops_ts_filter') || 'all';
       this._tsViewMode = localStorage.getItem('ops_ts_view_mode') || 'card';
       console.log('[TechSupport] _loadLocalData: _tsFilter=', this._tsFilter, '_tsViewMode=', this._tsViewMode);
-    } catch { this._tasks = []; this._requirements = []; this._currentMachine = null; this._tsFilter = 'all'; this._tsViewMode = 'card'; }
+    } catch { this._tasks = []; this._requirements = []; this._currentMachine = null; this._currentEquipmentType = ''; this._currentEquipmentName = ''; this._tsFilter = 'all'; this._tsViewMode = 'card'; }
   },
-  _saveCurrentMachine(machine) {
-    this._currentMachine = machine;
-    if (machine) {
-      localStorage.setItem('ops_current_machine', machine);
+  _saveCurrentMachine(machineNumber, equipmentType = '', equipmentName = '') {
+    this._currentMachine = machineNumber;
+    this._currentEquipmentType = equipmentType;
+    this._currentEquipmentName = equipmentName;
+    if (machineNumber) {
+      localStorage.setItem('ops_current_machine_data', JSON.stringify({ machineNumber, equipmentType, equipmentName }));
+      localStorage.removeItem('ops_current_machine');
     } else {
+      localStorage.removeItem('ops_current_machine_data');
       localStorage.removeItem('ops_current_machine');
     }
   },
@@ -2314,7 +2327,7 @@ const OpsApp = {
     try {
       const list = await API.getMachines();
       if (Array.isArray(list)) {
-        machines = [...new Set(list.map(m => m.machineNumber || m.id).filter(Boolean))];
+        machines = list;
       }
     } catch {}
     if (machines.length === 0) {
@@ -2322,21 +2335,32 @@ const OpsApp = {
       return;
     }
     const current = this._currentMachine || '';
+    const currentMachineObj = machines.find(m => (m.machineNumber || m.id) === current);
     const html = `
       <div style="display:flex;flex-direction:column;gap:16px;">
         <div style="text-align:center;padding:8px 0;">
           <div style="font-size:2rem;margin-bottom:8px;">🖥️</div>
           <p style="margin:0;font-size:1rem;font-weight:500;">${forceSelect ? '请选择您正在使用的设备' : '选择当前设备'}</p>
-          ${forceSelect ? '<p style="margin:4px 0 0;font-size:0.85rem;color:var(--color-warning);">⚠️ 登录后必须选择设备编号才能正常使用</p>' : '<p style="margin:4px 0 0;font-size:0.8rem;color:var(--text-secondary);">选择后提交技术支持时将自动填充设备编号</p>'}
+          ${forceSelect ? '<p style="margin:4px 0 0;font-size:0.85rem;color:var(--color-warning);">⚠️ 登录后必须选择设备编号才能正常使用</p>' : '<p style="margin:4px 0 0;font-size:0.8rem;color:var(--text-secondary);">选择后提交技术支持时将自动填充设备信息</p>'}
         </div>
         <div class="form-group">
           <label>设备编号 <span class="required">*</span></label>
           <select id="machine-select-dropdown" class="form-select" style="width:100%;padding:10px;border:1px solid var(--border-color);border-radius:8px;">
             <option value="">-- 请选择设备 --</option>
-            ${machines.map(m => `<option value="${m}" ${m === current ? 'selected' : ''}>${m}</option>`).join('')}
+            ${machines.map(m => {
+              const num = m.machineNumber || m.id;
+              const eqType = m.equipmentType || m.equipment || '未知设备';
+              const eqName = m.equipmentName || '';
+              const displayName = eqName ? `${num} - ${eqName} (${eqType})` : `${num} - ${eqType}`;
+              return `<option value="${num}" data-equipment="${eqType}" data-equipment-name="${eqName}" ${num === current ? 'selected' : ''}>${displayName}</option>`;
+            }).join('')}
           </select>
         </div>
-        ${current && !forceSelect ? `<p style="font-size:0.8rem;color:var(--text-secondary);text-align:center;margin:0;">当前设备：<strong>${current}</strong></p>` : ''}
+        ${current && !forceSelect && currentMachineObj ? `
+          <div style="padding:12px;background:var(--bg-secondary,#f8f9fb);border-radius:8px;">
+            <p style="margin:0;font-size:0.85rem;color:var(--text-secondary);">当前设备：</p>
+            <p style="margin:4px 0 0;font-weight:600;">${current} - ${currentMachineObj.equipmentName || currentMachineObj.equipmentType || '未知设备'}</p>
+          </div>` : ''}
       </div>
     `;
     this.showModal(forceSelect ? '登录 - 选择设备' : '选择当前设备', html, () => {
@@ -2346,15 +2370,16 @@ const OpsApp = {
         this.notify('请选择设备编号', 'warning');
         return false;
       }
-      this._saveCurrentMachine(val);
+      const selectedOption = select.options[select.selectedIndex];
+      const equipmentType = selectedOption?.getAttribute('data-equipment') || '';
+      const equipmentName = selectedOption?.getAttribute('data-equipment-name') || '';
+      this._saveCurrentMachine(val, equipmentType, equipmentName);
       this.notify('当前设备已设置为：' + val);
-      // 刷新当前页面以更新显示
       if (this.currentTab === 'personal-analysis' || this.currentTab === 'tech-support-submit') {
         this.renderCurrentTab();
       }
       return true;
     });
-    // 强制选择模式下隐藏取消按钮，必须选择设备
     const closeBtn = document.getElementById('modal-close-btn');
     if (closeBtn) {
       if (forceSelect) {
@@ -2414,18 +2439,34 @@ const OpsApp = {
           <div>
             <span style="font-size:0.8rem;color:var(--text-secondary);">当前设备：</span>
             <span style="font-weight:600;margin-left:4px;">${currentMachine || '未选择'}</span>
+            ${this._currentEquipmentName ? '<span style="font-size:0.8rem;color:var(--text-secondary);margin-left:8px;">(' + this._currentEquipmentName + ')</span>' : ''}
           </div>
           <button class="btn btn-xs btn-outline" onclick="OpsApp._showMachineSelector()">🔄 切换设备</button>
         </div>` : ''}
         <div class="ts-form-group">
           <label class="ts-form-label">故障设备类型 <span class="req">*</span></label>
-          <select id="ts-equipment-type" class="ts-form-select"><option value="">-- 请选择故障设备 --</option>${equipmentList.map(e => `<option value="${e.id}" data-name="${(e.name||e.id).replace(/"/g,'&quot;')}">${e.icon||'📦'} ${e.name||e.id}</option>`).join('')}</select>
+          ${isNormalUser && this._currentEquipmentType ? `
+            <div style="padding:10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-secondary,#f8f9fb);">
+              <span style="font-weight:500;">${this._currentEquipmentName || this._currentEquipmentType}</span>
+              <input type="hidden" id="ts-equipment-type" value="${this._currentEquipmentType}">
+            </div>
+          ` : `
+            <select id="ts-equipment-type" class="ts-form-select"><option value="">-- 请选择故障设备 --</option>${equipmentList.map(e => `<option value="${e.id}" data-name="${(e.name||e.id).replace(/"/g,'&quot;')}" ${this._currentEquipmentType === e.id ? 'selected' : ''}>${e.icon||'📦'} ${e.name||e.id}</option>`).join('')}</select>
+          `}
         </div>
         <div class="ts-form-group" style="position:relative;">
           <label class="ts-form-label">设备编号 <span class="req">*</span></label>
-          <input type="text" id="ts-machine-filter" class="ts-form-input" placeholder="输入编号搜索或从下方选择..." autocomplete="off" value="${currentMachine}" oninput="OpsApp._filterMachineList()" onfocus="OpsApp._filterMachineList()">
-          <select id="ts-machine-id" class="ts-form-select" size="5" style="display:none;position:absolute;z-index:100;width:100%;margin-top:2px;" onchange="OpsApp._onMachineSelect()">${machineNumbers.map(m => `<option value="${m}">${m}</option>`).join('')}</select>
-          <div class="ts-form-hint" id="ts-machine-count">共 ${machineNumbers.length} 台设备可选</div>
+          ${isNormalUser && currentMachine ? `
+            <div style="padding:10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-secondary,#f8f9fb);">
+              <span style="font-weight:500;">${currentMachine}</span>
+              <input type="hidden" id="ts-machine-filter" value="${currentMachine}">
+              <input type="hidden" id="ts-machine-id" value="${currentMachine}">
+            </div>
+          ` : `
+            <input type="text" id="ts-machine-filter" class="ts-form-input" placeholder="输入编号搜索或从下方选择..." autocomplete="off" value="${currentMachine}" oninput="OpsApp._filterMachineList()" onfocus="OpsApp._filterMachineList()">
+            <select id="ts-machine-id" class="ts-form-select" size="5" style="display:none;position:absolute;z-index:100;width:100%;margin-top:2px;" onchange="OpsApp._onMachineSelect()">${machineNumbers.map(m => `<option value="${m}" ${m === currentMachine ? 'selected' : ''}>${m}</option>`).join('')}</select>
+            <div class="ts-form-hint" id="ts-machine-count">共 ${machineNumbers.length} 台设备可选</div>
+          `}
         </div>
       </div>
       <div class="ts-detail-card"><h3>🔧 故障详情</h3>
