@@ -26,12 +26,12 @@ const OpsApp = {
         return;
       }
       if (online) { await this._syncFromServer(); }
+      const sidebar = document.querySelector('.sidebar');
+      const topbar = document.querySelector('.topbar');
+      if (sidebar) sidebar.style.display = '';
+      if (topbar) topbar.style.display = '';
       document.body.classList.add('logged-in');
       document.body.classList.remove('login-mode');
-      const sidebar = document.querySelector('.sidebar');
-      if (sidebar) sidebar.style.display = '';
-      const topbar = document.querySelector('.topbar');
-      if (topbar) topbar.style.display = '';
       // Show tech support nav only for normal users (role=user) in operations system
       this._updateTechSupportNav();
       // Show user management nav only for admin/superadmin
@@ -147,13 +147,13 @@ const OpsApp = {
       window.location.href = 'index.html';
       return;
     }
-    document.body.classList.add('logged-in');
-    const topbarRight = document.querySelector('.topbar-right');
-    if (topbarRight) topbarRight.style.display = '';
     const sidebar = document.querySelector('.sidebar');
-    if (sidebar) sidebar.style.display = '';
+    const topbarRight = document.querySelector('.topbar-right');
     const hamburger = document.getElementById('hamburger-btn');
+    if (sidebar) sidebar.style.display = '';
+    if (topbarRight) topbarRight.style.display = '';
     if (hamburger) hamburger.style.display = '';
+    document.body.classList.add('logged-in');
     await this._syncFromServer();
     this._loadLocalData();
     this.updateSidebarUser();

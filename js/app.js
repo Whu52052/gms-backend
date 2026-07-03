@@ -41,14 +41,12 @@ const App = {
       if (online) {
         await Storage._fullSyncFromServer();
       }
+      const sidebar = document.querySelector('.sidebar');
+      const topbar = document.querySelector('.topbar');
+      if (sidebar) sidebar.style.display = '';
+      if (topbar) topbar.style.display = '';
       document.body.classList.add('logged-in');
       document.body.classList.remove('login-mode');
-      // Restore sidebar and topbar visibility
-      const sidebar = document.querySelector('.sidebar');
-      if (sidebar) sidebar.style.display = '';
-      const topbar = document.querySelector('.topbar');
-      if (topbar) topbar.style.display = '';
-      // Tech support nav visible only for maintenance users
       this._updateTechSupportNav();
       this.updateUserDisplay();
       this.refreshSidebarInventory();
