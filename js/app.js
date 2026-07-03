@@ -7997,15 +7997,55 @@ const App = {
       return;
     }
 
+    const sshPassword = document.getElementById('deploy-ssh-password').value;
+    if (!sshPassword) {
+      this.notify('请填写SSH密码', 'error');
+      return;
+    }
+
     const btn = document.getElementById(`deploy-${type}-btn`);
     btn.disabled = true;
     btn.textContent = '部署中...';
 
-    this._deployLog(`🚀 开始部署次服务器: ${targetIP}`, 'info');
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+
+    this._deployLog(`🚀 启动部署任务: ${targetIP}`, 'info');
+    this._deployLog(`📡 连接部署服务...`, 'info');
 
     try {
-      await this._doSSHDeploy(targetIP, targetUser, dbIP, redisIP, isPrimary);
-      this._deployLog(`🎉 次服务器部署完成!`, 'success');
+      // 步骤1: 启动部署任务
+      const token = localStorage.getItem('gms_token');
+      const startRes = await fetch('/api/deploy/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          targetIP,
+          sshUser: targetUser,
+          password: sshPassword,
+          dbHost: dbIP,
+          dbPort: 3306,
+          dbUser: dbConfig.user || 'gms_user',
+          dbPassword: dbConfig.password || 'gms_password_2024',
+          dbName: dbConfig.database || 'gms',
+          redisHost: redisIP,
+          role: isPrimary ? 'primary' : 'secondary'
+        })
+      });
+
+      const startData = await startRes.json();
+      if (!startData.success) {
+        throw new Error(startData.error || '启动部署失败');
+      }
+
+      const taskId = startData.taskId;
+      this._deployLog(`✅ 部署任务已创建: ${taskId}`, 'success');
+      this._deployLog(`📡 建立实时日志连接...`, 'info');
+
+      // 步骤2: SSE接收实时日志
+      await this._connectDeployLogs(taskId);
 
       // 保存服务器配置
       const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
@@ -8022,12 +8062,91 @@ const App = {
       localStorage.setItem('gms_deploy_servers', JSON.stringify(servers));
 
       this._checkServerStatus();
+
     } catch (e) {
       this._deployLog(`❌ 部署失败: ${e.message}`, 'error');
     }
 
     btn.disabled = false;
     btn.textContent = '🚀 开始部署次服务器';
+  },
+
+  async _connectDeployLogs(taskId) {
+    return new Promise((resolve, reject) => {
+      const token = localStorage.getItem('gms_token');
+      const es = new EventSource(`/api/deploy/logs?id=${taskId}&token=${token}`);
+      let connected = false;
+
+      es.addEventListener('connected', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.logs && Array.isArray(data.logs)) {
+            // 回放已有日志
+            data.logs.forEach(log => {
+              this._appendDeployLog(log);
+            });
+          }
+        } catch {}
+        if (!connected) {
+          this._deployLog(`✅ 实时日志已连接`, 'success');
+          connected = true;
+        }
+      });
+
+      es.addEventListener('log', (e) => {
+        try {
+          const log = JSON.parse(e.data);
+          this._appendDeployLog(log);
+        } catch {}
+      });
+
+      es.addEventListener('done', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.success) {
+            this._deployLog(`🎉 部署任务完成！`, 'success');
+            resolve(true);
+          } else {
+            this._deployLog(`❌ 部署任务失败`, 'error');
+            reject(new Error('部署失败'));
+          }
+        } catch {
+          resolve(true);
+        }
+        es.close();
+      });
+
+      es.onerror = () => {
+        if (!connected) {
+          this._deployLog(`⚠️ 日志连接失败，请刷新页面查看状态`, 'warning');
+          reject(new Error('SSE连接失败'));
+        }
+        es.close();
+        resolve(true);
+      };
+    });
+  },
+
+  _appendDeployLog(log) {
+    const time = log.time || '';
+    const msg = log.message || '';
+    const type = log.type || 'info';
+    const prefix = time ? `[${time}] ` : '';
+
+    const logOutput = document.getElementById('deploy-log-output');
+    if (!logOutput) return;
+
+    const line = document.createElement('div');
+    line.style.cssText = type === 'success'
+      ? 'color:#22c55e;font-size:0.8rem;line-height:1.6;'
+      : type === 'error'
+      ? 'color:#ef4444;font-size:0.8rem;line-height:1.6;'
+      : type === 'warning'
+      ? 'color:#f59e0b;font-size:0.8rem;line-height:1.6;'
+      : 'color:#e5e7eb;font-size:0.8rem;line-height:1.6;';
+    line.textContent = prefix + msg;
+    logOutput.appendChild(line);
+    logOutput.scrollTop = logOutput.scrollHeight;
   },
 
   async _doSSHDeploy(targetIP, sshUser, dbIP, redisIP, isPrimary) {

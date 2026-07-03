@@ -770,6 +770,302 @@ function broadcastSSE(event, data) {
   _invalidateCache(event);
 }
 
+// ==================== DEPLOYMENT ENGINE (一体式部署引擎) ====================
+const deployTasks = new Map();
+
+function createDeployLog(taskId) {
+  const task = {
+    id: taskId,
+    status: 'running',
+    logs: [],
+    startTime: Date.now(),
+    listeners: []
+  };
+  deployTasks.set(taskId, task);
+  return task;
+}
+
+function pushDeployLog(taskId, message, type = 'info') {
+  const task = deployTasks.get(taskId);
+  if (!task) return;
+  const entry = { time: new Date().toLocaleTimeString('zh-CN'), message, type };
+  task.logs.push(entry);
+  if (task.logs.length > 500) task.logs.shift();
+  // 推送给所有SSE监听者
+  task.listeners.forEach(res => {
+    try {
+      res.write(`event: log\ndata: ${JSON.stringify(entry)}\n\n`);
+    } catch {}
+  });
+}
+
+function finishDeployTask(taskId, success) {
+  const task = deployTasks.get(taskId);
+  if (!task) return;
+  task.status = success ? 'success' : 'failed';
+  task.endTime = Date.now();
+  // 通知所有监听者结束
+  task.listeners.forEach(res => {
+    try {
+      res.write(`event: done\ndata: ${JSON.stringify({ success })}\n\n`);
+      res.end();
+    } catch {}
+  });
+  task.listeners = [];
+  // 1小时后清理
+  setTimeout(() => deployTasks.delete(taskId), 3600000);
+}
+
+async function sshExec(targetIP, user, password, command, timeout = 60000) {
+  const { exec } = require('child_process');
+  const sshCmd = password
+    ? `sshpass -p '${password.replace(/'/g, "'\\''")}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o ServerAliveInterval=30 ${user}@${targetIP} '${command.replace(/'/g, "'\\''")}'`
+    : `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o ServerAliveInterval=30 ${user}@${targetIP} '${command.replace(/'/g, "'\\''")}'`;
+  return new Promise((resolve, reject) => {
+    exec(sshCmd, { timeout: Math.min(timeout, 300000), maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error && !stdout) reject(new Error(stderr || error.message));
+      else resolve((stdout || stderr || '').toString());
+    });
+  });
+}
+
+async function scpPut(targetIP, user, password, localFile, remotePath, timeout = 120000) {
+  const { exec } = require('child_process');
+  const scpCmd = password
+    ? `sshpass -p '${password.replace(/'/g, "'\\''")}' scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${localFile} ${user}@${targetIP}:${remotePath}`
+    : `scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${localFile} ${user}@${targetIP}:${remotePath}`;
+  return new Promise((resolve, reject) => {
+    exec(scpCmd, { timeout: Math.min(timeout, 300000) }, (error, stdout, stderr) => {
+      if (error) reject(new Error(stderr || error.message));
+      else resolve((stdout || '').toString());
+    });
+  });
+}
+
+async function runDeployment(taskId, config) {
+  const { targetIP, sshUser, password, dbHost, dbPort, dbUser, dbPassword, dbName, redisHost, role } = config;
+  const push = (msg, type) => pushDeployLog(taskId, msg, type);
+  const projectRoot = __dirname;
+  const fs = require('fs');
+
+  try {
+    // ====== 前置准备：确保sshpass已安装 ======
+    push(`📦 准备部署环境...`, 'info');
+    const { execSync } = require('child_process');
+    try {
+      execSync('which sshpass', { stdio: 'pipe' });
+    } catch {
+      push(`  正在安装 sshpass...`, 'info');
+      try {
+        execSync('apt-get install -y sshpass 2>&1 || sudo apt-get install -y sshpass 2>&1', { stdio: 'pipe', timeout: 30000 });
+        push(`  ✅ sshpass 安装成功`, 'success');
+      } catch (e) {
+        push(`  ⚠️ sshpass 安装可能失败: ${e.message}`, 'warning');
+      }
+    }
+
+    // ====== 步骤1: 测试SSH连接 ======
+    push(`🔌 步骤1/9: SSH连接测试 ${targetIP}...`, 'info');
+    let workingUser = 'root';
+    let workingPass = password;
+    try {
+      await sshExec(targetIP, workingUser, workingPass, 'echo SSH_OK', 15000);
+      push(`  ✅ root用户连接成功`, 'success');
+    } catch (e) {
+      push(`  ⚠️ root连接失败 (${e.message.substring(0,60)})，尝试 ${sshUser}...`, 'warning');
+      workingUser = sshUser;
+      try {
+        await sshExec(targetIP, workingUser, workingPass, 'echo SSH_OK', 15000);
+        push(`  ✅ ${workingUser}用户连接成功`, 'success');
+      } catch (e2) {
+        throw new Error(`SSH连接失败: ${e2.message}`);
+      }
+    }
+
+    // ====== 步骤2: 检测远程环境 ======
+    push(`📋 步骤2/9: 检测远程服务器环境...`, 'info');
+    const envInfo = await sshExec(targetIP, workingUser, workingPass,
+      `echo "NODE:$(node -v 2>/dev/null || echo NONE)" && echo "NPM:$(npm -v 2>/dev/null || echo NONE)" && echo "PM2:$(pm2 -v 2>/dev/null || echo NONE)" && echo "OS:$(uname -s) $(uname -m)"`,
+      10000);
+    const nodeV = (envInfo.match(/NODE:(v?\S+)/) || [])[1] || '未知';
+    const npmV = (envInfo.match(/NPM:(\S+)/) || [])[1] || '未知';
+    const pm2V = (envInfo.match(/PM2:(\S+)/) || [])[1] || '未知';
+    push(`  Node: ${nodeV} | NPM: ${npmV} | PM2: ${pm2V}`, 'info');
+
+    // ====== 步骤3: 安装Node.js（如果没有） ======
+    if (nodeV === 'NONE' || !nodeV || nodeV === '未知') {
+      push(`📦 步骤3/9: 安装 Node.js 20.x...`, 'info');
+      try {
+        await sshExec(targetIP, workingUser, workingPass,
+          'curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs',
+          180000);
+        const newNode = await sshExec(targetIP, workingUser, workingPass, 'node -v', 5000);
+        push(`  ✅ Node.js 安装成功: ${newNode.trim()}`, 'success');
+      } catch (e) {
+        throw new Error(`Node.js安装失败: ${e.message}`);
+      }
+    } else {
+      push(`✅ 步骤3/9: Node.js 已安装 (${nodeV})，跳过`, 'success');
+    }
+
+    // ====== 步骤4: 安装PM2（如果没有） ======
+    if (pm2V === 'NONE' || !pm2V || pm2V === '未知') {
+      push(`📦 步骤4/9: 安装 PM2...`, 'info');
+      try {
+        await sshExec(targetIP, workingUser, workingPass,
+          'sudo npm install -g pm2 2>&1',
+          120000);
+        const newPm2 = await sshExec(targetIP, workingUser, workingPass, 'pm2 -v', 5000);
+        push(`  ✅ PM2 安装成功: ${newPm2.trim()}`, 'success');
+      } catch (e) {
+        throw new Error(`PM2安装失败: ${e.message}`);
+      }
+    } else {
+      push(`✅ 步骤4/9: PM2 已安装 (${pm2V})，跳过`, 'success');
+    }
+
+    // ====== 步骤5: 打包并传输代码 ======
+    push(`📦 步骤5/9: 打包并传输应用代码...`, 'info');
+    const tarFile = `/tmp/gms-deploy-${taskId}.tar.gz`;
+    try {
+      // 打包本地代码
+      push(`  正在打包代码 (排除node_modules)...`, 'info');
+      const { execSync: execSync2 } = require('child_process');
+      execSync2(`tar czf ${tarFile} -C ${projectRoot} --exclude=node_modules --exclude=.git --exclude='*.log' --exclude=uploads --exclude=.env --exclude=tmp --exclude='*.tar.gz' .`,
+        { stdio: 'pipe', timeout: 30000 });
+      const stat = fs.statSync(tarFile);
+      const sizeMB = (stat.size / 1024 / 1024).toFixed(2);
+      push(`  ✅ 打包完成: ${sizeMB} MB`, 'success');
+
+      // 创建远程目录
+      await sshExec(targetIP, workingUser, workingPass, 'mkdir -p ~/glove-management', 5000);
+
+      // SCP传输
+      push(`  正在传输到 ${targetIP}...`, 'info');
+      await scpPut(targetIP, workingUser, workingPass, tarFile, '/tmp/gms-deploy.tar.gz', 120000);
+      push(`  ✅ 传输完成`, 'success');
+
+      // 远程解压
+      await sshExec(targetIP, workingUser, workingPass,
+        'cd ~/glove-management && tar xzf /tmp/gms-deploy.tar.gz --overwrite 2>&1 && rm -f /tmp/gms-deploy.tar.gz && echo EXTRACT_OK',
+        30000);
+      push(`  ✅ 代码解压完成`, 'success');
+    } finally {
+      try { fs.unlinkSync(tarFile); } catch {}
+    }
+
+    // ====== 步骤6: 写入配置文件 ======
+    push(`⚙️ 步骤6/9: 写入配置文件...`, 'info');
+    const envContent = [
+      `PORT=8765`,
+      `NODE_ENV=production`,
+      `SERVER_ROLE=${role}`,
+      `SERVER_ID=${role}-${targetIP}`,
+      `DB_HOST=${dbHost}`,
+      `DB_PORT=${dbPort}`,
+      `DB_USER=${dbUser}`,
+      `DB_PASSWORD=${dbPassword}`,
+      `DB_NAME=${dbName}`,
+      `REDIS_URL=redis://${redisHost}:6379`,
+    ].join('\n');
+    const envB64 = Buffer.from(envContent).toString('base64');
+    await sshExec(targetIP, workingUser, workingPass,
+      `echo "${envB64}" | base64 -d > ~/glove-management/.env && chmod 644 ~/glove-management/.env && echo ENV_OK`,
+      5000);
+    push(`  ✅ .env 配置已写入 (DB: ${dbUser}@${dbHost})`, 'success');
+
+    const pm2Config = `module.exports={apps:[{name:'glove-management',script:'server.js',instances:'max',exec_mode:'cluster',env:{NODE_ENV:'production'},restart_delay:4000}]}`;
+    const pm2B64 = Buffer.from(pm2Config).toString('base64');
+    await sshExec(targetIP, workingUser, workingPass,
+      `echo "${pm2B64}" | base64 -d > ~/glove-management/ecosystem.config.js`,
+      5000);
+    push(`  ✅ PM2 配置已写入`, 'success');
+
+    // ====== 步骤7: 安装npm依赖 ======
+    push(`📚 步骤7/9: 安装 npm 依赖...`, 'info');
+    push(`  正在安装 (--production)，请稍候...`, 'info');
+    try {
+      const npmResult = await sshExec(targetIP, workingUser, workingPass,
+        'cd ~/glove-management && npm install --production 2>&1 && echo NPM_OK',
+        240000);
+      if (!npmResult.includes('NPM_OK')) throw new Error('npm install 未返回成功标记');
+      push(`  ✅ npm 依赖安装成功`, 'success');
+    } catch (e) {
+      push(`  ⚠️ production模式失败，尝试完整安装...`, 'warning');
+      const npmResult2 = await sshExec(targetIP, workingUser, workingPass,
+        'cd ~/glove-management && npm install 2>&1 && echo NPM_OK',
+        240000);
+      if (!npmResult2.includes('NPM_OK')) throw new Error('npm install 失败');
+      push(`  ✅ npm 依赖安装成功 (完整模式)`, 'success');
+    }
+
+    // ====== 步骤8: 启动服务 ======
+    push(`🚀 步骤8/9: 启动服务...`, 'info');
+    const startCmd = 'cd ~/glove-management && ' +
+      '(pm2 list 2>/dev/null | grep -q "glove-management" && pm2 restart glove-management --update-env || pm2 start ecosystem.config.js) 2>&1 && ' +
+      'pm2 save 2>&1 && echo PM2_OK';
+    const startResult = await sshExec(targetIP, workingUser, workingPass, startCmd, 30000);
+    if (startResult.includes('PM2_OK')) {
+      push(`  ✅ PM2 服务已启动`, 'success');
+    } else {
+      push(`  ⚠️ PM2 启动输出异常: ${startResult.substring(0, 100)}`, 'warning');
+    }
+
+    // 显示PM2状态
+    try {
+      const pm2List = await sshExec(targetIP, workingUser, workingPass, 'pm2 list 2>&1', 10000);
+      const statusLines = pm2List.split('\n').filter(l => l.includes('glove-management') || l.includes('online') || l.includes('stopped'));
+      statusLines.forEach(l => push(`  📊 ${l.trim().substring(0, 80)}`, 'info'));
+    } catch {}
+
+    // ====== 步骤9: 验证服务 ======
+    push(`🔍 步骤9/9: 验证服务状态...`, 'info');
+    let verified = false;
+    for (let i = 1; i <= 5; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const status = await sshExec(targetIP, workingUser, workingPass,
+          'curl -s --max-time 5 http://127.0.0.1:8765/api/status 2>&1',
+          8000);
+        if (status.includes('serverRole') || status.includes('version')) {
+          try {
+            const data = JSON.parse(status.match(/\{.*\}/)?.[0] || status);
+            push(`  ✅ 服务运行正常 | 角色: ${data.serverRole} | 版本: ${data.version}`, 'success');
+            push(`  ✅ 数据库连接: ${data.dbConnected ? '正常' : '异常'}`, data.dbConnected ? 'success' : 'warning');
+            verified = true;
+            break;
+          } catch {
+            push(`  ✅ 服务已响应`, 'success');
+            verified = true;
+            break;
+          }
+        }
+      } catch {}
+      push(`  ⏳ 第${i}/5次检查，服务未就绪...`, 'info');
+    }
+
+    if (!verified) {
+      push(`  ⚠️ 服务未在预期时间内就绪，获取错误日志...`, 'warning');
+      try {
+        const logs = await sshExec(targetIP, workingUser, workingPass,
+          'pm2 logs glove-management --lines 20 --nostream 2>&1',
+          10000);
+        logs.split('\n').slice(0, 20).forEach(l => {
+          if (l.trim()) push(`  📜 ${l.trim().substring(0, 120)}`, 'warning');
+        });
+      } catch {}
+    }
+
+    push(``, 'info');
+    push(`🎉 部署完成！访问地址: http://${targetIP}:8765`, 'success');
+    finishDeployTask(taskId, true);
+
+  } catch (error) {
+    push(`❌ 部署失败: ${error.message}`, 'error');
+    finishDeployTask(taskId, false);
+  }
+}
+
 // ==================== IN-MEMORY CACHE + REQUEST COALESCING ====================
 const _cache = new Map();
 const _inflight = new Map();  // key -> Promise (prevents thundering herd)
@@ -3186,106 +3482,86 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ========== 部署代码到远程服务器（打包传输） ==========
-    if (req.url === '/api/deploy-code' && req.method === 'POST') {
-      const bodyData = await parseBody(req);
-      const { targetIP, sshUser, password } = bodyData;
-
+    // ========== 一体式部署：启动部署任务 ==========
+    if (req.url === '/api/deploy/start' && req.method === 'POST') {
       const userData = await requireAuth(req, res);
       if (!userData) return;
       if (userData.role !== 'admin' && userData.role !== 'superadmin') {
         sendJSON(res, { error: 'Admin only' }, 403);
         return;
       }
+      const bodyData = await parseBody(req);
+      const { targetIP, sshUser, password, dbHost, dbPort, dbUser, dbPassword, dbName, redisHost, role } = bodyData;
       if (!targetIP) { sendJSON(res, { error: 'Missing targetIP' }, 400); return; }
 
-      const { exec } = require('child_process');
-      const path = require('path');
-      const fs = require('fs');
+      const taskId = 'deploy-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      createDeployLog(taskId);
 
-      // 获取当前项目根目录（server.js 所在目录）
-      const projectRoot = __dirname;
-      const tarFile = '/tmp/gms-deploy-' + Date.now() + '.tar.gz';
-      const remoteUser = sshUser || 'we';
+      const config = {
+        targetIP,
+        sshUser: sshUser || 'we',
+        password: password || '',
+        dbHost: dbHost || '127.0.0.1',
+        dbPort: parseInt(dbPort) || 3306,
+        dbUser: dbUser || 'gms_user',
+        dbPassword: dbPassword || 'gms_password_2024',
+        dbName: dbName || 'gms',
+        redisHost: redisHost || '127.0.0.1',
+        role: role || 'secondary'
+      };
 
-      try {
-        // 步骤1: 打包代码（排除 node_modules / .git / 日志 / 上传文件）
-        const excludeArgs = [
-          '--exclude=node_modules',
-          '--exclude=.git',
-          '--exclude=*.log',
-          '--exclude=uploads',
-          '--exclude=.env',
-          '--exclude=tmp',
-          '--exclude=*.tar.gz'
-        ].join(' ');
+      // 异步执行，不阻塞请求
+      setImmediate(() => runDeployment(taskId, config));
 
-        const tarCmd = `tar czf ${tarFile} -C ${projectRoot} ${excludeArgs} . 2>&1`;
-        const tarResult = await new Promise((resolve, reject) => {
-          exec(tarCmd, { timeout: 30000 }, (error, stdout, stderr) => {
-            if (error) reject(new Error(stderr || error.message));
-            else resolve(stdout || stderr || 'OK');
-          });
-        });
+      sendJSON(res, { success: true, taskId });
+      return;
+    }
 
-        // 检查打包文件大小
-        const stat = fs.statSync(tarFile);
-        const sizeMB = (stat.size / 1024 / 1024).toFixed(2);
+    // ========== 一体式部署：SSE实时日志 ==========
+    if (req.url.startsWith('/api/deploy/logs') && req.method === 'GET') {
+      const urlObj = new URL(req.url, `http://${req.headers.host}`);
+      const taskId = urlObj.searchParams.get('id');
+      if (!taskId) { sendJSON(res, { error: 'Missing task id' }, 400); return; }
 
-        // 步骤2: 确保 sshpass 已安装
-        if (password) {
-          await new Promise((resolve) => {
-            exec('which sshpass >/dev/null 2>&1 || apt-get install -y sshpass >/dev/null 2>&1 || sudo apt-get install -y sshpass >/dev/null 2>&1', { timeout: 30000 }, () => resolve());
-          });
-        }
-
-        // 步骤3: 在远程服务器创建目录
-        const remoteDir = '~/glove-management';
-        const sshBase = password
-          ? `sshpass -p '${password.replace(/'/g, "'\\''")}'`
-          : '';
-        const sshOpts = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o ServerAliveInterval=30`;
-
-        const mkdirCmd = `${sshBase} ${sshOpts} ${remoteUser}@${targetIP} 'mkdir -p ${remoteDir} && echo MKDIR_OK'`;
-        const mkdirResult = await new Promise((resolve, reject) => {
-          exec(mkdirCmd, { timeout: 20000 }, (error, stdout) => {
-            if (error) reject(new Error(stderr || error.message));
-            else resolve(stdout || '');
-          });
-        });
-
-        // 步骤4: 用 scp 传输压缩包
-        const scpCmd = `${sshBase} scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${tarFile} ${remoteUser}@${targetIP}:/tmp/gms-deploy.tar.gz`;
-        const scpResult = await new Promise((resolve, reject) => {
-          exec(scpCmd, { timeout: 120000 }, (error, stdout, stderr) => {
-            if (error) reject(new Error(stderr || error.message));
-            else resolve(stdout || 'SCP OK');
-          });
-        });
-
-        // 步骤5: 在远程服务器解压
-        const extractCmd = `${sshBase} ${sshOpts} ${remoteUser}@${targetIP} 'cd ${remoteDir} && tar xzf /tmp/gms-deploy.tar.gz --overwrite && rm -f /tmp/gms-deploy.tar.gz && echo EXTRACT_OK'`;
-        const extractResult = await new Promise((resolve, reject) => {
-          exec(extractCmd, { timeout: 30000 }, (error, stdout, stderr) => {
-            if (error) reject(new Error(stderr || error.message));
-            else resolve(stdout || '');
-          });
-        });
-
-        // 清理本地临时文件
-        try { fs.unlinkSync(tarFile); } catch {}
-
-        const extracted = (extractResult || '').includes('EXTRACT_OK');
-        sendJSON(res, {
-          success: true,
-          output: `打包: ${sizeMB}MB\n传输: OK\n解压: ${extracted ? 'OK' : '可能失败'}`,
-          packageSize: sizeMB + 'MB'
-        });
-      } catch (e) {
-        // 清理临时文件
-        try { fs.unlinkSync(tarFile); } catch {}
-        sendJSON(res, { error: e.message, output: '', success: false }, 500);
+      // SSE 支持 query 参数传递 token（EventSource不支持header）
+      let sseUser = null;
+      const queryToken = urlObj.searchParams.get('token');
+      if (queryToken) {
+        sseUser = await validateToken(queryToken);
       }
+      if (!sseUser) {
+        // 尝试从cookie或header获取
+        sseUser = await requireAuth(req, res);
+        if (!sseUser) return;
+      }
+      if (sseUser.role !== 'admin' && sseUser.role !== 'superadmin') {
+        sendJSON(res, { error: 'Admin only' }, 403);
+        return;
+      }
+
+      const task = deployTasks.get(taskId);
+      if (!task) { sendJSON(res, { error: 'Task not found' }, 404); return; }
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.write('event: connected\ndata: {"status":"ok","logs":' + JSON.stringify(task.logs) + '}\n\n');
+
+      // 如果任务已完成，立即发送done事件并关闭
+      if (task.status !== 'running') {
+        res.write(`event: done\ndata: ${JSON.stringify({ success: task.status === 'success' })}\n\n`);
+        res.end();
+        return;
+      }
+
+      task.listeners.push(res);
+      req.on('close', () => {
+        const idx = task.listeners.indexOf(res);
+        if (idx >= 0) task.listeners.splice(idx, 1);
+      });
       return;
     }
 
