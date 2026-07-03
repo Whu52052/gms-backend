@@ -1011,6 +1011,37 @@ async function runDeployment(taskId, config) {
       push(`  ⚠️ PM2 启动输出异常: ${startResult.substring(0, 100)}`, 'warning');
     }
 
+    // ====== 步骤8.5: 开放防火墙端口 ======
+    push(`🔓 步骤8.5/9: 开放防火墙端口 8765...`, 'info');
+    const tryExec = async (user, cmd) => {
+      try { return await sshExec(targetIP, user, workingPass, cmd, 5000); } catch { return null; }
+    };
+    
+    let fwOpened = false;
+    const fwCmds = [
+      'ufw allow 8765/tcp 2>&1',
+      'iptables -I INPUT -p tcp --dport 8765 -j ACCEPT 2>&1',
+      'firewall-cmd --permanent --add-port=8765/tcp 2>&1 || firewall-cmd --reload 2>&1 || echo "SKIP"'
+    ];
+    
+    for (const cmd of fwCmds) {
+      let result = await tryExec(workingUser, `sudo ${cmd}`);
+      if (result && !result.includes('Permission denied')) {
+        push(`  ✅ ${cmd.split(' ')[0]}: 端口已开放`, 'success');
+        fwOpened = true;
+      } else {
+        result = await tryExec('root', cmd);
+        if (result && !result.includes('Permission denied')) {
+          push(`  ✅ ${cmd.split(' ')[0]}(root): 端口已开放`, 'success');
+          fwOpened = true;
+        }
+      }
+    }
+    
+    if (!fwOpened) {
+      push(`  ⚠️ 无法自动开放端口，请手动在次服务器执行: sudo ufw allow 8765/tcp`, 'warning');
+    }
+
     // 显示PM2状态
     try {
       const pm2List = await sshExec(targetIP, workingUser, workingPass, 'pm2 list 2>&1', 10000);

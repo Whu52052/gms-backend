@@ -8768,12 +8768,50 @@ echo "[OK] 部署完成"
     if (!confirm('确定要开放8765端口吗？')) return;
 
     this._deployLog(`🔓 开放8765端口...`, 'info');
-    try {
-      const ufwResult = await this._sshCommand(config.ip, config.user, 'sudo ufw allow 8765/tcp 2>&1 || ufw allow 8765/tcp 2>&1 || echo "UFW_NOT_AVAILABLE"', 10000, password);
-      this._deployLog(`📝 UFW结果: ${ufwResult.substring(0, 100)}`, 'info');
+    
+    const trySSH = async (user, cmd) => {
+      try {
+        return await this._sshCommand(config.ip, user, cmd, 10000, password);
+      } catch {
+        return null;
+      }
+    };
 
-      const iptablesResult = await this._sshCommand(config.ip, config.user, 'sudo iptables -I INPUT -p tcp --dport 8765 -j ACCEPT 2>&1 && sudo iptables-save 2>&1 | head -3 || echo "IPTABLES_DONE"', 10000, password);
-      this._deployLog(`📝 iptables结果: ${iptablesResult.substring(0, 100)}`, 'info');
+    try {
+      const currentUser = config.user || 'we';
+      let result;
+      
+      result = await trySSH(currentUser, 'sudo ufw allow 8765/tcp 2>&1');
+      if (result && !result.includes('Permission denied')) {
+        this._deployLog(`✅ UFW: ${result.trim()}`, 'success');
+      } else {
+        result = await trySSH('root', 'ufw allow 8765/tcp 2>&1');
+        if (result && !result.includes('Permission denied')) {
+          this._deployLog(`✅ UFW(root): ${result.trim()}`, 'success');
+        }
+      }
+
+      result = await trySSH(currentUser, 'sudo iptables -I INPUT -p tcp --dport 8765 -j ACCEPT 2>&1');
+      if (result && !result.includes('Permission denied')) {
+        await trySSH(currentUser, 'sudo iptables-save 2>&1');
+        this._deployLog(`✅ iptables: 端口8765已开放`, 'success');
+      } else {
+        result = await trySSH('root', 'iptables -I INPUT -p tcp --dport 8765 -j ACCEPT 2>&1');
+        if (result && !result.includes('Permission denied')) {
+          await trySSH('root', 'iptables-save 2>&1');
+          this._deployLog(`✅ iptables(root): 端口8765已开放`, 'success');
+        }
+      }
+
+      result = await trySSH(currentUser, 'sudo firewall-cmd --permanent --add-port=8765/tcp 2>&1 || sudo firewall-cmd --reload 2>&1 || echo "FIREWALL_CMD_NOT_AVAIL"');
+      if (result && !result.includes('Permission denied') && !result.includes('FIREWALL_CMD_NOT_AVAIL')) {
+        this._deployLog(`✅ firewall-cmd: ${result.trim()}`, 'success');
+      } else {
+        result = await trySSH('root', 'firewall-cmd --permanent --add-port=8765/tcp 2>&1 || firewall-cmd --reload 2>&1 || echo "FIREWALL_CMD_NOT_AVAIL"');
+        if (result && !result.includes('Permission denied') && !result.includes('FIREWALL_CMD_NOT_AVAIL')) {
+          this._deployLog(`✅ firewall-cmd(root): ${result.trim()}`, 'success');
+        }
+      }
 
       this._deployLog(`✅ 端口开放操作完成，请尝试访问 http://${config.ip}:8765`, 'success');
     } catch (e) {
