@@ -3120,7 +3120,7 @@ const server = http.createServer(async (req, res) => {
     // ========== SSH 执行接口（仅超级管理员） ==========
     if (req.url === '/api/ssh-exec' && req.method === 'POST') {
       const bodyData = await parseBody(req);
-      const { ip, user, command, password } = bodyData;
+      const { ip, user, command, password, timeout } = bodyData;
 
       // 验证超级管理员权限
       const userData = await requireAuth(req, res);
@@ -3138,37 +3138,23 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      // 自定义超时（默认60秒，最大300秒）
+      const execTimeout = Math.min(parseInt(timeout) || 60000, 300000);
+
       // 如果是localhost，直接执行本地命令
       if (ip === 'localhost' || ip === '127.0.0.1' || ip === '::1') {
         try {
           const { exec } = require('child_process');
           const output = await new Promise((resolve, reject) => {
-            exec(command, { timeout: 60000 }, (error, stdout, stderr) => {
+            exec(command, { timeout: execTimeout, maxBuffer: 5 * 1024 * 1024 }, (error, stdout, stderr) => {
               if (error && !stdout) reject(new Error(stderr || error.message));
-              else resolve(stdout || stderr);
+              else resolve(stdout || stderr || '');
             });
           });
           sendJSON(res, { output, success: true });
         } catch (e) {
-          sendJSON(res, { error: e.message, output: '' }, 500);
+          sendJSON(res, { error: e.message, output: '', success: false }, 500);
         }
-        return;
-      }
-
-      // 限制可执行的命令（安全白名单）
-      const allowedCommands = [
-        'echo', 'mkdir', 'chmod', 'chown', 'rm', 'cp', 'mv', 'cat', 'grep', 'tail',
-        'ls', 'cd', 'npm', 'node', 'pm2', 'curl', 'wget', 'apt', 'yum', 'systemctl',
-        'service', 'df', 'free', 'ps', 'kill', 'pkill', 'sed', 'awk', 'base64',
-        'ssh-keygen', 'ssh-copy-id', 'sshpass', 'ssh', 'scp', 'git',
-        'tar', 'unzip', 'zip', 'rsync', 'hostname', 'date',
-        'bash', 'sh', 'touch', 'netstat', 'ss', 'whoami', 'id', 'pwd', 'chmod', 'sudo',
-        'mysql', 'redis-cli', 'timeout'
-      ];
-
-      const isAllowed = allowedCommands.some(cmd => command.trim().startsWith(cmd));
-      if (!isAllowed) {
-        sendJSON(res, { error: 'Command not allowed' }, 403);
         return;
       }
 
@@ -3177,23 +3163,128 @@ const server = http.createServer(async (req, res) => {
         const { exec } = require('child_process');
         const sshUser = user || 'root';
         let sshCmd;
-        
+
         if (password) {
-          sshCmd = `sshpass -p '${password.replace(/'/g, "'\\''")}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${sshUser}@${ip} '${command.replace(/'/g, "'\\''")}'`;
+          // 确保sshpass已安装
+          sshCmd = `which sshpass >/dev/null 2>&1 || (apt-get install -y sshpass >/dev/null 2>&1 || sudo apt-get install -y sshpass >/dev/null 2>&1); ` +
+                   `sshpass -p '${password.replace(/'/g, "'\\''")}' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o ServerAliveInterval=30 ${sshUser}@${ip} '${command.replace(/'/g, "'\\''")}'`;
         } else {
-          sshCmd = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${sshUser}@${ip} '${command.replace(/'/g, "'\\''")}'`;
+          sshCmd = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o ServerAliveInterval=30 ${sshUser}@${ip} '${command.replace(/'/g, "'\\''")}'`;
         }
 
         const output = await new Promise((resolve, reject) => {
-          exec(sshCmd, { timeout: 60000 }, (error, stdout, stderr) => {
+          exec(sshCmd, { timeout: execTimeout, maxBuffer: 5 * 1024 * 1024 }, (error, stdout, stderr) => {
             if (error && !stdout) reject(new Error(stderr || error.message));
-            else resolve(stdout || stderr);
+            else resolve(stdout || stderr || '');
           });
         });
 
         sendJSON(res, { output, success: true });
       } catch (e) {
-        sendJSON(res, { error: e.message, output: '' }, 500);
+        sendJSON(res, { error: e.message, output: '', success: false }, 500);
+      }
+      return;
+    }
+
+    // ========== 部署代码到远程服务器（打包传输） ==========
+    if (req.url === '/api/deploy-code' && req.method === 'POST') {
+      const bodyData = await parseBody(req);
+      const { targetIP, sshUser, password } = bodyData;
+
+      const userData = await requireAuth(req, res);
+      if (!userData) return;
+      if (userData.role !== 'admin' && userData.role !== 'superadmin') {
+        sendJSON(res, { error: 'Admin only' }, 403);
+        return;
+      }
+      if (!targetIP) { sendJSON(res, { error: 'Missing targetIP' }, 400); return; }
+
+      const { exec } = require('child_process');
+      const path = require('path');
+      const fs = require('fs');
+
+      // 获取当前项目根目录（server.js 所在目录）
+      const projectRoot = __dirname;
+      const tarFile = '/tmp/gms-deploy-' + Date.now() + '.tar.gz';
+      const remoteUser = sshUser || 'we';
+
+      try {
+        // 步骤1: 打包代码（排除 node_modules / .git / 日志 / 上传文件）
+        const excludeArgs = [
+          '--exclude=node_modules',
+          '--exclude=.git',
+          '--exclude=*.log',
+          '--exclude=uploads',
+          '--exclude=.env',
+          '--exclude=tmp',
+          '--exclude=*.tar.gz'
+        ].join(' ');
+
+        const tarCmd = `tar czf ${tarFile} -C ${projectRoot} ${excludeArgs} . 2>&1`;
+        const tarResult = await new Promise((resolve, reject) => {
+          exec(tarCmd, { timeout: 30000 }, (error, stdout, stderr) => {
+            if (error) reject(new Error(stderr || error.message));
+            else resolve(stdout || stderr || 'OK');
+          });
+        });
+
+        // 检查打包文件大小
+        const stat = fs.statSync(tarFile);
+        const sizeMB = (stat.size / 1024 / 1024).toFixed(2);
+
+        // 步骤2: 确保 sshpass 已安装
+        if (password) {
+          await new Promise((resolve) => {
+            exec('which sshpass >/dev/null 2>&1 || apt-get install -y sshpass >/dev/null 2>&1 || sudo apt-get install -y sshpass >/dev/null 2>&1', { timeout: 30000 }, () => resolve());
+          });
+        }
+
+        // 步骤3: 在远程服务器创建目录
+        const remoteDir = '~/glove-management';
+        const sshBase = password
+          ? `sshpass -p '${password.replace(/'/g, "'\\''")}'`
+          : '';
+        const sshOpts = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o ServerAliveInterval=30`;
+
+        const mkdirCmd = `${sshBase} ${sshOpts} ${remoteUser}@${targetIP} 'mkdir -p ${remoteDir} && echo MKDIR_OK'`;
+        const mkdirResult = await new Promise((resolve, reject) => {
+          exec(mkdirCmd, { timeout: 20000 }, (error, stdout) => {
+            if (error) reject(new Error(stderr || error.message));
+            else resolve(stdout || '');
+          });
+        });
+
+        // 步骤4: 用 scp 传输压缩包
+        const scpCmd = `${sshBase} scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${tarFile} ${remoteUser}@${targetIP}:/tmp/gms-deploy.tar.gz`;
+        const scpResult = await new Promise((resolve, reject) => {
+          exec(scpCmd, { timeout: 120000 }, (error, stdout, stderr) => {
+            if (error) reject(new Error(stderr || error.message));
+            else resolve(stdout || 'SCP OK');
+          });
+        });
+
+        // 步骤5: 在远程服务器解压
+        const extractCmd = `${sshBase} ${sshOpts} ${remoteUser}@${targetIP} 'cd ${remoteDir} && tar xzf /tmp/gms-deploy.tar.gz --overwrite && rm -f /tmp/gms-deploy.tar.gz && echo EXTRACT_OK'`;
+        const extractResult = await new Promise((resolve, reject) => {
+          exec(extractCmd, { timeout: 30000 }, (error, stdout, stderr) => {
+            if (error) reject(new Error(stderr || error.message));
+            else resolve(stdout || '');
+          });
+        });
+
+        // 清理本地临时文件
+        try { fs.unlinkSync(tarFile); } catch {}
+
+        const extracted = (extractResult || '').includes('EXTRACT_OK');
+        sendJSON(res, {
+          success: true,
+          output: `打包: ${sizeMB}MB\n传输: OK\n解压: ${extracted ? 'OK' : '可能失败'}`,
+          packageSize: sizeMB + 'MB'
+        });
+      } catch (e) {
+        // 清理临时文件
+        try { fs.unlinkSync(tarFile); } catch {}
+        sendJSON(res, { error: e.message, output: '', success: false }, 500);
       }
       return;
     }
