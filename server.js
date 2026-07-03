@@ -931,7 +931,7 @@ async function runDeployment(taskId, config) {
       // 打包本地代码
       push(`  正在打包代码 (排除node_modules)...`, 'info');
       const { execSync: execSync2 } = require('child_process');
-      execSync2(`tar czf ${tarFile} -C ${projectRoot} --exclude=node_modules --exclude=.git --exclude='*.log' --exclude=uploads --exclude=.env --exclude=tmp --exclude='*.tar.gz' .`,
+      execSync2(`tar czf ${tarFile} -C ${projectRoot} --ignore-failed-read --exclude=node_modules --exclude=.git --exclude='*.log' --exclude=uploads --exclude=.env --exclude=tmp --exclude='*.tar.gz' --exclude=data --exclude=binlog* --exclude=*.index --exclude=mysql* --exclude='#*' --exclude='*.err' .`,
         { stdio: 'pipe', timeout: 30000 });
       const stat = fs.statSync(tarFile);
       const sizeMB = (stat.size / 1024 / 1024).toFixed(2);
