@@ -50,7 +50,7 @@ echo "⏳ 等待服务就绪..."
 sleep 10
 
 # 健康检查
-if curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/health | grep -q 200; then
+if curl -s -o /dev/null -w "%{http_code}" http://localhost:8088/api/health | grep -q 200; then
     echo ""
     echo "========================================="
     echo "  ✅ 部署成功！"
@@ -73,5 +73,5 @@ else
     echo ""
     echo "⚠️  服务可能尚未完全启动，请稍等后检查："
     echo "  docker-compose ps"
-    echo "  curl http://localhost:80/api/health"
+    echo "  curl http://localhost:8088/api/health"
 fi

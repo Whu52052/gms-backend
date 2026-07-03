@@ -2400,7 +2400,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    if (req.url === '/api/events' && req.method === 'GET') {
+    if ((req.url === '/api/events' || req.url === '/api/sse') && req.method === 'GET') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -2595,7 +2595,14 @@ async function startup() {
     console.log('[DB] Database initialized successfully');
 
     // Init realtime engine (WebSocket + SSE 双通道)
-    realtime.init(server, { isConnected: () => redisClient && redisClient.isReady, subscribe: async (ch, fn) => { if (redisSub) await redisSub.subscribe(ch, fn); }, SSE_CHANNEL: 'sse:all' });
+    realtime.init(server, {
+      isConnected: () => redisClient && redisClient.isReady,
+      subscribe: async (ch, fn) => { if (redisSub) await redisSub.subscribe(ch, fn); },
+      publish: async (ch, payload) => {
+        if (redisPub) await redisPub.publish(ch, JSON.stringify(payload));
+      },
+      SSE_CHANNEL: 'sse:all',
+    });
 
     // Feishu sync initialized lazily on first tech_support operation
   } catch (e) {
@@ -2689,5 +2696,5 @@ function getStaticFile(filePath, contentType, cacheKey) {
   } catch { return null; }
 }
 
-// Start the server (single process — SSE broadcasting requires shared memory)
+// Start the server
 startup();

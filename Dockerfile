@@ -13,7 +13,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 # Copy application
-COPY server.js feishu.js ./
+COPY server.js feishu.js realtime.js ./
 COPY index.html operations.html ./
 COPY css/ ./css/
 COPY js/ ./js/

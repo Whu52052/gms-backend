@@ -31,6 +31,7 @@ const url = require('url');
 
 // ==================== STATE ====================
 let wss = null;
+let redisBridge = null;
 const clients = new Map();          // wsId → clientInfo
 const userSockets = new Map();     // userId → Set<ws>
 const sseClients = new Set();      // HTTP response objects
@@ -42,6 +43,7 @@ const STALE_TIMEOUT = 45000;       // 45秒无心跳→断开
 
 // ==================== INIT ====================
 function init(httpServer, redisModule) {
+  redisBridge = redisModule || null;
   wss = new WebSocketServer({
     server: httpServer,
     path: '/ws',
@@ -95,10 +97,25 @@ function init(httpServer, redisModule) {
   wss.on('close', () => clearInterval(heartbeat));
 
   // 订阅 Redis Pub/Sub (跨 Worker 广播)
-  if (redisModule && redisModule.isConnected()) {
-    redisModule.subscribe('realtime:broadcast', (msg) => {
-      // 转发给本 Worker 的所有 WebSocket + SSE 客户端
-      deliverToAll(msg);
+  if (redisBridge && redisBridge.isConnected()) {
+    redisBridge.subscribe('realtime:broadcast', (msg) => {
+      let payload = msg;
+      try {
+        if (typeof payload === 'string') payload = JSON.parse(payload);
+      } catch {
+        return;
+      }
+
+      const event = payload?.event || payload?.type;
+      if (!event) return;
+
+      const options = { ...(payload.options || {}) };
+      if (payload.force != null && options.force == null) options.force = payload.force;
+      if (payload.system != null && options.system == null) options.system = payload.system;
+      if (payload.userId != null && options.userId == null) options.userId = payload.userId;
+
+      // 只在本地投递，避免再次写回 Redis 形成广播环
+      deliver(event, payload.data, { ...options, fromRedis: true, ts: payload.ts });
     }).catch(() => {});
   }
 
@@ -210,11 +227,12 @@ async function handleAuth(ws, info, token) {
  * 核心投递方法: 同时通过 WebSocket + SSE 双通道发送
  */
 function deliver(event, data, options = {}) {
+  const { fromRedis, ts, ...clientOptions } = options;
   const message = {
     type: event,
     data,
-    ts: Date.now(),
-    ...options,
+    ts: ts || Date.now(),
+    ...clientOptions,
   };
 
   // 1. 本地 WebSocket 广播
@@ -224,11 +242,11 @@ function deliver(event, data, options = {}) {
       const info = clients.get(ws._yunweiId);
       if (!info || !info.authenticated) return;
       // 检查订阅过滤
-      if (info.subscriptions && !info.subscriptions.has(event) && !options.force) return;
+      if (info.subscriptions && !info.subscriptions.has(event) && !clientOptions.force) return;
       // 检查系统过滤
-      if (options.system && info.system !== options.system) return;
+      if (clientOptions.system && info.system !== clientOptions.system) return;
       // 检查用户过滤
-      if (options.userId && info.userId !== options.userId) return;
+      if (clientOptions.userId && info.userId !== clientOptions.userId) return;
       try { ws.send(payload); } catch {}
     }
   });
@@ -239,8 +257,15 @@ function deliver(event, data, options = {}) {
     try { res.write(sseFrame); } catch { sseClients.delete(res); }
   });
 
-  // 3. Redis Pub/Sub (跨 Worker)
-  // 由 broadcastRealTime() 调用, 避免双重广播
+  // 3. Redis Pub/Sub (跨 Worker/实例)
+  if (!fromRedis && redisBridge && redisBridge.isConnected() && typeof redisBridge.publish === 'function') {
+    redisBridge.publish('realtime:broadcast', {
+      event,
+      data,
+      options: clientOptions,
+      ts: message.ts,
+    }).catch(() => {});
+  }
 }
 
 /**

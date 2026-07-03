@@ -316,7 +316,9 @@
 
 ## 10. 实时推送 (SSE/WebSocket)
 
-### SSE: GET `/api/sse`
+### SSE: GET `/api/events`
+
+兼容旧路径: `/api/sse`
 
 **Headers:**
 ```

@@ -126,7 +126,11 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_DIR: /var/log/yunwei
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"
+    expose:
+      - "8765"
+      - "8766"
+      - "8767"
     volumes:
       - uploads_data:/app/uploads
       - log_data:/var/log/yunwei
