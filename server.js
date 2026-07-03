@@ -1021,8 +1021,8 @@ async function runDeployment(taskId, config) {
     // ====== 步骤9: 验证服务 ======
     push(`🔍 步骤9/9: 验证服务状态...`, 'info');
     let verified = false;
-    for (let i = 1; i <= 5; i++) {
-      await new Promise(r => setTimeout(r, 3000));
+    for (let i = 1; i <= 10; i++) {
+      await new Promise(r => setTimeout(r, 5000));
       try {
         const status = await sshExec(targetIP, workingUser, workingPass,
           'curl -s --max-time 5 http://127.0.0.1:8765/api/status 2>&1',
@@ -1039,19 +1039,35 @@ async function runDeployment(taskId, config) {
             verified = true;
             break;
           }
+        } else if (status.includes('Error') || status.includes('Connection refused')) {
+          try {
+            const portCheck = await sshExec(targetIP, workingUser, workingPass,
+              'ss -tlnp | grep 8765 || netstat -tlnp | grep 8765', 5000);
+            if (portCheck.includes('8765')) {
+              push(`  ⏳ 端口8765已监听，服务正在初始化...`, 'info');
+            }
+          } catch {}
         }
       } catch {}
-      push(`  ⏳ 第${i}/5次检查，服务未就绪...`, 'info');
+      push(`  ⏳ 第${i}/10次检查，服务未就绪...`, 'info');
     }
 
     if (!verified) {
-      push(`  ⚠️ 服务未在预期时间内就绪，获取错误日志...`, 'warning');
+      push(`  ⚠️ 服务未在预期时间内完全就绪（可能还在初始化数据库）`, 'warning');
+      push(`  ⚠️ 请等待几分钟后点击"检查次服务器状态"验证`, 'warning');
+      try {
+        const portCheck = await sshExec(targetIP, workingUser, workingPass,
+          'ss -tlnp | grep 8765 || netstat -tlnp | grep 8765', 5000);
+        if (portCheck.includes('8765')) {
+          push(`  ✅ 端口8765已监听，服务进程已启动`, 'success');
+        }
+      } catch {}
       try {
         const logs = await sshExec(targetIP, workingUser, workingPass,
-          'pm2 logs glove-management --lines 20 --nostream 2>&1',
+          'pm2 logs glove-management --lines 30 --nostream 2>&1',
           10000);
-        logs.split('\n').slice(0, 20).forEach(l => {
-          if (l.trim()) push(`  📜 ${l.trim().substring(0, 120)}`, 'warning');
+        logs.split('\n').slice(0, 30).forEach(l => {
+          if (l.trim()) push(`  📜 ${l.trim().substring(0, 120)}`, 'info');
         });
       } catch {}
     }
