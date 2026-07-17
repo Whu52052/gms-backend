@@ -5,6 +5,9 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# 加载环境变量（.env 文件）
+set -a && . .env 2>/dev/null && set +a || true
+
 echo "========================================"
 echo "  手套管理系统 v3.5 - Linux 自动重启"
 echo "  崩溃自动恢复，每24小时自动重启"

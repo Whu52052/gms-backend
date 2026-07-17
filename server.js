@@ -1924,7 +1924,7 @@ async function handleClearAllData(req, res, user) {
     await conn.beginTransaction();
     const tables = ['inventory', 'machines', 'transactions', 'audit_log',
       'ops_orders', 'ops_customers', 'ops_production', 'sn_registry', 'tech_support',
-      'equipment_config', 'inventory_config', 'settings', 'group_transfers', 'popup_messages'];
+      'settings', 'group_transfers', 'popup_messages'];
     for (const t of tables) await conn.execute('DELETE FROM ' + t);
     await conn.commit();
     // Clean uploaded photo files
@@ -1933,7 +1933,7 @@ async function handleClearAllData(req, res, user) {
         fs.readdirSync(UPLOADS_DIR).forEach(f => { try { fs.unlinkSync(path.join(UPLOADS_DIR, f)); } catch {} });
       }
     } catch {}
-    const events = ['inventory', 'machines', 'transactions', 'audit_log', 'ops_orders', 'ops_customers', 'ops_production', 'sn_registry', 'tech_support', 'equipment_config', 'inventory_config', 'group_transfers'];
+    const events = ['inventory', 'machines', 'transactions', 'audit_log', 'ops_orders', 'ops_customers', 'ops_production', 'sn_registry', 'tech_support', 'group_transfers'];
     events.forEach(e => broadcastSSE(e + '_updated', {}));
     sendJSON(res, { success: true });
   } catch (e) {
@@ -2021,7 +2021,7 @@ async function handleImportFull(req, res, user, body) {
       // Phase 1: Delete all data in transaction
       const tables = ['inventory', 'machines', 'transactions', 'audit_log', 'sn_registry',
         'ops_orders', 'ops_customers', 'ops_production', 'tech_support',
-        'settings', 'equipment_config', 'inventory_config', 'group_transfers', 'popup_messages'];
+        'settings', 'group_transfers', 'popup_messages'];
       for (const t of tables) await conn.execute('DELETE FROM ' + t);
 
       // Phase 2: Restore all data in same transaction
