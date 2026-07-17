@@ -122,6 +122,10 @@ services:
       REDIS_PORT: 6379
       FEISHU_APP_ID: cli_aaa42355f0389cfc
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-v2vU8YCrU0GHJdUsIa8nN1edaEGdkPm8}
+      # SZX3 多维表格 + 运维通知群机器人
+      FEISHU_APP_TOKEN: ${FEISHU_APP_TOKEN:-Lo7mb8Virax0k2smZticmh6JnAg}
+      FEISHU_TABLE_ID: ${FEISHU_TABLE_ID:-tblJ65qGy7te8NC5}
+      FEISHU_WEBHOOK: ${FEISHU_WEBHOOK:-https://open.feishu.cn/open-apis/bot/v2/hook/7a28653d-43b8-4586-a840-6736816304fb}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_DIR: /var/log/yunwei

@@ -10,13 +10,14 @@ const https = require('https');
 
 // ==================== CONFIG ====================
 const FEISHU_CONFIG = {
-  appId: 'cli_aaa42355f0389cfc',
-  appSecret: 'v2vU8YCrU0GHJdUsIa8nN1edaEGdkPm8',
-  appToken: 'Fi1iwkk9yiAmBUkDdv9cUWrVnuc',
-  tableId: 'tbl2e7qw33F7tatz',
+  appId: process.env.FEISHU_APP_ID || 'cli_aaa42355f0389cfc',
+  appSecret: process.env.FEISHU_APP_SECRET || 'v2vU8YCrU0GHJdUsIa8nN1edaEGdkPm8',
+  // SZX3 多维表格: https://weai-apac.feishu.cn/base/Lo7mb8Virax0k2smZticmh6JnAg?table=tblJ65qGy7te8NC5
+  appToken: process.env.FEISHU_APP_TOKEN || 'Lo7mb8Virax0k2smZticmh6JnAg',
+  tableId: process.env.FEISHU_TABLE_ID || 'tblJ65qGy7te8NC5',
   baseUrl: 'open.feishu.cn',
-  // 飞书群机器人 Webhook（运维通知群）
-  groupWebhook: process.env.FEISHU_WEBHOOK || 'https://open.feishu.cn/open-apis/bot/v2/hook/4f0d2714-f45d-4735-97b9-84fc39120d65',
+  // 飞书群机器人 Webhook（SZX3 运维通知群）
+  groupWebhook: process.env.FEISHU_WEBHOOK || 'https://open.feishu.cn/open-apis/bot/v2/hook/7a28653d-43b8-4586-a840-6736816304fb',
 };
 
 // ==================== TOKEN CACHE ====================

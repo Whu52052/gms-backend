@@ -1049,7 +1049,7 @@ async function handleSubmitTechSupport(req, res, authUser, body) {
     feishu.syncToFeishu(item).catch(e => console.error('[Feishu] Sync err:', e.message));
     feishu.sendGroupMessage(
       '🔧 新的技术支持请求',
-      `**提交人：** ${item.submitterName}\n**设备：** ${item.equipmentTypeName || item.equipmentType}\n**机器编号：** ${item.machineNumber}\n**故障类型：** ${item.faultType}\n**故障描述：** ${item.faultDescription || '无'}\n**提交时间：** ${new Date(item.submittedAt).toLocaleString('zh-CN')}\n\n[查看详情](http://10.5.50.100:8765)`
+      `**提交人：** ${item.submitterName}\n**设备：** ${item.equipmentTypeName || item.equipmentType}\n**机器编号：** ${item.machineNumber}\n**故障类型：** ${item.faultType}\n**故障描述：** ${item.faultDescription || '无'}\n**提交时间：** ${new Date(item.submittedAt).toLocaleString('zh-CN')}\n\n[查看详情](http://10.5.51.216:8765)`
     ).catch(e => console.error('[Feishu] Notify err:', e.message));
   });
 }
