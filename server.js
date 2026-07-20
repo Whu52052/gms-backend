@@ -12,6 +12,25 @@ const zlib = require('zlib');
 const cluster = require('cluster');
 const os = require('os');
 
+// ==================== DEV CONSOLE RING BUFFER ====================
+// Captures the last N console outputs for the developer panel (/api/dev/logs).
+// Non-intrusive: still calls the original console methods.
+const DEV_LOG_BUFFER_SIZE = 500;
+const devLogBuffer = [];
+const _origConsoleLog = console.log.bind(console);
+const _origConsoleWarn = console.warn.bind(console);
+const _origConsoleError = console.error.bind(console);
+function _pushDevLog(level, args) {
+  try {
+    const msg = args.map(a => typeof a === 'string' ? a : (typeof a === 'object' && a !== null ? (() => { try { return JSON.stringify(a); } catch { return String(a); } })() : String(a))).join(' ');
+    devLogBuffer.push({ ts: new Date().toISOString(), level, msg, worker: process.env.pm_id || '0' });
+    if (devLogBuffer.length > DEV_LOG_BUFFER_SIZE) devLogBuffer.shift();
+  } catch {}
+}
+console.log = function (...args) { _pushDevLog('INFO', args); _origConsoleLog(...args); };
+console.warn = function (...args) { _pushDevLog('WARN', args); _origConsoleWarn(...args); };
+console.error = function (...args) { _pushDevLog('ERROR', args); _origConsoleError(...args); };
+
 // ==================== FEISHU SYNC ====================
 const feishu = require('./feishu');
 
@@ -1761,6 +1780,299 @@ function handleLastBackup(req, res) {
   } catch { sendJSON(res, { lastModified: null }); }
 }
 
+// ==================== DEVELOPER PANEL (superadmin only) ====================
+const VERSION_FILE = path.join(__dirname, 'js', 'version.json');
+
+// Static route registry for the API explorer (mirrors the router section).
+const DEV_ROUTE_REGISTRY = [
+  { group: '认证', method: 'POST',   path: '/api/auth/login',                    desc: '登录', auth: false },
+  { group: '认证', method: 'POST',   path: '/api/auth/verify',                   desc: '验证 token', auth: false },
+  { group: '认证', method: 'POST',   path: '/api/beacon-logout',                 desc: '页面关闭时登出', auth: false },
+  { group: '认证', method: 'POST',   path: '/api/logout',                        desc: '登出', auth: true },
+  { group: '认证', method: 'POST',   path: '/api/change-password',               desc: '修改自己的密码', auth: true },
+  { group: '认证', method: 'GET',    path: '/api/health',                        desc: '健康检查', auth: false },
+  { group: '用户', method: 'GET',    path: '/api/users',                         desc: '用户列表', auth: true },
+  { group: '用户', method: 'POST',   path: '/api/users',                         desc: '新增用户', auth: true },
+  { group: '用户', method: 'PUT',    path: '/api/users/:id',                     desc: '更新用户', auth: true },
+  { group: '用户', method: 'DELETE', path: '/api/users/:id',                     desc: '删除用户', auth: true },
+  { group: '用户', method: 'POST',   path: '/api/users/:id/promote',             desc: '升降级用户角色', auth: true },
+  { group: '用户', method: 'POST',   path: '/api/users/:id/toggle-status',       desc: '启用/禁用用户', auth: true },
+  { group: '用户', method: 'POST',   path: '/api/users/:id/reset-password',      desc: '重置用户密码', auth: true },
+  { group: '用户', method: 'GET',    path: '/api/users/subordinates',            desc: '下属列表', auth: true },
+  { group: '用户', method: 'GET',    path: '/api/online-users',                  desc: '在线用户', auth: true },
+  { group: '用户', method: 'POST',   path: '/api/force-logout/:id',              desc: '强制下线', auth: true },
+  { group: '库存', method: 'GET',    path: '/api/inventory',                     desc: '全部库存', auth: true },
+  { group: '库存', method: 'GET',    path: '/api/inventory/:type',               desc: '某类库存', auth: true },
+  { group: '库存', method: 'POST',   path: '/api/inventory/:type',               desc: '调整库存', auth: true },
+  { group: '库存', method: 'POST',   path: '/api/inventory/transfer',            desc: '库存调拨', auth: true },
+  { group: '库存', method: 'GET',    path: '/api/inventory/transfer-stats',      desc: '调拨统计', auth: true },
+  { group: '机器', method: 'GET',    path: '/api/machines',                      desc: '机器列表', auth: true },
+  { group: '机器', method: 'POST',   path: '/api/machines',                      desc: '新增机器', auth: true },
+  { group: '机器', method: 'DELETE', path: '/api/machines/:id',                  desc: '删除机器', auth: true },
+  { group: '交易', method: 'GET',    path: '/api/transactions',                  desc: '交易记录', auth: true },
+  { group: '交易', method: 'POST',   path: '/api/transactions',                  desc: '新增交易', auth: true },
+  { group: '交易', method: 'DELETE', path: '/api/transactions/:id',              desc: '删除交易', auth: true },
+  { group: '审计', method: 'GET',    path: '/api/audit-log',                     desc: '审计日志', auth: true },
+  { group: '设置', method: 'GET',    path: '/api/settings',                      desc: '系统设置', auth: true },
+  { group: '设置', method: 'POST',   path: '/api/settings',                      desc: '保存系统设置', auth: true },
+  { group: '技术支持', method: 'GET',  path: '/api/tech-support',                 desc: '技术支持列表', auth: true },
+  { group: '技术支持', method: 'POST', path: '/api/tech-support',                 desc: '提交技术支持', auth: true },
+  { group: '技术支持', method: 'GET',  path: '/api/tech-support/:id',             desc: '技术支持详情', auth: true },
+  { group: '技术支持', method: 'POST', path: '/api/tech-support/:id/respond',     desc: '响应技术支持', auth: true },
+  { group: '技术支持', method: 'POST', path: '/api/tech-support/:id/complete',    desc: '完成技术支持', auth: true },
+  { group: '技术支持', method: 'DELETE', path: '/api/tech-support/:id',           desc: '删除技术支持', auth: true },
+  { group: '弹窗', method: 'GET',    path: '/api/popup-messages',                desc: '弹窗消息列表', auth: true },
+  { group: '弹窗', method: 'POST',   path: '/api/popup-messages',                desc: '新增弹窗消息', auth: true },
+  { group: '弹窗', method: 'DELETE', path: '/api/popup-messages/:id',            desc: '删除弹窗消息', auth: true },
+  { group: '分组调动', method: 'GET',  path: '/api/group/transfers',              desc: '调动申请列表', auth: true },
+  { group: '分组调动', method: 'GET',  path: '/api/group/members',                desc: '组成员列表', auth: true },
+  { group: '分组调动', method: 'POST', path: '/api/group/transfer',               desc: '创建调动', auth: true },
+  { group: '分组调动', method: 'POST', path: '/api/group/transfer/:id/approve',   desc: '批准调动', auth: true },
+  { group: '分组调动', method: 'POST', path: '/api/group/transfer/:id/reject',    desc: '拒绝调动', auth: true },
+  { group: '分组调动', method: 'POST', path: '/api/group/transfer/:id/cancel',    desc: '取消调动', auth: true },
+  { group: '配置', method: 'GET',    path: '/api/equipment-config',              desc: '设备配置', auth: true },
+  { group: '配置', method: 'POST',   path: '/api/equipment-config',              desc: '保存设备配置', auth: true },
+  { group: '配置', method: 'DELETE', path: '/api/equipment-config/:id',          desc: '删除设备配置', auth: true },
+  { group: '配置', method: 'GET',    path: '/api/inventory-config',              desc: '库存配置', auth: true },
+  { group: '配置', method: 'POST',   path: '/api/inventory-config',              desc: '保存库存配置', auth: true },
+  { group: '配置', method: 'DELETE', path: '/api/inventory-config/:id',          desc: '删除库存配置', auth: true },
+  { group: 'SN码', method: 'GET',    path: '/api/sn-registry',                   desc: 'SN 码列表', auth: true },
+  { group: 'SN码', method: 'POST',   path: '/api/sn-registry',                   desc: '新增/更新 SN', auth: true },
+  { group: 'SN码', method: 'DELETE', path: '/api/sn-registry/:id',               desc: '删除 SN', auth: true },
+  { group: 'SN码', method: 'POST',   path: '/api/sn-registry/delete-full',       desc: '完整删除 SN', auth: true },
+  { group: 'SN码', method: 'POST',   path: '/api/sn-registry/ship',              desc: 'SN 出货', auth: true },
+  { group: 'SN码', method: 'POST',   path: '/api/sn-registry/repair-complete',   desc: 'SN 维修完成', auth: true },
+  { group: '运营', method: 'GET',    path: '/api/ops-orders',                    desc: '订单数据', auth: true },
+  { group: '运营', method: 'POST',   path: '/api/ops-orders',                    desc: '保存订单', auth: true },
+  { group: '运营', method: 'GET',    path: '/api/ops-customers',                 desc: '客户数据', auth: true },
+  { group: '运营', method: 'POST',   path: '/api/ops-customers',                 desc: '保存客户', auth: true },
+  { group: '运营', method: 'GET',    path: '/api/ops-production',                desc: '生产数据', auth: true },
+  { group: '运营', method: 'POST',   path: '/api/ops-production',                desc: '保存生产', auth: true },
+  { group: '同步', method: 'GET',    path: '/api/sync',                          desc: '全量同步', auth: true },
+  { group: '数据', method: 'GET',    path: '/api/data-integrity',                desc: '数据完整性检查', auth: true },
+  { group: '数据', method: 'GET',    path: '/api/last-backup',                   desc: '最近备份时间', auth: true },
+  { group: '导出', method: 'GET',    path: '/api/export/xlsx',                   desc: '导出 Excel', auth: true },
+  { group: '导出', method: 'GET',    path: '/api/export/tech-support-xlsx',      desc: '导出技术支持 Excel', auth: true },
+  { group: '导出', method: 'GET',    path: '/api/export/full',                   desc: '导出 ZIP 全量', auth: true },
+  { group: '导入', method: 'POST',   path: '/api/import/full',                   desc: '导入 ZIP 全量', auth: true },
+  { group: '数据', method: 'POST',   path: '/api/clear-all-data',                desc: '清空全部数据', auth: true },
+  { group: '文件', method: 'POST',   path: '/api/upload',                        desc: '上传文件', auth: true },
+  { group: '文件', method: 'POST',   path: '/api/delete-upload',                 desc: '删除上传文件', auth: true },
+  { group: '开发者', method: 'GET',  path: '/api/dev/health',                    desc: '系统健康', auth: true, superadmin: true },
+  { group: '开发者', method: 'GET',  path: '/api/dev/routes',                    desc: 'API 路由表', auth: true, superadmin: true },
+  { group: '开发者', method: 'GET',  path: '/api/dev/version',                   desc: '读取版本号', auth: true, superadmin: true },
+  { group: '开发者', method: 'POST', path: '/api/dev/version',                   desc: '更新版本号', auth: true, superadmin: true },
+  { group: '开发者', method: 'GET',  path: '/api/dev/cache',                     desc: '缓存统计', auth: true, superadmin: true },
+  { group: '开发者', method: 'POST', path: '/api/dev/cache',                     desc: '清空缓存', auth: true, superadmin: true },
+  { group: '开发者', method: 'GET',  path: '/api/dev/logs',                      desc: '实时日志', auth: true, superadmin: true },
+  { group: '开发者', method: 'POST', path: '/api/dev/html-bump',                 desc: '更新 HTML 缓存版本', auth: true, superadmin: true },
+];
+
+function _requireSuperadmin(res, authUser) {
+  if (authUser.role !== 'superadmin') {
+    sendJSON(res, { error: '仅超级管理员可访问开发者后台' }, 403);
+    return false;
+  }
+  return true;
+}
+
+function _fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + ' MB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+async function handleDevHealth(req, res) {
+  const mem = process.memoryUsage();
+  const uptime = process.uptime();
+  const uptimeHuman = Math.floor(uptime / 86400) + 'd ' + Math.floor((uptime % 86400) / 3600) + 'h ' + Math.floor((uptime % 3600) / 60) + 'm';
+
+  // DB probe
+  let db = { status: 'unknown' };
+  try {
+    const t0 = Date.now();
+    const [rows] = await pool.execute('SELECT COUNT(*) AS c FROM users');
+    db = { status: 'ok', latencyMs: Date.now() - t0, host: DB_HOST + ':' + DB_PORT, database: DB_NAME, userCount: rows[0].c };
+  } catch (e) { db = { status: 'error', error: e.message }; }
+
+  // Redis probe
+  let redis = { status: 'unavailable' };
+  if (redisClient) {
+    try {
+      const t0 = Date.now();
+      const pong = await redisClient.ping();
+      redis = { status: pong === 'PONG' ? 'ok' : 'error', latencyMs: Date.now() - t0, ready: redisClient.isReady, isOpen: redisClient.isOpen };
+    } catch (e) { redis = { status: 'error', error: e.message }; }
+  }
+
+  // Cache & inflight
+  let cacheSize = 0;
+  try { cacheSize = JSON.stringify(Array.from(_cache.values())).length; } catch {}
+  const cacheEntries = Array.from(_cache.entries()).map(([k, v]) => ({
+    key: k, ageMs: Date.now() - v.ts, ageHuman: Math.max(0, Math.floor((Date.now() - v.ts) / 1000)) + 's',
+  }));
+
+  // Online users (memory tokens + Redis)
+  let onlineCount = 0;
+  try {
+    const now = Date.now();
+    onlineCount = Object.values(tokens).filter(t => t.expires > now).length;
+    if (redisClient && redisClient.isReady) {
+      const keys = await redisClient.keys('tk:*');
+      onlineCount = Math.max(onlineCount, keys.length);
+    }
+  } catch {}
+
+  // Load average (not on Windows)
+  const loadavg = os.loadavg ? os.loadavg() : [0, 0, 0];
+
+  sendJSON(res, {
+    uptime, uptimeHuman,
+    memory: {
+      rss: mem.rss, rssHuman: _fmtBytes(mem.rss),
+      heapTotal: mem.heapTotal, heapTotalHuman: _fmtBytes(mem.heapTotal),
+      heapUsed: mem.heapUsed, heapUsedHuman: _fmtBytes(mem.heapUsed),
+      external: mem.external, externalHuman: _fmtBytes(mem.external),
+      arrayBuffers: mem.arrayBuffers,
+      heapUsagePercent: mem.heapTotal ? +(mem.heapUsed / mem.heapTotal * 100).toFixed(1) : 0,
+    },
+    cpu: { loadavg1: loadavg[0], loadavg5: loadavg[1], loadavg15: loadavg[2], cores: os.cpus().length },
+    process: { pid: process.pid, workerId: process.env.pm_id || 'standalone', nodeVersion: process.version, platform: process.platform, arch: process.arch },
+    db, redis,
+    cache: { size: _cache.size, inflight: _inflight.size, approxBytes: cacheSize, entries: cacheEntries },
+    onlineUsers: onlineCount,
+    tokensInMemory: Object.keys(tokens).length,
+    generatedAt: new Date().toISOString(),
+  });
+}
+
+function handleDevRoutes(req, res) {
+  sendJSON(res, { routes: DEV_ROUTE_REGISTRY, total: DEV_ROUTE_REGISTRY.length });
+}
+
+function handleDevVersionGet(req, res) {
+  try {
+    const data = fs.readFileSync(VERSION_FILE, 'utf8');
+    const parsed = JSON.parse(data);
+    // Also expose the version params referenced in operations.html / index.html for quick bumping
+    const result = { version: parsed };
+    try {
+      const opsHtml = fs.readFileSync(path.join(__dirname, 'operations.html'), 'utf8');
+      const opsCssMatch = opsHtml.match(/operations\.css\?v=([^\s"']+)/);
+      const opsJsMatch = opsHtml.match(/operations\.js\?v=([^\s"']+)/);
+      const appJsMatch = opsHtml.match(/app\.js\?v=([^\s"']+)/);
+      result.htmlRefs = {
+        'operations.css': opsCssMatch ? opsCssMatch[1] : null,
+        'js/operations.js': opsJsMatch ? opsJsMatch[1] : null,
+        'js/app.js': appJsMatch ? appJsMatch[1] : null,
+      };
+    } catch {}
+    sendJSON(res, result);
+  } catch (e) {
+    sendJSON(res, { error: '读取版本文件失败: ' + e.message }, 500);
+  }
+}
+
+function handleDevVersionSet(req, res, body) {
+  // body: { updates: { app: 18, operations: 11 } } OR { key: 'app', value: 18 }
+  try {
+    const current = JSON.parse(fs.readFileSync(VERSION_FILE, 'utf8'));
+    const updates = body.updates || {};
+    if (body.key && body.value !== undefined) updates[body.key] = body.value;
+    let changed = 0;
+    Object.keys(updates).forEach(k => {
+      if (typeof updates[k] === 'number' && Number.isFinite(updates[k])) {
+        current[k] = updates[k];
+        changed++;
+      }
+    });
+    if (changed === 0) { sendJSON(res, { error: '未提供有效更新' }, 400); return; }
+    fs.writeFileSync(VERSION_FILE, JSON.stringify(current, null, 2) + '\n');
+    sendJSON(res, { success: true, version: current, changed });
+  } catch (e) {
+    sendJSON(res, { error: '保存版本文件失败: ' + e.message }, 500);
+  }
+}
+
+function handleDevCacheGet(req, res) {
+  const entries = Array.from(_cache.entries()).map(([k, v]) => {
+    let size = 0;
+    try { size = JSON.stringify(v.data).length; } catch {}
+    return { key: k, ageMs: Date.now() - v.ts, ageHuman: Math.max(0, Math.floor((Date.now() - v.ts) / 1000)) + 's', sizeBytes: size };
+  });
+  const inflight = Array.from(_inflight.keys());
+  sendJSON(res, {
+    size: _cache.size,
+    inflightCount: _inflight.size,
+    inflightKeys: inflight,
+    ttlConfig: CACHE_TTL,
+    entries,
+  });
+}
+
+function handleDevCacheClear(req, res) {
+  const cleared = _cache.size;
+  _cache.clear();
+  sendJSON(res, { success: true, cleared, remaining: _cache.size });
+}
+
+function handleDevLogs(req, res) {
+  const url = new URL(req.url, 'http://localhost');
+  const level = url.searchParams.get('level') || 'all'; // all|INFO|WARN|ERROR
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '300'), DEV_LOG_BUFFER_SIZE);
+  let logs = devLogBuffer;
+  if (level !== 'all') logs = logs.filter(l => l.level === level);
+  const sliced = logs.slice(-limit);
+  sendJSON(res, {
+    logs: sliced,
+    total: devLogBuffer.length,
+    shown: sliced.length,
+    workerId: process.env.pm_id || 'standalone',
+    bufferSize: DEV_LOG_BUFFER_SIZE,
+  });
+}
+
+// Bump the ?v=N cache-busting query param for a static asset reference inside an HTML file.
+// body: { file: 'operations.html'|'index.html', asset: 'operations.css'|'js/operations.js', value?: number }
+// If value omitted, auto-increments the existing number by 1.
+function handleDevHtmlBump(req, res, body) {
+  const ALLOWED_HTML = new Set(['operations.html', 'index.html']);
+  const file = body && body.file;
+  const asset = body && body.asset;
+  if (!ALLOWED_HTML.has(file) || !asset || typeof asset !== 'string') {
+    sendJSON(res, { error: '参数无效 (file 必须是 operations.html/index.html, asset 必填)' }, 400);
+    return;
+  }
+  try {
+    const filePath = path.join(__dirname, file);
+    let content = fs.readFileSync(filePath, 'utf8');
+    // Match asset?v=N or asset?v=N.N  (preserve the ?v= prefix)
+    // Escape asset for regex (handle forward slashes and dots)
+    const escAsset = asset.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(' + escAsset + '\\?v=)([0-9]+)(\\.[0-9]+)?');
+    const m = content.match(re);
+    if (!m) {
+      sendJSON(res, { error: `在 ${file} 中未找到 ${asset}?v= 引用` }, 404);
+      return;
+    }
+    const oldVal = m[2] + (m[3] || '');
+    let newVal;
+    if (typeof body.value === 'number' && Number.isFinite(body.value)) {
+      newVal = String(Math.floor(body.value));
+    } else {
+      // Auto-increment integer part
+      newVal = String(parseInt(m[2], 10) + 1) + (m[3] || '');
+    }
+    content = content.replace(re, m[1] + newVal);
+    fs.writeFileSync(filePath, content, 'utf8');
+    // Invalidate static file cache for this HTML so the next request serves the new version
+    sendJSON(res, { success: true, file, asset, oldVersion: oldVal, newVersion: newVal });
+  } catch (e) {
+    sendJSON(res, { error: '更新 HTML 版本失败: ' + e.message }, 500);
+  }
+}
+
 // -- XLSX Export --
 async function handleExportXLSX(req, res, user) {
   const XLSX = require('xlsx');
@@ -2588,6 +2900,19 @@ const server = http.createServer(async (req, res) => {
     // File upload / delete
     if (url.pathname === '/api/upload' && req.method === 'POST') return handleUpload(req, res, body);
     if (url.pathname === '/api/delete-upload' && req.method === 'POST') return handleDeleteUpload(req, res, body);
+
+    // ==================== DEVELOPER PANEL (superadmin only) ====================
+    if (url.pathname.startsWith('/api/dev/')) {
+      if (!_requireSuperadmin(res, authUser)) return;
+      if (url.pathname === '/api/dev/health' && req.method === 'GET')  return handleDevHealth(req, res);
+      if (url.pathname === '/api/dev/routes' && req.method === 'GET')  return handleDevRoutes(req, res);
+      if (url.pathname === '/api/dev/version' && req.method === 'GET') return handleDevVersionGet(req, res);
+      if (url.pathname === '/api/dev/version' && req.method === 'POST') return handleDevVersionSet(req, res, body);
+      if (url.pathname === '/api/dev/cache' && req.method === 'GET')   return handleDevCacheGet(req, res);
+      if (url.pathname === '/api/dev/cache' && req.method === 'POST')  return handleDevCacheClear(req, res);
+      if (url.pathname === '/api/dev/logs' && req.method === 'GET')    return handleDevLogs(req, res);
+      if (url.pathname === '/api/dev/html-bump' && req.method === 'POST') return handleDevHtmlBump(req, res, body);
+    }
 
     sendJSON(res, { error: 'Not found' }, 404);
   } catch (e) {

@@ -34,6 +34,7 @@ const OpsApp = {
       this._updateTechSupportNav();
       // Show user management nav only for admin/superadmin
       this._updateUserManagementNav();
+      this._updateDevNav();
       this._loadLocalData();
       this.updateSidebarUser();
       this.updateUserDisplay();
@@ -126,6 +127,7 @@ const OpsApp = {
     this.initStatusBar();
     this._updateTechSupportNav();
     this._updateUserManagementNav();
+    this._updateDevNav();
     this.notify('欢迎，' + result.user.username + '！');
   },
 
@@ -216,6 +218,10 @@ const OpsApp = {
       'tech-support-my': '我的技术支持请求',
       'user-management': '账户管理',
       'popup-messages': '弹窗句子管理',
+      'dev-health': '系统健康',
+      'dev-api': 'API 调试台',
+      'dev-version': '版本与缓存',
+      'dev-logs': '日志与完整性',
     };
     const titleEl = document.getElementById('topbar-page-title');
     if (titleEl) titleEl.textContent = titleMap[tab] || '运营系统';
@@ -247,6 +253,10 @@ const OpsApp = {
       case 'tech-support-my': this.renderTechSupportMy(); break;
       case 'user-management': this.renderUserManagement(); break;
       case 'popup-messages': this.renderPopupMessages(); break;
+      case 'dev-health': this.renderDevHealth(); break;
+      case 'dev-api': this.renderDevApi(); break;
+      case 'dev-version': this.renderDevVersion(); break;
+      case 'dev-logs': this.renderDevLogs(); break;
       default: this.renderPersonalAnalysis(); break;
     }
   },
@@ -876,6 +886,15 @@ const OpsApp = {
     if (navGroup) {
       // Show user management nav only for admin or superadmin
       navGroup.style.display = (user && (user.role === 'admin' || user.role === 'superadmin')) ? '' : 'none';
+    }
+  },
+
+  _updateDevNav() {
+    const user = API.currentUser;
+    const navGroup = document.getElementById('nav-group-dev');
+    if (navGroup) {
+      // Show developer nav only for superadmin
+      navGroup.style.display = (user && user.role === 'superadmin') ? '' : 'none';
     }
   },
 
@@ -1807,5 +1826,478 @@ const OpsApp = {
     labels.forEach((l, i) => {
       ctx.fillText(l, pad.left + (pw / (labels.length - 1 || 1)) * i, h - 6);
     });
+  },
+
+  // ==================== DEVELOPER PANEL ====================
+  _devGuard() {
+    const user = API.currentUser;
+    if (!user || user.role !== 'superadmin') {
+      document.getElementById('main-content').innerHTML = '<p class="empty-text">🚫 无权限访问（仅超级管理员）</p>';
+      return false;
+    }
+    return true;
+  },
+
+  _devStopTimers() {
+    ['_devHealthTimer', '_devLogsTimer'].forEach(k => {
+      if (this[k]) { clearInterval(this[k]); this[k] = null; }
+    });
+  },
+
+  _devBytes(n) {
+    if (n == null) return '-';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(2) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  },
+
+  _devStatusBadge(status) {
+    const map = { ok: 'green', error: 'red', unavailable: 'gray', unknown: 'gray' };
+    const cls = map[status] || 'gray';
+    return '<span class="dev-badge dev-badge-' + cls + '">' + status + '</span>';
+  },
+
+  // ---------- 系统健康 ----------
+  renderDevHealth() {
+    if (!this._devGuard()) return;
+    this._devStopTimers();
+    document.getElementById('main-content').innerHTML = `
+      <div class="dev-panel">
+        <div class="dev-toolbar">
+          <h2>💚 系统健康</h2>
+          <div class="dev-toolbar-actions">
+            <label class="dev-auto-toggle"><input type="checkbox" id="dev-health-auto" checked> 自动刷新 (5s)</label>
+            <button class="btn btn-sm btn-outline" onclick="OpsApp._devHealthLoad()">⟳ 刷新</button>
+          </div>
+        </div>
+        <div id="dev-health-content"><p class="empty-text">加载中...</p></div>
+      </div>`;
+    this._devHealthLoad();
+    this._devHealthTimer = setInterval(() => {
+      if (document.getElementById('dev-health-auto')?.checked) this._devHealthLoad();
+    }, 5000);
+  },
+
+  async _devHealthLoad() {
+    const data = await API._fetch('GET', '/api/dev/health');
+    const el = document.getElementById('dev-health-content');
+    if (!el) return;
+    if (!data || data.error) {
+      el.innerHTML = '<p class="empty-text">⚠ 获取失败: ' + (data?.error || '网络错误') + '</p>';
+      return;
+    }
+    const m = data.memory || {};
+    const p = data.process || {};
+    const c = data.cpu || {};
+    const db = data.db || {};
+    const rd = data.redis || {};
+    const ca = data.cache || {};
+    const heapPct = m.heapUsagePercent || 0;
+    const heapBarColor = heapPct > 85 ? '#e53935' : heapPct > 60 ? '#fb8c00' : '#43a047';
+    el.innerHTML = `
+      <div class="dev-grid">
+        <div class="dev-card">
+          <div class="dev-card-title">⏱ 运行时间</div>
+          <div class="dev-metric-big">${data.uptimeHuman || '-'}</div>
+          <div class="dev-metric-sub">PID ${p.pid || '-'} · Worker ${p.workerId || '-'}</div>
+        </div>
+        <div class="dev-card">
+          <div class="dev-card-title">🧠 内存 (RSS)</div>
+          <div class="dev-metric-big">${m.rssHuman || '-'}</div>
+          <div class="dev-metric-sub">堆 ${m.heapUsedHuman || '-'} / ${m.heapTotalHuman || '-'}</div>
+        </div>
+        <div class="dev-card">
+          <div class="dev-card-title">💾 堆使用率</div>
+          <div class="dev-metric-big">${heapPct}%</div>
+          <div class="dev-progress"><div class="dev-progress-bar" style="width:${heapPct}%;background:${heapBarColor};"></div></div>
+        </div>
+        <div class="dev-card">
+          <div class="dev-card-title">👥 在线用户</div>
+          <div class="dev-metric-big">${data.onlineUsers ?? 0}</div>
+          <div class="dev-metric-sub">内存 token: ${data.tokensInMemory ?? 0}</div>
+        </div>
+        <div class="dev-card">
+          <div class="dev-card-title">🗄 数据库</div>
+          <div class="dev-metric-big">${this._devStatusBadge(db.status)}</div>
+          <div class="dev-metric-sub">${db.host ? db.host + ' · ' + (db.latencyMs != null ? db.latencyMs + 'ms' : '') : (db.error || '')}</div>
+          ${db.userCount != null ? '<div class="dev-metric-sub">用户数: ' + db.userCount + '</div>' : ''}
+        </div>
+        <div class="dev-card">
+          <div class="dev-card-title">⚡ Redis</div>
+          <div class="dev-metric-big">${this._devStatusBadge(rd.status)}</div>
+          <div class="dev-metric-sub">${rd.latencyMs != null ? rd.latencyMs + 'ms · ready=' + rd.ready : (rd.error || '未启用')}</div>
+        </div>
+        <div class="dev-card">
+          <div class="dev-card-title">📦 缓存</div>
+          <div class="dev-metric-big">${ca.size ?? 0} <span class="dev-metric-unit">条</span></div>
+          <div class="dev-metric-sub">进行中: ${ca.inflight ?? 0} · 约 ${this._devBytes(ca.approxBytes)}</div>
+        </div>
+        <div class="dev-card">
+          <div class="dev-card-title">⚙️ CPU 负载</div>
+          <div class="dev-metric-big">${(c.loadavg1 ?? 0).toFixed(2)}</div>
+          <div class="dev-metric-sub">${c.cores ?? 0} 核 · 5min ${(c.loadavg5 ?? 0).toFixed(2)} · 15min ${(c.loadavg15 ?? 0).toFixed(2)}</div>
+        </div>
+      </div>
+      <div class="dev-card dev-card-wide">
+        <div class="dev-card-title">📋 进程信息</div>
+        <table class="dev-table">
+          <tr><td>Node 版本</td><td>${p.nodeVersion || '-'}</td><td>平台</td><td>${p.platform || '-'} / ${p.arch || '-'}</td></tr>
+          <tr><td>缓存条目</td><td colspan="3">${(ca.entries || []).map(e => e.key + '(' + e.ageHuman + ')').join(' · ') || '无'}</td></tr>
+          <tr><td>生成时间</td><td colspan="3">${data.generatedAt || '-'}</td></tr>
+        </table>
+      </div>`;
+  },
+
+  // ---------- API 调试台 ----------
+  _devRoutesData: null,
+
+  renderDevApi() {
+    if (!this._devGuard()) return;
+    this._devStopTimers();
+    document.getElementById('main-content').innerHTML = `
+      <div class="dev-panel">
+        <div class="dev-toolbar">
+          <h2>🔌 API 调试台</h2>
+          <div class="dev-toolbar-actions">
+            <input type="text" id="dev-api-filter" placeholder="搜索路径或描述..." oninput="OpsApp._devApiFilter()" class="dev-input" style="width:240px;">
+            <button class="btn btn-sm btn-outline" onclick="OpsApp._devApiLoad()">⟳ 刷新</button>
+          </div>
+        </div>
+        <p class="dev-tip">点击行展开调试面板，可直接调用接口并查看响应。</p>
+        <div id="dev-api-content"><p class="empty-text">加载中...</p></div>
+        <div id="dev-api-tester" class="dev-tester" style="display:none;"></div>
+      </div>`;
+    this._devApiLoad();
+  },
+
+  async _devApiLoad() {
+    const data = await API._fetch('GET', '/api/dev/routes');
+    if (!data || data.error) {
+      document.getElementById('dev-api-content').innerHTML = '<p class="empty-text">⚠ 加载失败: ' + (data?.error || '网络错误') + '</p>';
+      return;
+    }
+    this._devRoutesData = data.routes || [];
+    this._devApiRender();
+  },
+
+  _devApiFilter() {
+    this._devApiRender();
+  },
+
+  _devApiRender() {
+    const q = (document.getElementById('dev-api-filter')?.value || '').toLowerCase().trim();
+    const routes = (this._devRoutesData || []).filter(r => {
+      if (!q) return true;
+      return r.path.toLowerCase().includes(q) || (r.desc || '').toLowerCase().includes(q) || (r.group || '').toLowerCase().includes(q);
+    });
+    // Group by group
+    const groups = {};
+    routes.forEach(r => { (groups[r.group] = groups[r.group] || []).push(r); });
+    let lastGroup = '';
+    const rows = routes.map(r => {
+      let groupCell = '';
+      if (r.group !== lastGroup) { groupCell = '<td class="dev-group-cell">' + r.group + '</td>'; lastGroup = r.group; }
+      else groupCell = '<td class="dev-group-cell"></td>';
+      const methodCls = 'dev-method dev-method-' + r.method;
+      const authTag = r.superadmin ? '<span class="dev-tag dev-tag-red">超管</span>' : (r.auth ? '<span class="dev-tag dev-tag-blue">鉴权</span>' : '<span class="dev-tag dev-tag-gray">公开</span>');
+      return `<tr class="dev-route-row" onclick="OpsApp._devApiOpen('${r.method}','${r.path}')">
+        ${groupCell}
+        <td><span class="${methodCls}">${r.method}</span></td>
+        <td class="dev-path">${r.path}</td>
+        <td>${r.desc || ''}</td>
+        <td>${authTag}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('dev-api-content').innerHTML = `
+      <div class="dev-route-count">共 ${routes.length} 个接口</div>
+      <table class="dev-table dev-table-routes">
+        <thead><tr><th>分组</th><th>方法</th><th>路径</th><th>说明</th><th>鉴权</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="empty-text">无匹配接口</td></tr>'}</tbody>
+      </table>`;
+  },
+
+  _devApiOpen(method, path) {
+    const tester = document.getElementById('dev-api-tester');
+    if (!tester) return;
+    const hasBody = method === 'POST' || method === 'PUT';
+    tester.style.display = 'block';
+    tester.innerHTML = `
+      <div class="dev-tester-header">
+        <span>🧪 接口调试</span>
+        <button class="dev-tester-close" onclick="document.getElementById('dev-api-tester').style.display='none';">✕</button>
+      </div>
+      <div class="dev-tester-row">
+        <span class="dev-method dev-method-${method}">${method}</span>
+        <input type="text" id="dev-tester-path" class="dev-input" value="${path}" style="flex:1;font-family:monospace;">
+        <button class="btn btn-sm btn-primary" onclick="OpsApp._devApiSend()">发送</button>
+      </div>
+      ${hasBody ? `<div class="dev-tester-body"><label>请求体 (JSON):</label><textarea id="dev-tester-body" class="dev-textarea" placeholder='{ "key": "value" }'></textarea></div>` : ''}
+      <div class="dev-tester-resp">
+        <div class="dev-tester-resp-header">响应 <span id="dev-tester-status"></span></div>
+        <pre id="dev-tester-output" class="dev-pre">— 等待发送 —</pre>
+      </div>`;
+    tester.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  },
+
+  async _devApiSend() {
+    const method = document.querySelector('#dev-api-tester .dev-method').textContent.trim();
+    const path = document.getElementById('dev-tester-path').value.trim();
+    const bodyText = document.getElementById('dev-tester-body')?.value || '';
+    const out = document.getElementById('dev-tester-output');
+    const statusEl = document.getElementById('dev-tester-status');
+    if (out) out.textContent = '⏳ 发送中...';
+    if (statusEl) statusEl.textContent = '';
+    try {
+      const opts = { method, headers: API._headers() };
+      if ((method === 'POST' || method === 'PUT') && bodyText.trim()) {
+        opts.body = bodyText;
+      }
+      const t0 = Date.now();
+      const res = await fetch(API.baseURL + path, opts);
+      const dur = Date.now() - t0;
+      const text = await res.text();
+      let pretty = text;
+      try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+      if (out) out.textContent = pretty;
+      if (statusEl) {
+        const cls = res.ok ? 'dev-status-ok' : 'dev-status-err';
+        statusEl.innerHTML = `<span class="${cls}">${res.status} ${res.statusText} · ${dur}ms</span>`;
+      }
+    } catch (e) {
+      if (out) out.textContent = '❌ 请求失败: ' + e.message;
+      if (statusEl) statusEl.innerHTML = '<span class="dev-status-err">网络错误</span>';
+    }
+  },
+
+  // ---------- 版本与缓存 ----------
+  renderDevVersion() {
+    if (!this._devGuard()) return;
+    this._devStopTimers();
+    document.getElementById('main-content').innerHTML = `
+      <div class="dev-panel">
+        <div class="dev-toolbar"><h2>🏷 版本与缓存</h2></div>
+        <div class="dev-section">
+          <h3 class="dev-section-title">js/version.json（模块版本台账）</h3>
+          <div id="dev-version-content"><p class="empty-text">加载中...</p></div>
+        </div>
+        <div class="dev-section">
+          <h3 class="dev-section-title">HTML 缓存版本（?v= 参数，点击 +1 触发浏览器刷新缓存）</h3>
+          <div id="dev-html-version-content"><p class="empty-text">加载中...</p></div>
+        </div>
+        <div class="dev-section">
+          <h3 class="dev-section-title">内存缓存</h3>
+          <div id="dev-cache-content"><p class="empty-text">加载中...</p></div>
+        </div>
+      </div>`;
+    this._devVersionLoad();
+    this._devCacheLoad();
+  },
+
+  async _devVersionLoad() {
+    const data = await API._fetch('GET', '/api/dev/version');
+    const el = document.getElementById('dev-version-content');
+    if (!el) return;
+    if (!data || data.error) { el.innerHTML = '<p class="empty-text">⚠ ' + (data?.error || '加载失败') + '</p>'; return; }
+    const v = data.version || {};
+    const keys = Object.keys(v);
+    el.innerHTML = `
+      <table class="dev-table">
+        <thead><tr><th>模块</th><th>当前版本</th><th>新值</th><th>操作</th></tr></thead>
+        <tbody>
+          ${keys.map(k => `
+            <tr>
+              <td><code>${k}</code></td>
+              <td><strong>${v[k]}</strong></td>
+              <td><input type="number" class="dev-input dev-input-sm" id="dev-ver-${k}" value="${v[k] + 1}"></td>
+              <td><button class="btn btn-sm btn-outline" onclick="OpsApp._devVersionSave('${k}')">保存</button></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      <button class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="OpsApp._devVersionSaveAll()">全部保存</button>`;
+
+    const htmlEl = document.getElementById('dev-html-version-content');
+    const refs = data.htmlRefs || {};
+    if (htmlEl) {
+      const refRows = Object.keys(refs).map(asset => {
+        const val = refs[asset];
+        return `<tr>
+          <td><code>operations.html</code></td>
+          <td><code>${asset}?v=</code></td>
+          <td><strong>${val || '-'}</strong></td>
+          <td><button class="btn btn-sm btn-outline" onclick="OpsApp._devHtmlBump('operations.html','${asset}')">+1 升级</button></td>
+        </tr>`;
+      }).join('');
+      htmlEl.innerHTML = `
+        <table class="dev-table">
+          <thead><tr><th>文件</th><th>资源</th><th>当前 ?v=</th><th>操作</th></tr></thead>
+          <tbody>${refRows || '<tr><td colspan="4" class="empty-text">未发现引用</td></tr>'}</tbody>
+        </table>
+        <p class="dev-tip">升级后用户下次访问将自动获取最新 JS/CSS。本页需手动刷新以加载新版本。</p>`;
+    }
+  },
+
+  async _devVersionSave(key) {
+    const inp = document.getElementById('dev-ver-' + key);
+    if (!inp) return;
+    const val = parseInt(inp.value, 10);
+    if (isNaN(val)) { this.notify('请输入有效数字', 'warning'); return; }
+    const res = await API._fetch('POST', '/api/dev/version', { updates: { [key]: val } });
+    if (res?.success) { this.notify(key + ' 已更新为 ' + val); this._devVersionLoad(); }
+    else this.notify(res?.error || '保存失败', 'error');
+  },
+
+  async _devVersionSaveAll() {
+    const data = await API._fetch('GET', '/api/dev/version');
+    if (!data?.version) { this.notify('加载失败', 'error'); return; }
+    const updates = {};
+    Object.keys(data.version).forEach(k => {
+      const inp = document.getElementById('dev-ver-' + k);
+      if (inp) { const v = parseInt(inp.value, 10); if (!isNaN(v)) updates[k] = v; }
+    });
+    if (Object.keys(updates).length === 0) { this.notify('无更新', 'warning'); return; }
+    const res = await API._fetch('POST', '/api/dev/version', { updates });
+    if (res?.success) { this.notify('已保存 ' + res.changed + ' 项'); this._devVersionLoad(); }
+    else this.notify(res?.error || '保存失败', 'error');
+  },
+
+  async _devHtmlBump(file, asset) {
+    const res = await API._fetch('POST', '/api/dev/html-bump', { file, asset });
+    if (res?.success) {
+      this.notify(asset + ' 已升级: ' + res.oldVersion + ' → ' + res.newVersion);
+      this._devVersionLoad();
+    } else this.notify(res?.error || '升级失败', 'error');
+  },
+
+  async _devCacheLoad() {
+    const data = await API._fetch('GET', '/api/dev/cache');
+    const el = document.getElementById('dev-cache-content');
+    if (!el) return;
+    if (!data || data.error) { el.innerHTML = '<p class="empty-text">⚠ ' + (data?.error || '加载失败') + '</p>'; return; }
+    const entries = data.entries || [];
+    const ttlRows = Object.entries(data.ttlConfig || {}).map(([k, v]) => `<tr><td><code>${k}</code></td><td>${(v / 1000).toFixed(0)}s</td></tr>`).join('');
+    el.innerHTML = `
+      <div class="dev-cache-summary">
+        <span>缓存条目: <strong>${data.size}</strong></span>
+        <span>进行中请求: <strong>${data.inflightCount}</strong></span>
+        <button class="btn btn-sm btn-outline" onclick="OpsApp._devCacheClear()">🗑 清空缓存</button>
+        <button class="btn btn-sm btn-outline" onclick="OpsApp._devCacheLoad()">⟳ 刷新</button>
+      </div>
+      <table class="dev-table">
+        <thead><tr><th>缓存键</th><th>已存活</th><th>大小</th></tr></thead>
+        <tbody>
+          ${entries.map(e => `<tr><td><code>${e.key}</code></td><td>${e.ageHuman}</td><td>${this._devBytes(e.sizeBytes)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty-text">缓存为空</td></tr>'}
+        </tbody>
+      </table>
+      <details class="dev-details">
+        <summary>TTL 配置</summary>
+        <table class="dev-table">${ttlRows}</table>
+      </details>`;
+  },
+
+  async _devCacheClear() {
+    const res = await API._fetch('POST', '/api/dev/cache', {});
+    if (res?.success) { this.notify('已清空 ' + res.cleared + ' 条缓存'); this._devCacheLoad(); }
+    else this.notify(res?.error || '清空失败', 'error');
+  },
+
+  // ---------- 日志与完整性 ----------
+  _devLogLevel: 'all',
+
+  renderDevLogs() {
+    if (!this._devGuard()) return;
+    this._devStopTimers();
+    document.getElementById('main-content').innerHTML = `
+      <div class="dev-panel">
+        <div class="dev-toolbar">
+          <h2>📄 日志与完整性</h2>
+          <div class="dev-toolbar-actions">
+            <div class="dev-log-filter">
+              ${['all', 'INFO', 'WARN', 'ERROR'].map(lv => `<button class="btn btn-sm ${lv === 'all' ? 'btn-primary' : 'btn-outline'}" id="dev-log-btn-${lv}" onclick="OpsApp._devLogSetLevel('${lv}')">${lv}</button>`).join('')}
+            </div>
+            <label class="dev-auto-toggle"><input type="checkbox" id="dev-logs-auto" checked> 自动刷新 (4s)</label>
+            <button class="btn btn-sm btn-outline" onclick="OpsApp._devLogsLoad()">⟳ 刷新</button>
+          </div>
+        </div>
+        <div class="dev-section">
+          <h3 class="dev-section-title">实时控制台日志 <span id="dev-log-meta" class="dev-metric-sub"></span></h3>
+          <pre id="dev-logs-output" class="dev-pre dev-pre-logs">加载中...</pre>
+        </div>
+        <div class="dev-section">
+          <h3 class="dev-section-title">🔐 审计日志</h3>
+          <div id="dev-audit-content"><p class="empty-text">加载中...</p></div>
+        </div>
+        <div class="dev-section">
+          <h3 class="dev-section-title">🩺 数据完整性检查</h3>
+          <div id="dev-integrity-content"><p class="empty-text">加载中...</p></div>
+        </div>
+      </div>`;
+    this._devLogsLoad();
+    this._devAuditLoad();
+    this._devIntegrityLoad();
+    this._devLogsTimer = setInterval(() => {
+      if (document.getElementById('dev-logs-auto')?.checked) this._devLogsLoad();
+    }, 4000);
+  },
+
+  _devLogSetLevel(lv) {
+    this._devLogLevel = lv;
+    ['all', 'INFO', 'WARN', 'ERROR'].forEach(l => {
+      const btn = document.getElementById('dev-log-btn-' + l);
+      if (btn) { btn.classList.remove('btn-primary', 'btn-outline'); btn.classList.add(l === lv ? 'btn-primary' : 'btn-outline'); }
+    });
+    this._devLogsLoad();
+  },
+
+  async _devLogsLoad() {
+    const data = await API._fetch('GET', '/api/dev/logs?level=' + this._devLogLevel + '&limit=300');
+    const out = document.getElementById('dev-logs-output');
+    const meta = document.getElementById('dev-log-meta');
+    if (!out) return;
+    if (!data || data.error) { out.textContent = '⚠ ' + (data?.error || '加载失败'); return; }
+    if (meta) meta.textContent = ` · worker ${data.workerId} · 显示 ${data.shown}/${data.total} · 缓冲上限 ${data.bufferSize}`;
+    const logs = data.logs || [];
+    if (logs.length === 0) { out.textContent = '— 暂无日志 —'; return; }
+    out.innerHTML = logs.map(l => {
+      const cls = 'dev-log-line dev-log-' + (l.level || 'INFO').toLowerCase();
+      const t = (l.ts || '').slice(11, 19);
+      return `<div class="${cls}"><span class="dev-log-time">${t}</span> <span class="dev-log-level">${l.level || '?'}</span> <span class="dev-log-msg">${this._devEsc(l.msg || '')}</span></div>`;
+    }).join('');
+    out.scrollTop = out.scrollHeight;
+  },
+
+  _devEsc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  },
+
+  async _devAuditLoad() {
+    const data = await API._fetch('GET', '/api/audit-log');
+    const el = document.getElementById('dev-audit-content');
+    if (!el) return;
+    if (!data || data.error) { el.innerHTML = '<p class="empty-text">⚠ ' + (data?.error || '加载失败') + '</p>'; return; }
+    const logs = Array.isArray(data) ? data : (data.logs || []);
+    if (logs.length === 0) { el.innerHTML = '<p class="empty-text">暂无审计日志</p>'; return; }
+    el.innerHTML = `<table class="dev-table">
+      <thead><tr><th>时间</th><th>用户</th><th>操作</th><th>资源</th><th>结果</th></tr></thead>
+      <tbody>${logs.slice(-50).reverse().map(l => `<tr>
+        <td>${(l.ts || '').slice(0, 19)}</td><td>${l.username || '-'}</td><td>${l.action || '-'}</td><td>${l.resource || '-'} ${l.resourceId || ''}</td>
+        <td>${l.result || '-'}</td></tr>`).join('')}</tbody></table>`;
+  },
+
+  async _devIntegrityLoad() {
+    const data = await API._fetch('GET', '/api/data-integrity');
+    const el = document.getElementById('dev-integrity-content');
+    if (!el) return;
+    if (!data || data.error) { el.innerHTML = '<p class="empty-text">⚠ ' + (data?.error || '加载失败') + '</p>'; return; }
+    const issues = data.issues || [];
+    if (issues.length === 0) {
+      el.innerHTML = '<p class="empty-text" style="color:var(--color-success);">✓ 数据完整性检查通过，未发现问题</p>';
+      return;
+    }
+    el.innerHTML = `<div class="dev-alert">发现 ${data.count || issues.length} 个问题</div>
+      <table class="dev-table">
+        <thead><tr><th>类型</th><th>项目</th><th>详情</th></tr></thead>
+        <tbody>${issues.map(i => `<tr><td><span class="dev-tag dev-tag-red">${i.type || '-'}</span></td><td>${i.item || '-'}</td><td>${i.detail || '-'}</td></tr>`).join('')}</tbody>
+      </table>`;
   },
 };

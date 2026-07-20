@@ -6,7 +6,7 @@
   <title>运营系统</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css?v=7.0">
-  <link rel="stylesheet" href="css/operations.css?v=7.0">
+  <link rel="stylesheet" href="css/operations.css?v=8.0">
 </head>
 <body>
   <!-- ==================== SIDEBAR ==================== -->
@@ -93,6 +93,28 @@
           </button>
         </div>
       </div>
+
+      <!-- 开发者 section (仅 superadmin 可见) -->
+      <div class="nav-group" id="nav-group-dev" style="display:none;">
+        <button class="nav-group-title" onclick="OpsApp.toggleNavGroup('dev')">
+          <span>🧪 开发者</span>
+          <span class="nav-group-arrow" id="arrow-dev">▼</span>
+        </button>
+        <div class="nav-group-items" id="group-dev">
+          <button class="nav-item" data-tab="dev-health">
+            <span class="nav-icon">💚</span> 系统健康
+          </button>
+          <button class="nav-item" data-tab="dev-api">
+            <span class="nav-icon">🔌</span> API 调试台
+          </button>
+          <button class="nav-item" data-tab="dev-version">
+            <span class="nav-icon">🏷</span> 版本与缓存
+          </button>
+          <button class="nav-item" data-tab="dev-logs">
+            <span class="nav-icon">📄</span> 日志与完整性
+          </button>
+        </div>
+      </div>
     </nav>
 
     <!-- Theme toggle -->
@@ -147,7 +169,7 @@
   <script src="js/api.js?v=37"></script>
   <script src="js/storage.js?v=8"></script>
   <script src="js/ws-client.js?v=37"></script>
-  <script src="js/operations.js?v=12"></script>
+  <script src="js/operations.js?v=13"></script>
   <script>
     function updateTime() {
       const el = document.getElementById('current-time');
