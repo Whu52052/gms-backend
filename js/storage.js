@@ -742,7 +742,14 @@ const Storage = {
       }
     } catch(e) { console.log('_applySync txs:', e.message); }
     try {
-      if (Array.isArray(data.snRegistry)) this.replaceSNRegistry(data.snRegistry);
+      if (Array.isArray(data.snRegistry)) {
+        // 过滤墓碑中已删除的 SN 码，防止多设备/异步场景下被"复活"
+        let deletedSns = [];
+        try { deletedSns = JSON.parse(localStorage.getItem('gms_deleted_sns') || '[]'); } catch(e) {}
+        const tomb = new Set(deletedSns);
+        const filtered = data.snRegistry.filter(r => r && r.snCode && !tomb.has(r.snCode));
+        this.replaceSNRegistry(filtered);
+      }
     } catch(e) { console.log('_applySync snReg:', e.message); }
     try {
       if (data.settings && !data.error) this.saveSettings(data.settings);

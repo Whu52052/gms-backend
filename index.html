@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>运维系统</title>
+  <title>Worldengine</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-  <link rel="stylesheet" href="css/style.css?v=7.0">
+  <link rel="stylesheet" href="css/style.css?v=9.1">
 </head>
 <body>
   <!-- ==================== SIDEBAR ==================== -->
   <aside class="sidebar" style="display:none;">
-    <div class="sidebar-brand">📦 设备管理系统</div>
+    <div class="sidebar-brand" onclick="App._deployAdminClick()" style="cursor:pointer;" title="连续点击5次打开部署管理">📦 设备管理系统</div>
     <nav class="sidebar-nav">
       <div class="nav-section">
         <div class="nav-section-title">概览</div>
@@ -75,6 +75,7 @@
     </nav>
     <div class="sidebar-footer">
       <button id="theme-toggle" title="切换深色/浅色模式">🌓 切换主题</button>
+
     </div>
   </aside>
 
@@ -120,13 +121,165 @@
   <!-- ==================== NOTIFICATIONS ==================== -->
   <div id="notification-container"></div>
 
+  <!-- ==================== DEPLOY ADMIN PANEL (Hidden) ==================== -->
+  <div id="deploy-admin-panel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);z-index:99999;overflow-y:auto;">
+    <div style="max-width:1000px;margin:20px auto;background:#1e293b;border-radius:16px;padding:24px;color:#e2e8f0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
+        <h2 style="color:#667eea;margin:0;">🚀 分布式部署管理</h2>
+        <button onclick="App._hideDeployAdmin()" style="background:#334155;border:none;color:#e2e8f0;padding:8px 16px;border-radius:8px;cursor:pointer;">✕ 关闭</button>
+      </div>
+
+      <!-- 密码验证 -->
+      <div id="deploy-password-form" style="text-align:center;padding:40px;">
+        <h3 style="margin-bottom:20px;">🔐 请输入管理员密码</h3>
+        <input type="password" id="deploy-admin-password" placeholder="输入密码..." style="padding:12px 16px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#fff;font-size:1rem;width:300px;text-align:center;" onkeypress="if(event.key==='Enter')App._verifyDeployPassword()">
+        <button onclick="App._verifyDeployPassword()" style="padding:12px 24px;background:#667eea;border:none;color:#fff;border-radius:8px;cursor:pointer;margin-left:8px;">验证</button>
+        <p id="deploy-password-error" style="color:#ef4444;margin-top:12px;display:none;">密码错误</p>
+      </div>
+
+      <!-- 部署管理内容 (验证后显示) -->
+      <div id="deploy-admin-content" style="display:none;">
+        <!-- 服务器状态概览 -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:24px;">
+          <div style="background:#334155;border-radius:12px;padding:20px;">
+            <div style="font-size:0.85rem;color:#94a3b8;">主服务器</div>
+            <div id="deploy-primary-status" style="font-size:1.5rem;font-weight:bold;margin:8px 0;">-</div>
+            <div id="deploy-primary-role" style="font-size:0.85rem;color:#94a3b8;">-</div>
+          </div>
+          <div style="background:#334155;border-radius:12px;padding:20px;">
+            <div style="font-size:0.85rem;color:#94a3b8;">次服务器</div>
+            <div id="deploy-secondary-status" style="font-size:1.5rem;font-weight:bold;margin:8px 0;">-</div>
+            <div id="deploy-secondary-role" style="font-size:0.85rem;color:#94a3b8;">-</div>
+          </div>
+          <div style="background:#334155;border-radius:12px;padding:20px;">
+            <div style="font-size:0.85rem;color:#94a3b8;">数据库连接</div>
+            <div id="deploy-db-status" style="font-size:1.5rem;font-weight:bold;margin:8px 0;">-</div>
+            <div id="deploy-db-info" style="font-size:0.85rem;color:#94a3b8;">-</div>
+          </div>
+        </div>
+
+        <!-- 标签页 -->
+        <div style="display:flex;gap:8px;margin-bottom:20px;border-bottom:1px solid #334155;padding-bottom:8px;">
+          <button class="deploy-tab-btn active" data-tab="servers" onclick="App._switchDeployTab('servers')" style="padding:10px 20px;background:#667eea;border:none;color:#fff;border-radius:8px 8px 0 0;cursor:pointer;">服务器管理</button>
+          <button class="deploy-tab-btn" data-tab="database" onclick="App._switchDeployTab('database')" style="padding:10px 20px;background:#334155;border:none;color:#94a3b8;border-radius:8px 8px 0 0;cursor:pointer;">数据库配置</button>
+          <button class="deploy-tab-btn" data-tab="deploy" onclick="App._switchDeployTab('deploy')" style="padding:10px 20px;background:#334155;border:none;color:#94a3b8;border-radius:8px 8px 0 0;cursor:pointer;">一键部署</button>
+          <button class="deploy-tab-btn" data-tab="logs" onclick="App._switchDeployTab('logs')" style="padding:10px 20px;background:#334155;border:none;color:#94a3b8;border-radius:8px 8px 0 0;cursor:pointer;">部署日志</button>
+        </div>
+
+        <!-- 服务器管理 -->
+        <div id="deploy-tab-servers">
+          <div style="background:#0f172a;border-radius:12px;padding:20px;">
+            <h4 style="margin:0 0 16px;color:#667eea;">📡 服务器列表</h4>
+            <div id="deploy-server-list"></div>
+            <button onclick="App._addDeployServer()" style="margin-top:16px;padding:10px 20px;background:#10b981;border:none;color:#fff;border-radius:8px;cursor:pointer;">+ 添加服务器</button>
+          </div>
+        </div>
+
+        <!-- 数据库配置 -->
+        <div id="deploy-tab-database" style="display:none;">
+          <div style="background:#0f172a;border-radius:12px;padding:20px;">
+            <h4 style="margin:0 0 16px;color:#667eea;">🗄️ 数据库配置</h4>
+            <div style="display:grid;gap:12px;">
+              <div>
+                <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">MySQL 主库地址</label>
+                <input type="text" id="deploy-db-host" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="192.168.1.233">
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div>
+                  <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">端口</label>
+                  <input type="text" id="deploy-db-port" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="3306">
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">数据库名</label>
+                  <input type="text" id="deploy-db-name" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="gms">
+                </div>
+              </div>
+              <div>
+                <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">用户名</label>
+                <input type="text" id="deploy-db-user" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="gms_user">
+              </div>
+              <div>
+                <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">密码</label>
+                <input type="password" id="deploy-db-password" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="••••••••">
+              </div>
+              <div>
+                <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">Redis 地址</label>
+                <input type="text" id="deploy-redis-host" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="192.168.1.233:6379">
+              </div>
+            </div>
+            <button onclick="App._saveDbConfig()" style="margin-top:16px;padding:12px 24px;background:#667eea;border:none;color:#fff;border-radius:8px;cursor:pointer;">💾 保存配置</button>
+          </div>
+        </div>
+
+        <!-- 一键部署 -->
+        <div id="deploy-tab-deploy" style="display:none;">
+          <!-- SSH密码配置 -->
+          <div style="background:#0f172a;border-radius:12px;padding:16px;margin-bottom:20px;">
+            <div style="display:grid;grid-template-columns:1fr 3fr;gap:12px;align-items:center;">
+              <label style="font-size:0.85rem;color:#94a3b8;">🔑 SSH 密码</label>
+              <input type="password" id="deploy-ssh-password" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="输入SSH密码">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 3fr;gap:12px;align-items:center;margin-top:10px;">
+              <label style="font-size:0.85rem;color:#94a3b8;">🔐 MySQL root 密码</label>
+              <input type="password" id="deploy-mysql-root-password" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" placeholder="主服务器MySQL root密码">
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr;gap:20px;">
+            <!-- 部署次服务器 -->
+            <div style="background:#0f172a;border-radius:12px;padding:20px;">
+              <h4 style="margin:0 0 16px;color:#10b981;">🚀 部署次服务器</h4>
+              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">
+                <div>
+                  <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">服务器 IP</label>
+                  <input type="text" id="deploy-secondary-ip" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.35">
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">SSH 用户</label>
+                  <input type="text" id="deploy-secondary-user" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="we">
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">连接主库 IP</label>
+                  <input type="text" id="deploy-master-db-ip" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.30">
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.85rem;color:#94a3b8;margin-bottom:4px;">Redis IP</label>
+                  <input type="text" id="deploy-secondary-redis" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#fff;" value="10.5.50.30">
+                </div>
+              </div>
+              <button onclick="App._deployServer('secondary')" id="deploy-secondary-btn" style="margin-top:16px;width:100%;padding:14px;background:#10b981;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:1rem;">🚀 开始部署次服务器</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 部署日志 -->
+        <div id="deploy-tab-logs" style="display:none;">
+          <div style="background:#000;border-radius:12px;padding:20px;font-family:monospace;font-size:0.85rem;max-height:400px;overflow-y:auto;" id="deploy-log-output">
+            <div style="color:#64748b;">部署日志将显示在这里...</div>
+          </div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button onclick="App._clearDeployLogs()" style="padding:8px 16px;background:#334155;border:none;color:#e2e8f0;border-radius:6px;cursor:pointer;">🗑 清空日志</button>
+            <button onclick="App._checkSecondaryStatus()" style="padding:8px 16px;background:#3b82f6;border:none;color:#fff;border-radius:6px;cursor:pointer;">🔍 检查次服务器状态</button>
+            <button onclick="App._viewSecondaryPM2Logs()" style="padding:8px 16px;background:#8b5cf6;border:none;color:#fff;border-radius:6px;cursor:pointer;">📋 查看PM2日志</button>
+            <button onclick="App._restartSecondaryServer()" style="padding:8px 16px;background:#f59e0b;border:none;color:#fff;border-radius:6px;cursor:pointer;">🔄 重启次服务器</button>
+            <button onclick="App._openFirewallPort()" style="padding:8px 16px;background:#10b981;border:none;color:#fff;border-radius:6px;cursor:pointer;">🔓 开放8765端口</button>
+            <button onclick="App._enableMySQLRemote()" style="padding:8px 16px;background:#ec4899;border:none;color:#fff;border-radius:6px;cursor:pointer;">🔑 开启MySQL远程访问</button>
+            <button onclick="App._testDbConnection()" style="padding:8px 16px;background:#06b6d4;border:none;color:#fff;border-radius:6px;cursor:pointer;">🔌 测试数据库连接</button>
+            <button onclick="App._quickNuke()" style="padding:10px 20px;background:#dc2626;border:none;color:#fff;border-radius:6px;cursor:pointer;font-weight:bold;">💣 快速清除服务器</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ==================== SCRIPTS ==================== -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="js/config.js?v=4"></script>
-  <script src="js/api.js?v=37"></script>
-  <script src="js/storage.js?v=8"></script>
-  <script src="js/ws-client.js?v=37"></script>
-  <script src="js/app.js?v=38"></script>
+  <script src="js/distributed-config.js?v=1"></script>
+  <script src="js/api.js?v=40"></script>
+  <script src="js/storage.js?v=9"></script>
+  <script src="js/ws-client.js?v=38"></script>
+  <script src="js/app.js?v=88"></script>
   <script>
     // Update current time in topbar
     function updateTime() {
@@ -140,6 +293,16 @@
     }
     setInterval(updateTime, 1000);
     updateTime();
+
+    // 快捷键 Ctrl+Shift+D 打开部署管理
+    document.addEventListener('keydown', function(e) {
+      if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+        e.preventDefault();
+        if (window.App && App._showDeployAdmin) {
+          App._showDeployAdmin();
+        }
+      }
+    });
   </script>
 </body>
 </html>

@@ -14,7 +14,20 @@ const API = {
   async init() {
     this.token = localStorage.getItem('gms_token') || sessionStorage.getItem('gms_token');
     this.currentUser = JSON.parse(localStorage.getItem('gms_user') || sessionStorage.getItem('gms_user') || 'null');
-    this.baseURL = window.__GMS_SERVER_URL__ || window.location.origin;
+
+    // ========== 分布式配置初始化 ==========
+    // 初始化分布式模块，选择最佳服务器
+    if (typeof DistributedConfig !== 'undefined') {
+      const server = DistributedConfig.init();
+      if (server && server.url) {
+        this.baseURL = server.url;
+        console.log('[API] 分布式模式，当前服务器:', server.name, server.url);
+      } else {
+        this.baseURL = window.__GMS_SERVER_URL__ || window.location.origin;
+      }
+    } else {
+      this.baseURL = window.__GMS_SERVER_URL__ || window.location.origin;
+    }
 
     // Fast switch: system switcher set this flag — skip health check, assume online
     const fastSwitch = localStorage.getItem('gms_fast_switch');
@@ -75,35 +88,34 @@ const API = {
   },
 
   async login(username, password) {
-    // Try server first
-    if (this.online) {
-      try {
-        const res = await this._fetchWithTimeout(this.baseURL + '/api/auth/login', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        }, 5000);
-        const data = await res.json();
-        if (res.ok) {
-          this.token = data.token;
-          this.currentUser = data.user;
-          localStorage.setItem('gms_token', data.token);
-          localStorage.setItem('gms_user', JSON.stringify(data.user));
-          this._saveLoginHistory(data.user);
-          this._listenSSE();
-          this._setupBeforeUnload();
-          // 记住登录态（Cookie 7天有效）
-          this._setCookie('gms_logged', '1', 7);
-          // 🔴 微信级实时: 启动 WebSocket 双向通信
-          if (typeof Realtime !== 'undefined') {
-            Realtime.init(data.token);
-            Realtime.requestNotificationPermission();
-          }
-          return { success: true, user: data.user };
+    // Always try server first, regardless of online status
+    // The init() checkServer may not have completed yet when user clicks login
+    try {
+      const res = await this._fetchWithTimeout(this.baseURL + '/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      }, 5000);
+      const data = await res.json();
+      if (res.ok) {
+        this.token = data.token;
+        this.currentUser = data.user;
+        localStorage.setItem('gms_token', data.token);
+        localStorage.setItem('gms_user', JSON.stringify(data.user));
+        this._saveLoginHistory(data.user);
+        this._listenSSE();
+        this._setupBeforeUnload();
+        // 记住登录态（Cookie 7天有效）
+        this._setCookie('gms_logged', '1', 7);
+        // 🔴 微信级实时: 启动 WebSocket 双向通信
+        if (typeof Realtime !== 'undefined') {
+          Realtime.init(data.token);
+          Realtime.requestNotificationPermission();
         }
-        return { success: false, message: data.error };
-      } catch (e) {
-        // Server unreachable, fall through to offline
+        return { success: true, user: data.user };
       }
+      return { success: false, message: data.error };
+    } catch (e) {
+      // Server unreachable, fall through to offline
     }
 
     // Offline login: check against localStorage users
@@ -197,7 +209,7 @@ const API = {
             await Storage._syncFromServer();
             this._notifyUIUpdate();
           }
-        }, 1000); // 1s 防抖，实时响应
+        }, 2000); // 2s 防抖，避免事件风暴导致频繁刷新
       };
       const silentSyncCfg = () => {
         if (this._syncCfgTimer) clearTimeout(this._syncCfgTimer);
@@ -221,12 +233,32 @@ const API = {
       this.eventSource.addEventListener('ops_orders_updated', silentSync);
       this.eventSource.addEventListener('ops_customers_updated', silentSync);
       this.eventSource.addEventListener('ops_production_updated', silentSync);
-      this.eventSource.addEventListener('tech_support_updated', silentSync);
+      this.eventSource.addEventListener('tech_support_updated', (e) => {
+        console.log('[SSE] tech_support_updated received:', e.data);
+        // 直接获取最新数据，绕过缓存
+        (async () => {
+          try {
+            const data = await this._fetch('GET', '/api/tech-support');
+            if (Array.isArray(data) && typeof Storage !== 'undefined') {
+              localStorage.setItem('gms_tech_support', JSON.stringify(data));
+              console.log('[SSE] tech_support data updated, count:', data.length);
+              // 通知运营系统刷新技术支持页面（保持筛选状态）
+              if (typeof OpsApp !== 'undefined' && OpsApp.currentTab === 'tech-support-my') {
+                OpsApp.renderTechSupportMy(OpsApp._tsViewMode);
+              }
+            }
+          } catch (err) {
+            console.error('[SSE] Failed to fetch tech_support:', err);
+          }
+          silentSync();
+        })();
+      });
       this.eventSource.addEventListener('group_transfer_updated', silentSync);
       this.eventSource.onopen = () => {
         // SSE connected — reset failure counter
         this._sseFailures = 0;
         this._sseLastFail = 0;
+        console.log('[SSE] Connected successfully');
       };
       this.eventSource.onerror = () => {
         const now = Date.now();
@@ -236,8 +268,10 @@ const API = {
           this._sseFailures = 1;
         }
         this._sseLastFail = now;
+        console.warn('[SSE] Error, failure count:', this._sseFailures);
         // If SSE fails 3+ times within 60s, fall back to polling
         if (this._sseFailures >= 3) {
+          console.log('[SSE] Falling back to polling mode');
           this._startPolling();
         }
       };
@@ -319,16 +353,22 @@ const API = {
     const modal = document.getElementById('modal-overlay');
     if (modal && modal.style.display === 'flex') return;
 
+    // Throttle: 全局防抖，避免一次事件风暴触发多次UI刷新
+    if (this._uiUpdateThrottle) return;
+    this._uiUpdateThrottle = true;
+    setTimeout(() => { this._uiUpdateThrottle = false; }, 2000); // 2秒内最多刷新一次
+
     // Always refresh sidebar inventory dropdown (lightweight, no visible flicker)
     if (typeof App !== 'undefined' && App.refreshSidebarInventory) App.refreshSidebarInventory();
     if (typeof OpsApp !== 'undefined' && OpsApp.refreshSidebarInventory) OpsApp.refreshSidebarInventory();
 
     // Only auto-render lightweight tabs — skip heavy data pages (transactions, machines, etc.)
     // that the user can manually refresh. This avoids scroll loss and CPU waste.
-    const lightTabs = ['dashboard', 'glove', 'dexterous', 'gripper', 'reports', 'after-sales'];
+    const lightTabs = ['dashboard', 'glove', 'dexterous', 'gripper', 'reports', 'after-sales', 'tech-support'];
 
     if (typeof App !== 'undefined' && App.refreshCurrentTab && App.currentTab) {
       if (lightTabs.includes(App.currentTab) || App.currentTab.indexOf('_') > -1) {
+        console.log('[API] Refreshing tab:', App.currentTab);
         App.refreshCurrentTab();
       }
     }
@@ -548,6 +588,19 @@ const API = {
     return data || { success: false, message: '请求失败' };
   },
 
+  // 共享记忆（故障说明 / 维修结果）
+  async getMemoryList(category) {
+    if (!this.online) return [];
+    const data = await this._fetch('GET', '/api/tech-support/memory/' + category);
+    return Array.isArray(data) ? data : [];
+  },
+
+  async addMemory(category, text) {
+    if (!this.online) return { success: false, message: '离线模式不支持' };
+    const data = await this._fetch('POST', '/api/tech-support/memory/' + category, { text });
+    return data || { success: false, message: '请求失败' };
+  },
+
   // Group Transfer
   async getGroupTransfers() {
     if (!this.online) return [];
@@ -584,6 +637,33 @@ const API = {
     if (!this.online) return [];
     const data = await this._fetch('GET', '/api/users/subordinates');
     return Array.isArray(data) ? data : [];
+  },
+
+  async getUserRepairStats(userId) {
+    if (!this.online) return null;
+    const data = await this._fetch('GET', '/api/users/' + userId + '/repair-stats');
+    return data || null;
+  },
+
+  async submitTaskProgress(progress, note) {
+    if (!this.online) return { success: false, message: '离线模式不支持提交进度' };
+    const data = await this._fetch('POST', '/api/task-progress', { progress, note });
+    return data || { success: false, message: '请求失败' };
+  },
+
+  async getTaskProgress(date) {
+    if (!this.online) return null;
+    const url = date ? '/api/task-progress?date=' + date : '/api/task-progress';
+    const data = await this._fetch('GET', url);
+    return data || null;
+  },
+
+  async getUserTaskProgress(userId, date) {
+    if (!this.online) return null;
+    let url = '/api/task-progress?userId=' + userId;
+    if (date) url += '&date=' + date;
+    const data = await this._fetch('GET', url);
+    return data || null;
   },
 
   async addUser(userData) {

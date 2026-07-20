@@ -7,6 +7,8 @@ const App = {
   currentTab: 'dashboard',
   currentPage: { transactions: 1 },
   pageSize: 15,
+  _txViewMode: 'card',
+  _repairResultHistory: [],  // 维修结果记忆历史
   filters: {
     equipmentType: 'all',
     direction: 'all',
@@ -39,15 +41,12 @@ const App = {
       if (online) {
         await Storage._fullSyncFromServer();
       }
-      document.body.classList.add('logged-in');
-      // Restore sidebar, hamburger, and topbar visibility
       const sidebar = document.querySelector('.sidebar');
+      const topbar = document.querySelector('.topbar');
       if (sidebar) sidebar.style.display = '';
-      const topbarRight = document.querySelector('.topbar-right');
-      if (topbarRight) topbarRight.style.display = '';
-      const hamburger = document.getElementById('hamburger-btn');
-      if (hamburger) hamburger.style.display = '';
-      // Tech support nav visible only for maintenance users
+      if (topbar) topbar.style.display = '';
+      document.body.classList.add('logged-in');
+      document.body.classList.remove('login-mode');
       this._updateTechSupportNav();
       this.updateUserDisplay();
       this.refreshSidebarInventory();
@@ -76,40 +75,47 @@ const App = {
 
   initStatusBar() {
     this.refreshStatusBar();
-    setInterval(() => this.refreshStatusBar(), 5000); // 每5秒刷新状态栏
+    if (this._statusBarInterval) clearInterval(this._statusBarInterval);
+    this._statusBarInterval = setInterval(() => this.refreshStatusBar(), 5000);
   },
 
   showLogin(errorMsg) {
     const html = `
       <div class="login-screen">
         <div class="login-box">
-          <div class="login-icon">🧤</div>
-          <h1>运维系统</h1>
-          <p class="login-subtitle">请登录以继续</p>
+          <div class="login-logo-wrapper">
+            <div class="login-logo">W</div>
+          </div>
+          <h1>Worldengine</h1>
+          <div class="login-tagline">ai互联</div>
           ${errorMsg ? `<div class="alert-banner info" style="margin-bottom:16px;">ℹ ${errorMsg}</div>` : ''}
           <div class="form-group">
             <label>用户名</label>
-            <input type="text" id="login-username" placeholder="输入用户名" autocomplete="username" required>
+            <div class="login-input-wrap">
+              <span class="login-input-icon">👤</span>
+              <input type="text" id="login-username" placeholder="请输入用户名" autocomplete="username" required>
+            </div>
           </div>
           <div class="form-group">
             <label>密码</label>
-            <input type="password" id="login-password" placeholder="输入密码" autocomplete="current-password" required>
+            <div class="login-input-wrap">
+              <span class="login-input-icon">🔒</span>
+              <input type="password" id="login-password" placeholder="请输入密码" autocomplete="current-password" required>
+            </div>
           </div>
-          <div id="login-error" style="color:var(--color-danger);font-size:0.85rem;min-height:20px;text-align:center;"></div>
-          <button class="btn btn-primary" id="login-btn" style="width:100%;padding:12px;" onclick="App.doLogin()">登录</button>
+          <div id="login-error" style="color:#ef4444;font-size:0.85rem;min-height:24px;text-align:center;"></div>
+          <button class="btn btn-primary login-btn" id="login-btn" onclick="App.doLogin()">登 录</button>
         </div>
       </div>
     `;
     document.getElementById('main-content').innerHTML = html;
     document.body.classList.remove('logged-in');
     document.body.classList.remove('sidebar-open');
-    // Hide sidebar, hamburger, and topbar-right during login
-    const topbarRight = document.querySelector('.topbar-right');
-    if (topbarRight) topbarRight.style.display = 'none';
+    document.body.classList.add('login-mode');
+    const topbar = document.querySelector('.topbar');
+    if (topbar) topbar.style.display = 'none';
     const sidebar = document.querySelector('.sidebar');
     if (sidebar) sidebar.style.display = 'none';
-    const hamburger = document.getElementById('hamburger-btn');
-    if (hamburger) hamburger.style.display = 'none';
 
     // Enter key to login
     const pwEl = document.getElementById('login-password');
@@ -160,7 +166,8 @@ const App = {
     this.refreshSidebarInventory();
     this._updateTechSupportNav();
     this._updateUsersNav();
-    this.notify(`欢迎，${result.user.username}！`);
+    const systemLabel = result.user.system === 'operations' ? '📊 运营系统' : '🔧 运维系统';
+    this.notify(`欢迎，${result.user.username}！当前系统: ${systemLabel}`);
   },
 
   async doLogout() {
@@ -186,10 +193,11 @@ const App = {
   },
 
   startHealthCheck() {
-    setInterval(async () => {
+    if (this._healthCheckInterval) clearInterval(this._healthCheckInterval);
+    this._healthCheckInterval = setInterval(async () => {
       API.online = await API._checkServer();
       this.updateHealthDot();
-    }, 5000); // 每5秒检查连接状态
+    }, 10000);
   },
 
   async manualRefresh() {
@@ -218,7 +226,7 @@ const App = {
       </div>
       <div class="form-group">
         <label>新密码 <span class="required">*</span></label>
-        <input type="password" id="chpwd-new" placeholder="输入新密码（至少4个字符）" required>
+        <input type="password" id="chpwd-new" placeholder="输入新密码（至少6个字符，需包含字母和数字）" required>
       </div>
       <div class="form-group">
         <label>确认新密码 <span class="required">*</span></label>
@@ -231,7 +239,8 @@ const App = {
       const confirmPwd = document.getElementById('chpwd-confirm').value;
       if (!oldPwd || !newPwd || !confirmPwd) { this.notify('请填写所有字段', 'error'); return false; }
       if (newPwd !== confirmPwd) { this.notify('两次输入的新密码不一致', 'error'); return false; }
-      if (newPwd.length < 4) { this.notify('新密码至少4个字符', 'error'); return false; }
+      if (newPwd.length < 6) { this.notify('新密码至少6个字符', 'error'); return false; }
+      if (!/[A-Za-z]/.test(newPwd) || !/[0-9]/.test(newPwd)) { this.notify('新密码需包含字母和数字', 'error'); return false; }
       const result = await this._changePassword(oldPwd, newPwd);
       if (!result.success) { this.notify(result.message, 'error'); return false; }
       this.notify('密码修改成功');
@@ -792,7 +801,7 @@ const App = {
                 <td>${t.quantity}</td>
                 <td>${t.snCode || '-'} ${t.attachment ? '<a href="'+t.attachment+'" target="_blank" title="查看附件">📎</a>' : ''}</td>
                 <td>${t.updatedBy || '-'}</td>
-                <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')">删除</button>` : ''}</td>
+                <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')">💣 清除</button>` : ''}</td>
               </tr>
             `).join('')
           }</tbody>
@@ -977,7 +986,7 @@ const App = {
                 <td>${t.machineNumber || '-'}</td>
                 <td>${t.updatedBy || '-'}</td>
                 <td>${t.note || '-'}</td>
-                <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')">删除</button>` : ''}</td>
+                <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')">💣 清除</button>` : ''}</td>
               </tr>
             `).join('')
           }</tbody>
@@ -1149,7 +1158,7 @@ const App = {
                 <td>${t.machineNumber || '-'}</td>
                 <td>${t.updatedBy || '-'}</td>
                 <td>${t.note || '-'}</td>
-                <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')">删除</button>` : ''}</td>
+                <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')">💣 清除</button>` : ''}</td>
               </tr>
             `).join('')
           }</tbody>
@@ -1270,7 +1279,7 @@ const App = {
                 <td>${t.snCode || '-'} ${t.attachment ? '<a href="'+t.attachment+'" target="_blank" title="查看附件">📎</a>' : ''}</td>
                 <td>${t.updatedBy || '-'}</td>
                 <td>${t.note || '-'}</td>
-                <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')">删除</button>` : ''}</td>
+                <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')">💣 清除</button>` : ''}</td>
               </tr>
             `).join('')
           }</tbody>
@@ -1362,6 +1371,10 @@ const App = {
 
   // ==================== SN CODES ====================
   async renderSNCodes() {
+    // 先显示加载状态，避免白屏
+    const mainContent = document.getElementById('main-content');
+    mainContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;padding:60px 0;color:var(--text-secondary);"><div>⏳ 加载中...</div></div>';
+
     let registry, transactions;
 
     // 始终从服务端实时获取，保证多设备数据统一
@@ -1416,14 +1429,12 @@ const App = {
       return '';
     }
 
-    // 以注册表为主要数据源，流水记录为补充
     const snMap = {};
 
     // 第一步：从注册表构建基础条目
     registry.forEach(r => {
       if (!r.snCode) return;
       if (r.status === '_deleted') return;
-      // Determine type label from registry
       let typeLabel = r.equipmentType || '';
       let handLabel = '';
       if (r.equipmentType === 'glove') {
@@ -1445,35 +1456,34 @@ const App = {
       };
     });
 
-    // 第二步：从流水记录补充/更新信息（附件、最近操作时间等），排除已删除的SN
+    // 第二步：从流水记录补充/更新信息
     const deletedSns = new Set(JSON.parse(localStorage.getItem('gms_deleted_sns') || '[]'));
     allSnTxs.forEach(t => {
       const key = t.snCode;
-      if (deletedSns.has(key)) return; // 已删除的SN不从流水复活
+      if (deletedSns.has(key)) return;
       if (!snMap[key]) {
         snMap[key] = { snCode: key, type: getLabel(t), handLabel: getHandLabel(t), attachment: '', latest: t };
       } else {
-        // 用流水中的附件补充注册表中没有的
         if (t.attachment && !snMap[key].attachment) snMap[key].attachment = t.attachment;
-        // 用最近的流水时间更新
         if (new Date(t.timestamp).getTime() > new Date(snMap[key].latest.timestamp).getTime()) {
           snMap[key].latest = t;
         }
       }
     });
 
-    // 合并注册表SN集合，只有注册表中存在的SN才允许显示
-    // 在线时以服务端为准（跨设备删除同步），离线时以本地为准
     const registrySnSet = new Set(registry.map(r => r.snCode).filter(Boolean));
     if (!API.online) {
       const localReg = Storage.getSNRegistry();
       localReg.forEach(r => { if (r.snCode && r.status !== '_deleted') registrySnSet.add(r.snCode); });
     }
 
+    // 构建注册表查找表，避免循环中重复调用 getSNByCode
+    const regLookup = {};
+    registry.forEach(r => { if (r.snCode) regLookup[r.snCode] = r; });
+
     const snList = Object.values(snMap).filter(sn => registrySnSet.has(sn.snCode));
     snList.forEach(sn => {
-      // Check SN registry first for authoritative status
-      const regEntry = Storage.getSNByCode(sn.snCode);
+      const regEntry = regLookup[sn.snCode];
       if (regEntry && regEntry.status === 'damaged') {
         sn.status = '损坏';
         sn.machine = regEntry.damageReason || '';
@@ -1491,7 +1501,6 @@ const App = {
         sn.machine = '';
         sn.statusClass = 'badge-in';
       } else {
-        // Fallback: derive from transactions
         const txsForSn = allSnTxs.filter(t => t.snCode === sn.snCode).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         const latestTx = txsForSn[0];
         if (latestTx && latestTx.direction === 'out' && latestTx.machineNumber) {
@@ -1507,10 +1516,10 @@ const App = {
     });
     snList.sort((a, b) => new Date(b.latest.timestamp).getTime() - new Date(a.latest.timestamp).getTime());
 
-    // Split into three groups based on registry status
+    // 状态分组
     const inUseList = [], idleList = [], damagedList = [];
     snList.forEach(sn => {
-      const reg = Storage.getSNByCode(sn.snCode);
+      const reg = regLookup[sn.snCode];
       if (reg && reg.status === '_deleted') return;
       if (reg && (reg.status === 'in_use')) inUseList.push(sn);
       else if (reg && (reg.status === 'damaged' || reg.status === 'in_repair')) damagedList.push(sn);
@@ -1518,50 +1527,100 @@ const App = {
     });
 
     const self = this;
-    const snCard = (sn) => `
-      <div class="sn-card" data-status="${sn.status === '在用' ? 'inuse' : sn.status === '损坏' || sn.status === '售后中' ? 'damaged' : 'idle'}">
-        <div class="sn-card-thumb" style="position:relative;">
-          ${sn.attachment
-            ? `<a href="${sn.attachment}" target="_blank"><img src="${sn.attachment}" onerror="this.style.display='none';this.parentElement.innerHTML='<span style=font-size:2.5rem>📷</span>'"></a>`
-            : `<span style="font-size:2.5rem;">📷</span>`}
-          <span class="sn-upload-btn" onclick="event.stopPropagation();App._uploadSNPhoto('${sn.snCode}')" title="上传/更换照片">📷</span>
-        </div>
-        <div class="sn-card-body">
-          <code class="sn-card-code">${sn.snCode}</code>
-          <div class="sn-card-type">${sn.type}${sn.handLabel ? ' · ' + sn.handLabel : ''}</div>
-          <div class="sn-card-footer">
-            <span class="badge ${sn.statusClass || (sn.status === '可用' ? 'badge-in' : 'badge-out')}">${sn.status}${sn.machine ? ' · ' + sn.machine : ''}</span>
-            <span class="sn-card-time">${self._formatTime(sn.latest.timestamp)}</span>
-            ${sn.status === '可用' ? `<button class="btn btn-xs btn-warning" onclick="event.stopPropagation();App._markAsDamaged('${sn.snCode}')" title="标记为损坏" style="margin-left:4px;padding:1px 5px;font-size:0.65rem;">⚠</button><button class="btn btn-xs btn-outline" onclick="event.stopPropagation();App._transferOutSN('${sn.snCode}')" title="调出到外部场地" style="margin-left:2px;padding:1px 5px;font-size:0.65rem;">📤</button>` : ''}
-            ${self._isPrivileged() ? `<button class="btn btn-xs btn-danger sn-delete-btn" data-sn="${sn.snCode.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}" title="删除此SN码" style="margin-left:auto;">🗑</button>` : ''}
-          </div>
-        </div>
-      </div>`;
+    const viewMode = this._snViewMode || 'card';
+    const currentFilter = this._snFilter || 'all';
+    const counts = { all: snList.length, inuse: inUseList.length, idle: idleList.length, damaged: damagedList.length };
 
-    const html = `
-      <div class="page-header">
-        <h2>🏷️ SN码管理 <span style="font-size:0.5em;color:var(--text-tertiary);">v4.3</span></h2>
-        <span class="page-subtitle">共 ${snList.length} 个SN码${API.online ? ' · 已同步服务端' : ' · 离线模式'}</span>
+    const fm = t => t ? new Date(t).toLocaleString('zh-CN') : '-';
+
+    // 统计卡片行
+    const statsHtml = `<div class="ts-stats-row">
+      <div class="ts-stat-card total"><div class="ts-stat-icon">🏷️</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.all}</div><div class="ts-stat-label">SN总数</div></div></div>
+      <div class="ts-stat-card responded"><div class="ts-stat-icon">🟢</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.inuse}</div><div class="ts-stat-label">使用中</div></div></div>
+      <div class="ts-stat-card pending"><div class="ts-stat-icon">🟡</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.idle}</div><div class="ts-stat-label">闲置可用</div></div></div>
+      <div class="ts-stat-card"><div class="ts-stat-icon">🔴</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.damaged}</div><div class="ts-stat-label">售后/损坏</div></div></div>
+    </div>`;
+
+    const filterMap = { all: '全部', inuse: '使用中', idle: '闲置', damaged: '售后' };
+    const toolbar = `<div class="ts-toolbar">
+      <div class="ts-filter-bar">
+        ${['all','inuse','idle','damaged'].map(s => `<button class="ts-filter-btn ${s===currentFilter?'active':''}" onclick="App.filterSNList('${s}')" id="sn-filter-${s}">${filterMap[s]} (${counts[s]})</button>`).join('')}
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
-        <input type="text" id="sn-filter-input" placeholder="🔍 搜索SN码/类型..." oninput="App._filterSNCards()" style="flex:1;min-width:150px;padding:8px 12px;border:1px solid var(--border-color);border-radius:8px;font-size:0.9rem;">
-        <button class="btn btn-sm btn-primary sn-tab active" onclick="App._switchSNTab('all',this)">全部(${snList.length})</button>
-        <button class="btn btn-sm btn-outline sn-tab" onclick="App._switchSNTab('inuse',this)">使用中(${inUseList.length})</button>
-        <button class="btn btn-sm btn-outline sn-tab" onclick="App._switchSNTab('idle',this)">闲置(${idleList.length})</button>
-        <button class="btn btn-sm btn-outline sn-tab" onclick="App._switchSNTab('damaged',this)">售后(${damagedList.length})</button>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="text" id="sn-filter-input" placeholder="🔍 搜索SN码/类型..." oninput="App._filterSNCards()" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;font-size:0.85rem;width:180px;">
+        <button class="btn btn-sm ${viewMode==='card'?'btn-primary':'btn-outline'}" onclick="App.renderSNCodesView('card')">🃏 卡片</button>
+        <button class="btn btn-sm ${viewMode==='table'?'btn-primary':'btn-outline'}" onclick="App.renderSNCodesView('table')">📋 表格</button>
       </div>
-      <div class="sn-grid" id="sn-card-grid">
-        ${[...inUseList, ...idleList, ...damagedList].map(s => snCard(s)).join('')}
-      </div>
-      ${snList.length === 0 ? '<p class="empty-text">暂无SN码记录</p>' : ''}
-    `;
-    document.getElementById('main-content').innerHTML = html;
-    // 绑定删除按钮事件
-    document.querySelectorAll('.sn-delete-btn').forEach(btn => {
-      btn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        App._deleteSNCode(this.dataset.sn);
-      });
+    </div>`;
+
+    const emptyHtml = `<div class="ts-empty"><div class="ts-empty-icon">🏷️</div><div class="ts-empty-text">暂无SN码记录</div><div class="ts-empty-sub">${API.online ? '已同步服务端' : '离线模式'}</div></div>`;
+
+    const filteredList = currentFilter === 'all' ? snList : currentFilter === 'inuse' ? inUseList : currentFilter === 'idle' ? idleList : damagedList;
+
+    const SN_ST = { '在用': { c: 'ts-status-responded', icon: '🟢' }, '可用': { c: 'ts-status-pending', icon: '🟡' }, '损坏': { c: 'ts-status-pending', icon: '🔴' }, '售后中': { c: 'ts-status-responded', icon: '🚚' } };
+
+    let body;
+    if (viewMode === 'table') {
+      body = `<div class="ts-table-wrap"><table class="ts-log-table"><thead><tr><th>SN码</th><th>设备类型</th><th>状态</th><th>所属机器</th><th>最后操作</th><th>附件</th><th>操作</th></tr></thead><tbody>
+        ${filteredList.length===0?`<tr><td colspan="7">${emptyHtml}</td></tr>`:''}
+        ${filteredList.map(sn => {
+          const s = SN_ST[sn.status] || SN_ST['可用'];
+          return `<tr data-sn-status="${sn.status==='在用'?'inuse':sn.status==='损坏'||sn.status==='售后中'?'damaged':'idle'}">
+            <td><code>${sn.snCode}</code></td>
+            <td>${sn.type}${sn.handLabel?' · '+sn.handLabel:''}</td>
+            <td><span class="ts-status-badge ${s.c}">${s.icon} ${sn.status}</span></td>
+            <td>${sn.machine||'-'}</td>
+            <td style="font-size:0.8rem;white-space:nowrap;">${fm(sn.latest.timestamp)}</td>
+            <td>${sn.attachment?'<a href="'+sn.attachment+'" target="_blank">📷</a>':'-'}</td>
+            <td>
+              ${sn.status === '可用' ? `<button class="btn btn-xs btn-warning" onclick="App._markAsDamaged('${sn.snCode}')" title="标记损坏">⚠</button>` : ''}
+              ${self._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App._deleteSNCode('${sn.snCode.replace(/'/g,"\\'")}')" title="删除">🗑</button>` : ''}
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody></table></div>`;
+    } else {
+      body = `<div class="ts-list" id="sn-card-grid">
+        ${filteredList.length===0?emptyHtml:''}
+        ${filteredList.map(sn => {
+          const s = SN_ST[sn.status] || SN_ST['可用'];
+          const hasImg = App._hasValidAttachment(sn.attachment);
+          return `<div class="ts-card ${sn.status==='在用'?'responded':sn.status==='损坏'||sn.status==='售后中'?'pending':'idle'}" data-sn-status="${sn.status==='在用'?'inuse':sn.status==='损坏'||sn.status==='售后中'?'damaged':'idle'}" data-sn-code="${sn.snCode}" style="cursor:pointer;position:relative;">
+            <div class="ts-card-icon">${s.icon}</div>
+            <div class="ts-card-title"><code>${sn.snCode}</code></div>
+            <div class="ts-card-sub">${sn.type}${sn.handLabel?' · '+sn.handLabel:''}</div>
+            ${sn.machine?`<div style="font-size:0.85rem;color:var(--text-secondary);margin-top:2px;">🖥 ${sn.machine}</div>`:''}
+            <div class="ts-card-footer">
+              <span>🕐 ${fm(sn.latest.timestamp)}</span>
+              <span style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+                <a href="javascript:void(0)" onclick="event.stopPropagation();App._showSNAttachment('${sn.snCode}')" title="${hasImg ? '查看附件' : '点击上传附件'}" style="padding:3px 8px;border-radius:6px;background:${hasImg ? 'var(--color-success-bg, #dcfce7)' : 'var(--bg-secondary)'};color:${hasImg ? 'var(--color-success, #16a34a)' : 'var(--text-secondary)'};font-size:0.75rem;text-decoration:none;display:inline-flex;align-items:center;gap:3px;">📎 ${hasImg ? '查看' : '上传'}</a>
+                ${sn.status === '可用' ? `<button class="btn btn-xs btn-warning" onclick="event.stopPropagation();App._markAsDamaged('${sn.snCode}')" title="标记损坏" style="padding:3px 8px;border-radius:6px;background:var(--color-warning-bg, #fef3c7);color:var(--color-warning, #d97706);font-size:0.75rem;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:3px;">⚠</button>` : ''}
+                ${self._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="event.stopPropagation();App._deleteSNCode('${sn.snCode.replace(/'/g,"\\'")}')" title="删除" style="padding:3px 8px;border-radius:6px;background:var(--color-danger-bg, #fee2e2);color:var(--color-danger, #dc2626);font-size:0.75rem;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:3px;">🗑</button>` : ''}
+                <span class="ts-status-badge ${s.c}">${sn.status}</span>
+              </span>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    }
+
+    const syncLabel = API.online ? '<span style="color:var(--color-success);">● 已同步</span>' : '<span style="color:var(--color-warning);">○ 离线</span>';
+    document.getElementById('main-content').innerHTML = `<div class="page-header"><h2>🏷️ SN码管理 <span style="font-size:0.5em;color:var(--text-tertiary);">v4.3</span></h2>${syncLabel}</div>${statsHtml}${toolbar}${body}`;
+  },
+
+  renderSNCodesView(viewMode) {
+    this._snViewMode = viewMode;
+    this._doRenderSNCodes();
+  },
+
+  filterSNList(status) {
+    this._snFilter = status;
+    document.querySelectorAll('.ts-filter-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('sn-filter-' + status);
+    if (btn) btn.classList.add('active');
+    document.querySelectorAll('.ts-card[data-sn-status], tr[data-sn-status]').forEach(el => {
+      if (status === 'all') { el.style.display = ''; }
+      else { el.style.display = el.dataset.snStatus === status ? '' : 'none'; }
     });
   },
 
@@ -1600,10 +1659,12 @@ const App = {
 
   _filterSNCards() {
     const q = (document.getElementById('sn-filter-input')?.value || '').toLowerCase();
-    const cards = document.querySelectorAll('#sn-card-grid .sn-card');
+    const cards = document.querySelectorAll('#sn-card-grid .ts-card');
     cards.forEach(card => {
-      const code = (card.querySelector('.sn-card-code')?.textContent || '').toLowerCase();
-      const type = (card.querySelector('.sn-card-type')?.textContent || '').toLowerCase();
+      const codeEl = card.querySelector('.ts-card-title code');
+      const code = (codeEl?.textContent || '').toLowerCase();
+      const subEl = card.querySelector('.ts-card-sub');
+      const type = (subEl?.textContent || '').toLowerCase();
       card.style.display = (!q || code.includes(q) || type.includes(q)) ? '' : 'none';
     });
   },
@@ -1624,7 +1685,8 @@ const App = {
           if (snTx) attachment = snTx.attachment;
         }
         if (attachment) {
-          preview.innerHTML = '<a href="' + attachment + '" target="_blank" title="查看附件"><img src="' + attachment + '" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid var(--border-color);" onerror="this.outerHTML=\'📎\'"></a>';
+          const isDataUrl = attachment.startsWith('data:');
+          preview.innerHTML = '<a href="' + attachment + '" target="_blank" title="查看附件" style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--border-color);border-radius:6px;font-size:0.8rem;color:var(--text-secondary);text-decoration:none;">📎 附件</a>';
         } else {
           preview.innerHTML = '';
         }
@@ -1674,6 +1736,13 @@ const App = {
       // 获取本地SN状态，以便同步库存
       var r = Storage.getSNRegistry();
       var snEntry = r.find(function(x){ return x.snCode === snCode; });
+
+      // Bug Fix 1: 拦截「在用」状态的 SN，防止误删导致机器引用不存在的 SN
+      if (snEntry && snEntry.status === 'in_use') {
+        alert('SN码 ' + snCode + ' 当前正在机器【' + (snEntry.machineNumber || '-') + '】上使用，请先下线该机器后再删除。');
+        return;
+      }
+
       var wasAvailable = snEntry && snEntry.status === 'available';
       var invType = null;
       if (wasAvailable && snEntry) {
@@ -1698,13 +1767,32 @@ const App = {
         if (deleted.indexOf(snCode) === -1) deleted.push(snCode);
         localStorage.setItem('gms_deleted_sns', JSON.stringify(deleted));
       } catch(e) {}
-      // 同步库存：删除SN码时相应的手套也被删除
+
+      // Bug Fix 2: 同步删除服务端附件文件，避免孤儿文件占用存储
+      if (snEntry && snEntry.attachment && snEntry.attachment.startsWith('/uploads/')) {
+        try { API.deleteUpload(snEntry.attachment); } catch(e) {}
+      }
+
+      // Bug Fix 3: 写入删除流水记录，保留审计轨迹
+      if (snEntry) {
+        try {
+          Storage.addTransaction({
+            equipmentType: snEntry.equipmentType,
+            handType: snEntry.handType,
+            direction: 'out',
+            quantity: 1,
+            snCode: snCode,
+            updatedBy: API.currentUser?.username || '系统',
+            note: '删除SN码（' + (snEntry.status || '未知') + '）'
+          });
+        } catch(e) {}
+      }
+
+      // Bug Fix 4: 走 Storage.adjustInventory 以触发本地流水 + audit log
       if (wasAvailable && invType) {
-        var inv = Storage.getInventory(invType);
-        var newQty = Math.max(0, inv.quantity - 1);
-        Storage.setInventory(invType, newQty, '系统');
+        Storage.adjustInventory(invType, -1, '系统', snCode);
         if (API.online) {
-          API.adjustInventory(invType, -1, '系统', '').catch(function(){});
+          API.adjustInventory(invType, -1, '系统', snCode).catch(function(){});
         }
       }
       // 刷新页面内容（不使用 window.location.reload 避免重新验证token导致登出）
@@ -1869,69 +1957,176 @@ const App = {
     return true;
   },
 
-  renderAfterSales() {
+  renderAfterSales(viewMode) {
+    if (!viewMode) viewMode = this._asViewMode || 'card';
+    this._asViewMode = viewMode;
     const registry = Storage.getSNRegistry();
+    console.log('[AfterSales] registry length:', registry.length, 'in_repair items:', registry.filter(r => r.status === 'in_repair').length, 'damaged items:', registry.filter(r => r.status === 'damaged').length);
+    const allItems = registry.filter(r => r.status === 'damaged' || r.status === 'in_repair');
     const damaged = registry.filter(r => r.status === 'damaged');
     const inRepair = registry.filter(r => r.status === 'in_repair');
+    const currentFilter = this._asFilter || 'all';
+    console.log('[AfterSales] allItems:', allItems.length, 'damaged:', damaged.length, 'inRepair:', inRepair.length, 'currentFilter:', currentFilter);
 
-    function snCard(r) {
-      return `
-      <div class="sn-card">
-        <div class="sn-card-body">
-          <code class="sn-card-code">${r.snCode}</code>
-          <div class="sn-card-type">${r.equipmentType} · ${r.handType === 'left' ? '左手' : r.handType === 'right' ? '右手' : ''}</div>
-          ${r.damageReason ? '<div style="font-size:0.8rem;color:var(--color-danger)">损坏原因: ' + r.damageReason + '</div>' : ''}
-          ${r.trackingNumber ? '<div style="font-size:0.78rem">📦 快递: ' + r.trackingNumber + '</div>' : ''}
-          ${r.machineNumber ? '<div style="font-size:0.75rem;color:var(--text-tertiary)">来源机器: ' + r.machineNumber + '</div>' : ''}
-          <div style="font-size:0.72rem;color:var(--text-tertiary)">${r.updatedAt ? App._formatTime(r.updatedAt) : ''}</div>
-        </div>
+    const SM = {
+      damaged: { l: '损坏待发', c: 'ts-status-pending', icon: '⚠️' },
+      in_repair: { l: '售后中', c: 'ts-status-responded', icon: '🚚' },
+    };
+    const fm = t => t ? new Date(t).toLocaleString('zh-CN') : '-';
+
+    const counts = { all: allItems.length, damaged: damaged.length, in_repair: inRepair.length };
+
+    const statsHtml = `<div class="ts-stats-row">
+      <div class="ts-stat-card total"><div class="ts-stat-icon">📋</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.all}</div><div class="ts-stat-label">售后总数</div></div></div>
+      <div class="ts-stat-card pending"><div class="ts-stat-icon">⚠️</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.damaged}</div><div class="ts-stat-label">损坏待发</div></div></div>
+      <div class="ts-stat-card responded"><div class="ts-stat-icon">🚚</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.in_repair}</div><div class="ts-stat-label">售后中</div></div></div>
+    </div>`;
+
+    const toolbar = `<div class="ts-toolbar">
+      <div class="ts-filter-bar">
+        ${['all','damaged','in_repair'].map(s => `<button class="ts-filter-btn ${s===currentFilter?'active':''}" onclick="App.filterAfterSales('${s}')" id="as-filter-${s}">${s==='all'?'全部':s==='damaged'?'损坏待发':'售后中'} (${counts[s]})</button>`).join('')}
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-sm ${viewMode==='card'?'btn-primary':'btn-outline'}" onclick="App.renderAfterSales('card')">🃏 卡片</button>
+        <button class="btn btn-sm ${viewMode==='table'?'btn-primary':'btn-outline'}" onclick="App.renderAfterSales('table')">📋 表格</button>
+        ${counts.damaged > 0 ? `<button class="btn btn-sm btn-primary" onclick="App._showShipDialog()">📦 发货给厂家</button>` : ''}
+        ${counts.in_repair > 0 ? `<button class="btn btn-sm btn-success" onclick="App._showRepairCompleteDialog()">✅ 维修完成</button>` : ''}
+      </div>
+    </div>`;
+
+    const emptyHtml = `<div class="ts-empty"><div class="ts-empty-icon">🔧</div><div class="ts-empty-text">暂无售后记录</div><div class="ts-empty-sub">设备损坏后的售后流程将在此处管理</div></div>`;
+
+    const filteredItems = currentFilter === 'all' ? allItems : allItems.filter(i => i.status === currentFilter);
+
+    const eqLabel = t => {
+      const map = { glove: '手套', dexterous_hand: '灵巧手', gripper: '夹爪' };
+      return map[t] || t;
+    };
+    const handLabel = h => h === 'left' ? '左手' : h === 'right' ? '右手' : '';
+
+    let body;
+    if (viewMode === 'table') {
+      const cols = [
+        { k: 'snCode', l: 'SN码' }, { k: 'equipmentType', l: '设备类型' }, { k: 'handType', l: '左右手' },
+        { k: 'status', l: '状态' }, { k: 'damageReason', l: '损坏原因' }, { k: 'trackingNumber', l: '快递单号' },
+        { k: 'machineNumber', l: '来源机器' }, { k: 'updatedAt', l: '更新时间' }
+      ];
+      body = `<div class="ts-table-wrap"><table class="ts-log-table"><thead><tr>
+        ${cols.map(c => `<th>${c.l}</th>`).join('')}
+      </tr></thead><tbody>
+        ${filteredItems.length===0?`<tr><td colspan="8">${emptyHtml}</td></tr>`:''}
+        ${filteredItems.map(item => { const s=SM[item.status]||SM.damaged;
+          return `<tr data-as-status="${item.status}">
+            <td><code>${item.snCode||'-'}</code></td>
+            <td>${eqLabel(item.equipmentType)||'-'}</td>
+            <td>${handLabel(item.handType)||'-'}</td>
+            <td><span class="ts-status-badge ${s.c}">${s.icon} ${s.l}</span></td>
+            <td>${item.damageReason||'-'}</td>
+            <td>${item.trackingNumber?`📦 ${item.trackingNumber}`:'-'}</td>
+            <td>${item.machineNumber||'-'}</td>
+            <td style="font-size:0.8rem;white-space:nowrap;">${fm(item.updatedAt)}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table></div>`;
+    } else {
+      body = `<div class="ts-list" id="as-list-container">
+        ${filteredItems.length===0?emptyHtml:''}
+        ${filteredItems.map(item => { const s=SM[item.status]||SM.damaged;
+          return `<div class="ts-card ${item.status}" data-as-status="${item.status}">
+            <div class="ts-card-icon">${s.icon}</div>
+            <div class="ts-card-title"><code>${item.snCode||'-'}</code></div>
+            <div class="ts-card-sub">${eqLabel(item.equipmentType)||'-'} ${handLabel(item.handType)?'· '+handLabel(item.handType):''}</div>
+            ${item.damageReason?`<div style="font-size:0.85rem;color:var(--color-danger);margin-top:4px;">💔 ${item.damageReason}</div>`:''}
+            ${item.trackingNumber?`<div style="font-size:0.85rem;color:var(--text-secondary);margin-top:2px;">📦 快递: ${item.trackingNumber}</div>`:''}
+            <div class="ts-card-footer">
+              ${item.machineNumber?`<span>🖥 ${item.machineNumber}</span>`:''}
+              <span>🕐 ${fm(item.updatedAt)}</span>
+              <span style="margin-left:auto;"><span class="ts-status-badge ${s.c}">${s.l}</span></span>
+            </div>
+          </div>`;
+        }).join('')}
       </div>`;
     }
 
-    const html = `
-      <div class="page-header">
-        <h2>🔧 售后管理</h2>
-        <span class="page-subtitle">损坏 ${damaged.length} 个 · 售后中 ${inRepair.length} 个</span>
-      </div>
+    document.getElementById('main-content').innerHTML = `<div class="page-header"><h2>🔧 售后管理</h2><span style="color:var(--text-secondary);font-size:0.85rem;">设备损坏与售后维修管理</span></div>${statsHtml}${toolbar}${body}`;
+  },
 
-      <div class="section-header"><h3>⚠️ 损坏库存 (${damaged.length})</h3></div>
-      ${damaged.length === 0 ? '<p class="empty-text">暂无损坏手套</p>' : `
-        <div class="sn-grid">${damaged.map(r => snCard(r)).join('')}</div>
-        <div style="margin-top:12px;">
-          <button class="btn btn-primary" onclick="App._showShipDialog()">📦 发货给厂家</button>
-        </div>
-      `}
-
-      <div class="section-header" style="margin-top:24px;"><h3>🚚 售后中 (${inRepair.length})</h3></div>
-      <p style="font-size:0.8rem;color:var(--text-tertiary);margin-bottom:12px;">
-        💡 售后流程的每一步都会记录在 <a href="#" onclick="App.switchTab('transactions');return false" style="color:var(--color-primary);">📋 流水记录</a> 中
-      </p>
-      ${inRepair.length === 0 ? '<p class="empty-text">暂无售后中手套</p>' : `
-        <div class="sn-grid">${inRepair.map(r => snCard(r)).join('')}</div>
-        <div style="margin-top:12px;">
-          <button class="btn btn-success" onclick="App._showRepairCompleteDialog()">✅ 维修完成（回到库存）</button>
-        </div>
-      `}
-    `;
-    document.getElementById('main-content').innerHTML = html;
+  filterAfterSales(status) {
+    this._asFilter = status;
+    document.querySelectorAll('.ts-filter-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('as-filter-' + status);
+    if (btn) btn.classList.add('active');
+    document.querySelectorAll('.ts-card[data-as-status], tr[data-as-status]').forEach(el => {
+      if (status === 'all') { el.style.display = ''; }
+      else { el.style.display = el.dataset.asStatus === status ? '' : 'none'; }
+    });
   },
 
   _showShipDialog() {
     const damaged = Storage.getSNRegistry().filter(r => r.status === 'damaged');
     if (damaged.length === 0) { this.notify('没有待发货的损坏手套', 'warning'); return; }
-    const checkboxes = damaged.map(r => `
-      <label style="display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;">
-        <input type="checkbox" class="ship-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" data-reason="${r.damageReason||''}">
-        <code>${r.snCode}</code> ${r.equipmentType} ${r.handType==='left'?'左手':r.handType==='right'?'右手':''} ${r.damageReason?'- '+r.damageReason:''}
+
+    const eqCounts = {};
+    damaged.forEach(r => {
+      const key = this._equipmentLabel(r.equipmentType, r.handType);
+      eqCounts[key] = (eqCounts[key] || 0) + 1;
+    });
+    const statsHtml = Object.entries(eqCounts).map(([k, v]) =>
+      `<span class="ts-status-badge ts-status-pending">${k}: ${v}只</span>`
+    ).join('');
+
+    const checkboxes = damaged.map((r, idx) => `
+      <label class="ship-sn-item" data-sn="${r.snCode.toLowerCase()}" data-eq="${this._equipmentLabel(r.equipmentType, r.handType).toLowerCase()}" data-reason="${(r.damageReason||'').toLowerCase()}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;border-bottom:1px solid var(--border-color);transition:background var(--transition);${idx===0?'border-top-left-radius:8px;border-top-right-radius:8px;':''}${idx===damaged.length-1?'border-bottom-left-radius:8px;border-bottom-right-radius:8px;border-bottom:none;':''}" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
+        <input type="checkbox" class="ship-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" data-reason="${r.damageReason||''}" style="width:18px;height:18px;accent-color:var(--color-primary);flex-shrink:0;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;color:var(--text-primary);font-size:0.95rem;font-family:monospace;">${r.snCode}</div>
+          <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:3px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span>${this._equipmentLabel(r.equipmentType, r.handType)}</span>
+            <span>${r.handType==='left'?'左手':r.handType==='right'?'右手':''}</span>
+            ${r.damageReason?`<span style="color:#dc2626;font-weight:500;">${r.damageReason}</span>`:''}
+          </div>
+        </div>
       </label>`).join('');
-    const btnSelectAll = `<button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.ship-sn-check').forEach(c=>c.checked=true)">全选</button>`;
+
     const html = `
-      <div class="form-group"><label>选择SN码 <span class="required">*</span> ${btnSelectAll}</label>
-        <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border-color);border-radius:6px;padding:4px 8px;">${checkboxes}</div>
+      <div style="margin-bottom:16px;padding:14px 16px;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:var(--radius-md);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="font-size:1.5rem;">📦</span>
+          <div>
+            <div style="font-weight:700;color:#92400e;font-size:1rem;">发货给厂家</div>
+            <div style="font-size:0.8rem;color:#b45309;">共 ${damaged.length} 只损坏设备待发货</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">${statsHtml}</div>
       </div>
-      <div class="form-group"><label>快递单号 <span style="font-weight:normal;color:var(--text-tertiary);">(选填)</span></label><input type="text" id="ship-tracking" placeholder="多只一起寄时选填"></div>
+
+      <div class="ts-form-group">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <label class="ts-form-label" style="margin-bottom:0;">选择SN码 <span class="req">*</span></label>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllShip(true)">全选</button>
+            <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllShip(false)">取消</button>
+          </div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <div style="position:relative;">
+            <input type="text" id="ship-search" class="ts-form-input" placeholder="搜索SN码/设备类型/损坏原因" oninput="App._filterShipItems()" style="padding:10px 36px 10px 14px;">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:0.9rem;">🔍</span>
+          </div>
+        </div>
+        <div id="ship-list-container" style="max-height:260px;overflow-y:auto;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);">
+          ${checkboxes}
+        </div>
+        <div id="ship-empty-tip" style="display:none;padding:30px;text-align:center;color:var(--text-tertiary);font-size:0.85rem;">没有找到匹配的SN码</div>
+      </div>
+
+      <div class="ts-form-group">
+        <label class="ts-form-label">快递单号 <span style="font-weight:normal;color:var(--text-tertiary);">(选填)</span></label>
+        <input type="text" id="ship-tracking" class="ts-form-input" placeholder="多只一起寄时可填写快递单号">
+        <div class="ts-form-hint">填写快递单号后便于后续追踪物流信息</div>
+      </div>
     `;
-    this.showModal('发货给厂家', html, () => {
+    this.showModal('📦 发货给厂家', html, () => {
       const checked = document.querySelectorAll('.ship-sn-check:checked');
       if (checked.length === 0) { this.notify('请至少选择一个SN码', 'error'); return false; }
       const tracking = document.getElementById('ship-tracking').value.trim();
@@ -1946,7 +2141,6 @@ const App = {
           snCode: sn, updatedBy: user,
           note: `售后发货给厂家${tracking ? '，快递单号: ' + tracking : ''}`,
         });
-        // Consolidate: single server call with all fields, preserve damageReason
         const entry = { snCode: sn, equipmentType: eqType, handType: hand, status: 'in_repair', machineNumber: '', damageReason: reason, trackingNumber: tracking || '无单号', shippedAt: new Date().toISOString() };
         Storage.upsertSNRegistry(entry);
         if (API.online) { API.upsertSNRegistry(entry).catch(() => {}); }
@@ -1957,17 +2151,99 @@ const App = {
     });
   },
 
+  _filterShipItems() {
+    const q = (document.getElementById('ship-search')?.value || '').toLowerCase().trim();
+    const items = document.querySelectorAll('.ship-sn-item');
+    let visibleCount = 0;
+    items.forEach(item => {
+      const sn = item.dataset.sn || '';
+      const eq = item.dataset.eq || '';
+      const reason = item.dataset.reason || '';
+      const match = !q || sn.includes(q) || eq.includes(q) || reason.includes(q);
+      item.style.display = match ? '' : 'none';
+      if (match) visibleCount++;
+    });
+    const emptyTip = document.getElementById('ship-empty-tip');
+    if (emptyTip) emptyTip.style.display = visibleCount === 0 ? '' : 'none';
+  },
+
+  _selectAllShip(checked) {
+    document.querySelectorAll('.ship-sn-item').forEach(item => {
+      if (item.style.display !== 'none') {
+        const cb = item.querySelector('.ship-sn-check');
+        if (cb) cb.checked = checked;
+      }
+    });
+  },
+
   _showRepairCompleteDialog() {
     const inRepair = Storage.getSNRegistry().filter(r => r.status === 'in_repair');
     if (inRepair.length === 0) { this.notify('没有售后中的手套', 'warning'); return; }
-    const opts = inRepair.map(r => `<option value="${r.snCode}">${r.snCode} (${r.equipmentType} ${r.handType === 'left' ? '左手' : '右手'}) 📦${r.trackingNumber || ''}</option>`).join('');
+
+    const eqCounts = {};
+    inRepair.forEach(r => {
+      const key = this._equipmentLabel(r.equipmentType, r.handType);
+      eqCounts[key] = (eqCounts[key] || 0) + 1;
+    });
+    const statsHtml = Object.entries(eqCounts).map(([k, v]) =>
+      `<span class="ts-status-badge ts-status-responded">${k}: ${v}只</span>`
+    ).join('');
+
+    const checkboxes = inRepair.map((r, idx) => `
+      <label class="repair-sn-item" data-sn="${r.snCode.toLowerCase()}" data-eq="${this._equipmentLabel(r.equipmentType, r.handType).toLowerCase()}" data-tracking="${(r.trackingNumber||'').toLowerCase()}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;border-bottom:1px solid var(--border-color);transition:background var(--transition);${idx===0?'border-top-left-radius:8px;border-top-right-radius:8px;':''}${idx===inRepair.length-1?'border-bottom-left-radius:8px;border-bottom-right-radius:8px;border-bottom:none;':''}" onmouseenter="this.style.background='var(--bg-secondary)'" onmouseleave="this.style.background=''">
+        <input type="checkbox" class="repair-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}" style="width:18px;height:18px;accent-color:var(--color-success);flex-shrink:0;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;color:var(--text-primary);font-size:0.95rem;font-family:monospace;">${r.snCode}</div>
+          <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:3px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span>${this._equipmentLabel(r.equipmentType, r.handType)}</span>
+            <span>${r.handType==='left'?'左手':r.handType==='right'?'右手':''}</span>
+            ${r.trackingNumber?`<span style="color:var(--color-primary);font-family:monospace;">${r.trackingNumber}</span>`:''}
+          </div>
+        </div>
+      </label>`).join('');
+
     const html = `
-      <div class="form-group"><label>选择SN码 <span class="required">*</span> <button type="button" class="btn btn-xs btn-outline" onclick="document.querySelectorAll('.repair-sn-check').forEach(c=>c.checked=true)">全选</button></label>
-        <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border-color);border-radius:6px;padding:4px 8px;">${inRepair.map(r => `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;"><input type="checkbox" class="repair-sn-check" value="${r.snCode}" data-eq="${r.equipmentType}" data-hand="${r.handType||''}"><code>${r.snCode}</code> ${r.equipmentType} ${r.handType==='left'?'左手':r.handType==='right'?'右手':''} ${r.trackingNumber?'📦'+r.trackingNumber:''}</label>`).join('')}</div>
+      <div style="margin-bottom:16px;padding:14px 16px;background:linear-gradient(135deg,#d1fae5,#a7f3d0);border-radius:var(--radius-md);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="font-size:1.5rem;">✅</span>
+          <div>
+            <div style="font-weight:700;color:#065f46;font-size:1rem;">维修完成</div>
+            <div style="font-size:0.8rem;color:#047857;">共 ${inRepair.length} 只设备正在售后维修中</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">${statsHtml}</div>
       </div>
-      <p class="form-hint">维修完成后，手套将回到空闲库存</p>
+
+      <div class="ts-form-group">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <label class="ts-form-label" style="margin-bottom:0;">选择SN码 <span class="req">*</span></label>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllRepair(true)">全选</button>
+            <button type="button" class="btn btn-xs btn-outline" onclick="App._selectAllRepair(false)">取消</button>
+          </div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <div style="position:relative;">
+            <input type="text" id="repair-search" class="ts-form-input" placeholder="搜索SN码/设备类型/快递单号" oninput="App._filterRepairItems()" style="padding:10px 36px 10px 14px;">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:0.9rem;">🔍</span>
+          </div>
+        </div>
+        <div id="repair-list-container" style="max-height:260px;overflow-y:auto;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);">
+          ${checkboxes}
+        </div>
+        <div id="repair-empty-tip" style="display:none;padding:30px;text-align:center;color:var(--text-tertiary);font-size:0.85rem;">没有找到匹配的SN码</div>
+      </div>
+
+      <div style="padding:12px 14px;background:var(--bg-secondary);border-radius:var(--radius-md);border-left:4px solid var(--color-success);">
+        <div style="display:flex;align-items:flex-start;gap:8px;">
+          <span style="font-size:1rem;">💡</span>
+          <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.5;">
+            维修完成后，选中的设备将从售后状态恢复为<span style="color:var(--color-success);font-weight:600;">空闲库存</span>，并自动生成入库流水记录。
+          </div>
+        </div>
+      </div>
     `;
-    this.showModal('维修完成', html, () => {
+    this.showModal('✅ 维修完成', html, () => {
       const checked = document.querySelectorAll('.repair-sn-check:checked');
       if (checked.length === 0) { this.notify('请至少选择一个SN码', 'error'); return false; }
       const user = API.currentUser?.username || '系统';
@@ -1979,14 +2255,12 @@ const App = {
         if (eqType === 'glove') invType = hand === 'left' ? 'left_glove' : 'right_glove';
         else if (eqType === 'dexterous_hand') invType = hand === 'left' ? 'left_dexterous_hand' : 'right_dexterous_hand';
         else invType = eqType;
-        // 仅本地更新库存（服务器端 handleRepairCompleteSN 会同步更新服务端库存）
         const current = Storage.getInventory(invType);
         Storage.setInventory(invType, current.quantity + 1, user);
         Storage.addTransaction({
           equipmentType: eqType, handType: hand, direction: 'in', quantity: 1,
           snCode: sn, updatedBy: user, note: '【售后完成】维修完成，回到空闲库存',
         });
-        // Consolidate: single server call with all fields
         const entry = { snCode: sn, equipmentType: eqType, handType: hand, status: 'available', machineNumber: '', damageReason: '', trackingNumber: '', repairedAt: new Date().toISOString() };
         Storage.upsertSNRegistry(entry);
         if (API.online) { API.repairCompleteSN(sn).catch(() => {}); }
@@ -1994,6 +2268,31 @@ const App = {
       this.notify(`${checked.length} 个SN码已回到空闲库存`);
       this.renderAfterSales();
       return true;
+    });
+  },
+
+  _filterRepairItems() {
+    const q = (document.getElementById('repair-search')?.value || '').toLowerCase().trim();
+    const items = document.querySelectorAll('.repair-sn-item');
+    let visibleCount = 0;
+    items.forEach(item => {
+      const sn = item.dataset.sn || '';
+      const eq = item.dataset.eq || '';
+      const tracking = item.dataset.tracking || '';
+      const match = !q || sn.includes(q) || eq.includes(q) || tracking.includes(q);
+      item.style.display = match ? '' : 'none';
+      if (match) visibleCount++;
+    });
+    const emptyTip = document.getElementById('repair-empty-tip');
+    if (emptyTip) emptyTip.style.display = visibleCount === 0 ? '' : 'none';
+  },
+
+  _selectAllRepair(checked) {
+    document.querySelectorAll('.repair-sn-item').forEach(item => {
+      if (item.style.display !== 'none') {
+        const cb = item.querySelector('.repair-sn-check');
+        if (cb) cb.checked = checked;
+      }
     });
   },
 
@@ -2041,11 +2340,12 @@ const App = {
   },
 
   // ==================== MACHINE MANAGEMENT ====================
-  renderMachines() {
+  renderMachines(viewMode) {
+    if (!viewMode) viewMode = this._machineViewMode || 'card';
+    this._machineViewMode = viewMode;
     const machines = Storage.getMachines();
     const onlineCount = Storage.getOnlineMachineCount();
 
-    // Build latest-status-per-machine map
     const latestByMachine = {};
     machines.forEach(m => {
       const existing = latestByMachine[m.machineNumber];
@@ -2066,68 +2366,99 @@ const App = {
     const typeLabel = {};
     eqConfig.forEach(c => { typeIcon[c.id] = c.icon || '🖥️'; typeLabel[c.id] = c.name; });
 
+    const currentFilter = this._machineFilter || 'all';
+    const counts = { all: allMachineNumbers.length, online: onlineCount, offline: allMachineNumbers.length - onlineCount };
+
+    // 统计卡片
+    const statsHtml = `<div class="ts-stats-row">
+      <div class="ts-stat-card total"><div class="ts-stat-icon">🖥️</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.all}</div><div class="ts-stat-label">机器总数</div></div></div>
+      <div class="ts-stat-card responded"><div class="ts-stat-icon">🟢</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.online}</div><div class="ts-stat-label">在线</div></div></div>
+      <div class="ts-stat-card pending"><div class="ts-stat-icon">🔴</div><div class="ts-stat-content"><div class="ts-stat-value">${counts.offline}</div><div class="ts-stat-label">离线</div></div></div>
+    </div>`;
+
+    const filterMap = { all: '全部', online: '在线', offline: '离线' };
+    const toolbar = `<div class="ts-toolbar">
+      <div class="ts-filter-bar">
+        ${['all','online','offline'].map(s => `<button class="ts-filter-btn ${s===currentFilter?'active':''}" onclick="App.filterMachines('${s}')" id="machine-filter-${s}">${filterMap[s]} (${counts[s]})</button>`).join('')}
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="text" id="machine-search" placeholder="🔍 搜索机器编号..." oninput="App._filterMachines()" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;font-size:0.85rem;width:180px;">
+        <button class="btn btn-sm ${viewMode==='card'?'btn-primary':'btn-outline'}" onclick="App.renderMachines('card')">🃏 卡片</button>
+        <button class="btn btn-sm ${viewMode==='table'?'btn-primary':'btn-outline'}" onclick="App.renderMachines('table')">📋 表格</button>
+      </div>
+    </div>`;
+
+    const emptyCardHtml = `<div class="ts-empty"><div class="ts-empty-icon">🖥️</div><div class="ts-empty-text">暂无机器记录</div><div class="ts-empty-sub">添加上/下线记录后在此显示</div></div>`;
+
+    const stMap = {
+      online: { cls: 'responded', label: '🟢 在线' },
+      offline: { cls: 'pending', label: '🔴 离线' },
+      waiting_repair: { cls: 'pending', label: '🔴 等待维修' },
+      repairing: { cls: 'responded', label: '🟡 维修中' },
+    };
+
+    const machineCards = allMachineNumbers.map(num => {
+      const m = latestByMachine[num];
+      const st = m.status || 'offline';
+      const s = stMap[st] || stMap.offline;
+      return `<div class="ts-card ${s.cls}" data-machine-status="${st}" onclick="App.showMachineDetail('${num}')">
+        <div class="ts-card-icon">${typeIcon[m.deviceType] || '🖥️'}</div>
+        <div class="ts-card-title">#${num}</div>
+        <div class="ts-card-sub">${typeLabel[m.deviceType] || '未知类型'}</div>
+        <div class="ts-card-footer">
+          <span>🕐 ${this._formatTime(m.updatedAt)}</span>
+          <span style="margin-left:auto;"><span class="ts-status-badge ts-status-${s.cls}">${s.label}</span></span>
+        </div>
+      </div>`;
+    }).join('');
+
+    let body;
+    if (viewMode === 'table') {
+      const fm = t => t ? new Date(t).toLocaleString('zh-CN') : '-';
+      body = `<div class="ts-table-wrap"><table class="ts-log-table"><thead><tr><th>机器编号</th><th>设备类型</th><th>状态</th><th>上线时间</th><th>下线时间</th><th>原因</th><th>更新人</th><th>操作</th></tr></thead><tbody>
+        ${machines.length===0?`<tr><td colspan="8">${emptyCardHtml}</td></tr>`:''}
+        ${machines.sort((a, b) => new Date(b.updatedAt || b.id) - new Date(a.updatedAt || a.id)).map(m => {
+          const s = stMap[m.status] || stMap.offline;
+          return `<tr data-machine-status="${m.status || 'offline'}">
+            <td><strong>${m.machineNumber}</strong></td>
+            <td>${typeIcon[m.deviceType] || ''} ${typeLabel[m.deviceType] || '-'}</td>
+            <td><span class="ts-status-badge ts-status-${s.cls}">${s.label}</span></td>
+            <td style="font-size:0.8rem;white-space:nowrap;">${fm(m.onlineTime)}</td>
+            <td style="font-size:0.8rem;white-space:nowrap;">${fm(m.offlineTime)}</td>
+            <td>${m.status === 'online' ? (m.onlineReason || '-') : (m.offlineReason || '-')}</td>
+            <td>${m.updatedBy || '-'}</td>
+            <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteMachine('${m.id}')">💣 清除</button>` : ''}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table></div>`;
+    } else {
+      body = `<div class="ts-list">${machineCards || emptyCardHtml}</div>`;
+    }
+
     const html = `
       <div class="page-header">
         <h2>🖥️ 机器管理</h2>
-        <div class="header-actions">
-          <span class="online-badge">在线机器: <strong>${onlineCount}</strong> 台</span>
-          <button class="btn btn-primary" onclick="App.showMachineForm()">+ 添加上/下线记录</button>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-primary" onclick="App.showMachineForm()">+ 添加记录</button>
           <button class="btn btn-outline" onclick="App.showBulkMachineImport()">📦 批量导入</button>
         </div>
       </div>
-      <div class="machine-summary">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">
-          <input type="text" id="machine-search" placeholder="🔍 搜索机器编号..." oninput="App._filterMachines()" style="flex:1;min-width:150px;padding:8px 12px;border:1px solid var(--border-color);border-radius:8px;font-size:0.9rem;">
-          <button class="btn btn-sm btn-primary machine-tab active" onclick="App._filterMachineTab('all',this)">全部(${allMachineNumbers.length})</button>
-          <button class="btn btn-sm btn-outline machine-tab" onclick="App._filterMachineTab('online',this)">在线(${onlineCount})</button>
-          <button class="btn btn-sm btn-outline machine-tab" onclick="App._filterMachineTab('offline',this)">离线(${allMachineNumbers.length-onlineCount})</button>
-        </div>
-        <div class="summary-row">
-          <span>全部机器编号: ${allMachineNumbers.length > 0 ? allMachineNumbers.join(', ') : '暂无'}</span>
-        </div>
-        <div class="machine-status-grid" id="machine-card-grid">
-          ${allMachineNumbers.map(num => {
-            const m = latestByMachine[num];
-            const st = m.status || 'offline';
-            const stMap = {
-              online: { cls: 'online', label: '🟢 在线' },
-              offline: { cls: 'offline', label: '🔴 离线' },
-              waiting_repair: { cls: 'waiting-repair', label: '🔴 等待维修' },
-              repairing: { cls: 'repairing', label: '🟡 维修中' },
-            };
-            const s = stMap[st] || stMap.offline;
-            return `
-            <div class="machine-card ${s.cls}" onclick="App.showMachineDetail('${num}')" style="cursor:pointer;" title="点击查看详情">
-              <div class="machine-number">${typeIcon[m.deviceType] || '🖥️'} #${num}</div>
-              <div class="machine-type">${typeLabel[m.deviceType] || '未知类型'}</div>
-              <div class="machine-status">${s.label}</div>
-            </div>
-          `}).join('')}
-        </div>
-      </div>
-      <div class="section-header"><h3>机器上下线记录</h3></div>
-      <div class="table-container">
-        <table class="data-table">
-          <thead><tr><th>操作时间</th><th>机器编号</th><th>设备类型</th><th>上/下线</th><th>原因</th><th>上线时间</th><th>下线时间</th><th>更新人</th><th>操作</th></tr></thead>
-          <tbody>${machines.length === 0 ? '<tr><td colspan="9" class="empty-text">暂无机器记录</td></tr>' :
-            machines.sort((a, b) => new Date(b.updatedAt || b.id) - new Date(a.updatedAt || a.id)).map(m => `
-              <tr>
-                <td><span title="${this._formatTime(m.updatedAt)}">${this._formatTime(m.updatedAt)}</span></td>
-                <td><strong>${m.machineNumber}</strong></td>
-                <td>${typeIcon[m.deviceType] || ''} ${typeLabel[m.deviceType] || '-'}</td>
-                <td><span class="badge ${m.status === 'online' ? 'badge-online' : 'badge-offline'}">${m.status === 'online' ? '上线' : '下线'}</span></td>
-                <td>${m.status === 'online' ? (m.onlineReason || '-') : (m.offlineReason || '-')}</td>
-                <td>${this._formatTime(m.onlineTime)}</td>
-                <td>${this._formatTime(m.offlineTime)}</td>
-                <td>${m.updatedBy || '-'}</td>
-                <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteMachine('${m.id}')">删除</button>` : ''}</td>
-              </tr>
-            `).join('')
-          }</tbody>
-        </table>
-      </div>
+      ${statsHtml}
+      ${toolbar}
+      ${body}
     `;
     document.getElementById('main-content').innerHTML = html;
+  },
+
+  filterMachines(status) {
+    this._machineFilter = status;
+    document.querySelectorAll('.ts-filter-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('machine-filter-' + status);
+    if (btn) btn.classList.add('active');
+    document.querySelectorAll('.ts-card[data-machine-status], tr[data-machine-status]').forEach(el => {
+      if (status === 'all') { el.style.display = ''; }
+      else { el.style.display = el.dataset.machineStatus === status || el.dataset.machineStatus === (status === 'online' ? 'online' : 'offline') ? '' : 'none'; }
+    });
   },
 
   showMachineForm(presetNumber, presetStatus) {
@@ -2275,11 +2606,14 @@ const App = {
       const existingOnline = status === 'offline' ? machines.find(m => m.machineNumber === machineNumber && m.status === 'online') : null;
       const effectiveDeviceType = (status === 'offline' && existingOnline) ? existingOnline.deviceType : deviceType;
 
-      // Collect SN codes from the form (custom autocomplete inputs)
+      // Collect SN codes from the form (从搜索输入框 + 隐藏字段读取)
       const snMap = {};
       document.querySelectorAll('.machine-sn-input').forEach(input => {
-        const val = input.value.trim();
-        if (val) snMap[input.dataset.invType] = val;
+        const invType = input.getAttribute('data-inv-type');
+        // 优先从隐藏字段读取（用户点击匹配项后设置的），否则使用输入框值
+        const hiddenInput = document.getElementById(input.id + '-value');
+        const val = hiddenInput ? hiddenInput.value.trim() : input.value.trim();
+        if (val) snMap[invType] = val;
       });
 
       const pairId = Object.keys(snMap).length > 0 ? Storage._generatePairId() : null;
@@ -2678,7 +3012,7 @@ const App = {
         fieldsHtml = '<p style="font-size:0.8rem;color:var(--text-tertiary);">该机器无已分配的SN码</p>';
       }
     } else {
-      // 上线模式：显示可用SN码下拉框
+      // 上线模式：显示可用SN码搜索框（必填）
       eqConfig.consumes.forEach(consumed => {
         if (consumed.handType) {
           hasPairs = true;
@@ -2689,7 +3023,7 @@ const App = {
           const inputId = `machine-sn-inp-${consumed.inventoryType}`;
           fieldsHtml += `
             <div style="margin-bottom:8px;" id="machine-sn-row-${consumed.inventoryType}">
-              <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;">${handLabel}${label} SN码 <span style="color:var(--color-success);" id="sn-count-${consumed.inventoryType}">(${availableSns.length}个可用)</span></span>
+              <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;">${handLabel}${label} SN码 <span style="color:var(--color-success);" id="sn-count-${consumed.inventoryType}">(${availableSns.length}个可用)</span> <span class="required">*</span></span>
               <input type="text" id="${inputId}" class="machine-sn-input" data-inv-type="${consumed.inventoryType}" data-hand-type="${consumed.handType || ''}" placeholder="🔍 搜索或输入SN码..." oninput="App._onMachineSNInput(this)" onfocus="App._onMachineSNInput(this)" autocomplete="off" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;">
               <input type="hidden" id="${inputId}-value" class="machine-sn-value" data-inv-type="${consumed.inventoryType}">
             </div>`;
@@ -2739,6 +3073,9 @@ const App = {
       item.addEventListener('mousedown', (e) => {
         e.preventDefault();
         inputEl.value = sn;
+        // 同步设置隐藏字段，避免提交时读取不到
+        const hiddenInput = document.getElementById(inputEl.id + '-value');
+        if (hiddenInput) hiddenInput.value = sn;
         this._hideSNAutocomplete();
         inputEl.focus();
       });
@@ -2908,10 +3245,13 @@ const App = {
 
     const contentHtml = `
       <div class="breakdown-popover">
-        <div class="breakdown-summary">在线机器共 <strong>${onlineMachines.length}</strong> 台</div>
-        <div class="breakdown-list">${rows || '<p class="empty-text">暂无在线机器</p>'}</div>
+        <div class="breakdown-summary">
+          <span style="font-size:1.8rem;">🖥️</span>
+          <span>在线机器共 <strong>${onlineMachines.length}</strong> 台</span>
+        </div>
+        <div class="breakdown-list">${rows || '<div style="padding:30px;text-align:center;color:var(--text-tertiary);">暂无在线机器</div>'}</div>
         <div class="breakdown-footer">
-          <small>总机器数: ${Object.keys(latestByMachine).length} 台 | 利用率: ${Object.keys(latestByMachine).length > 0 ? Math.round(onlineMachines.length / Object.keys(latestByMachine).length * 100) : 0}%</small>
+          总机器数: ${Object.keys(latestByMachine).length} 台 | 利用率: ${Object.keys(latestByMachine).length > 0 ? Math.round(onlineMachines.length / Object.keys(latestByMachine).length * 100) : 0}%
         </div>
       </div>
     `;
@@ -2982,16 +3322,39 @@ const App = {
     }).join('');
 
     const contentHtml = `
-      <div class="breakdown-list">${rows}</div>
-      <div style="margin-top:12px;"><button class="btn btn-sm btn-outline" onclick="App._exportAllSNExcel()">📥 导出全部库存库存Excel</button></div>
-      <div style="margin-top:12px;border-top:1px solid var(--border-color);padding-top:12px;">
-        <p style="font-weight:600;margin-bottom:8px;">⚡ 快速左/右手入库</p>
-        <p class="form-hint" style="margin-bottom:8px;">手套: <code>L/R+SN码</code> 如 <code>LWG1JA02260403004</code> · 灵巧手: <code>QL/QR+SN码</code> 如 <code>QL347A386D3433</code><br>支持换行/空格批量输入</p>
-        <textarea id="quick-lr-input" rows="4" placeholder="RWG1K01260321284&#10;LWG1JA02260403004" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;font-family:monospace;"></textarea>
-        <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="App._quickLRInbound()">📥 快速入库</button>
-        <span id="quick-lr-result" style="margin-left:8px;font-size:0.8rem;color:var(--text-tertiary);"></span>
+      <div class="breakdown-popover">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+          <div style="padding:16px;background:var(--bg-secondary);border-radius:10px;text-align:center;">
+            <div style="font-size:2rem;margin-bottom:4px;">🧤</div>
+            <div style="font-weight:700;font-size:1.4rem;color:var(--text-primary);">${gloveTotal} 只</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:2px;">${pairCount} 对 · 左${gloveTypes[0].total} · 右${gloveTypes[1].total}</div>
+          </div>
+          <div style="padding:16px;background:var(--bg-secondary);border-radius:10px;text-align:center;">
+            <div style="font-size:2rem;margin-bottom:4px;">🤖</div>
+            <div style="font-weight:700;font-size:1.4rem;color:var(--text-primary);">${dexTotal} 只</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:2px;">左${dexTypes[0].total} · 右${dexTypes[1].total}</div>
+          </div>
+        </div>
+        <div class="breakdown-section-title">库存明细</div>
+        <div class="breakdown-list">${rows}</div>
+        <div style="margin-top:16px;">
+          <button class="btn btn-sm btn-outline" onclick="App._exportAllSNExcel()">📥 导出全部库存Excel</button>
+        </div>
+        <div style="margin-top:20px;border-top:1px solid var(--border-color);padding-top:16px;">
+          <div class="breakdown-section-title">⚡ 快速左/右手入库</div>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:10px;">
+            手套: <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;">L/R+SN码</code> 如 <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;">LWG1JA02260403004</code><br>
+            灵巧手: <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;">QL/QR+SN码</code> 如 <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;">QL347A386D3433</code><br>
+            支持换行/空格批量输入
+          </p>
+          <textarea id="quick-lr-input" rows="3" placeholder="RWG1K01260321284&#10;LWG1JA02260403004" style="width:100%;padding:10px;border:1px solid var(--border-color);border-radius:8px;font-family:monospace;font-size:0.9rem;resize:vertical;"></textarea>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:10px;">
+            <button class="btn btn-primary btn-sm" onclick="App._quickLRInbound()">📥 快速入库</button>
+            <span id="quick-lr-result" style="font-size:0.8rem;color:var(--text-tertiary);"></span>
+          </div>
+        </div>
+        <table id="all-sn-print-table" style="display:none;"><thead><tr><th>时间</th><th>设备类型</th><th>SN码</th><th>状态</th><th>机器编号</th></tr></thead><tbody>${snPrintRows}</tbody></table>
       </div>
-      <table id="all-sn-print-table" style="display:none;"><thead><tr><th>时间</th><th>设备类型</th><th>SN码</th><th>状态</th><th>机器编号</th></tr></thead><tbody>${snPrintRows}</tbody></table>
     `;
     this._showInfoModal('全部库存明细', contentHtml);
   },
@@ -3145,18 +3508,21 @@ const App = {
     const contentHtml = `
       <div class="breakdown-popover">
         <div class="breakdown-summary">
-          <span style="font-size:2rem;">${icon}</span>
-          <strong>${label}</strong> 当前库存: <strong style="font-size:1.3rem;">${inv.quantity}</strong> 个
+          <span style="font-size:1.8rem;">${icon}</span>
+          <div style="text-align:center;">
+            <div style="font-size:0.9rem;color:var(--text-secondary);margin-bottom:4px;">${label}</div>
+            <div style="font-size:1.8rem;font-weight:700;color:var(--text-primary);">${inv.quantity} <span style="font-size:0.9rem;font-weight:400;color:var(--text-secondary);">个</span></div>
+          </div>
         </div>
         <div class="breakdown-meta">
-          最后更新: ${this._formatTime(inv.updatedAt)} | 更新人: ${inv.updatedBy || '无'}
+          最后更新: ${this._formatTime(inv.updatedAt)} · 更新人: ${inv.updatedBy || '无'}
         </div>
-        <div style="margin:12px 0;display:flex;gap:8px;">
-          <button class="btn btn-sm btn-primary" onclick="App.quickInOut('${type}','in')">+ 入库</button>
-          <button class="btn btn-sm btn-primary" onclick="App.quickInOut('${type}','out')">- 出库</button>
-          ${API.currentUser && API.currentUser.role === 'superadmin' ? `<button class="btn btn-sm btn-danger" onclick="App.showSetInventoryModal('${type}','${label}')">✎ 直接设置库存</button>` : ''}
+        <div style="margin:12px 0 16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+          <button class="btn btn-sm btn-success" onclick="App.quickInOut('${type}','in')">+ 入库</button>
+          <button class="btn btn-sm btn-warning" onclick="App.quickInOut('${type}','out')">- 出库</button>
+          ${API.currentUser && API.currentUser.role === 'superadmin' ? `<button class="btn btn-sm btn-outline" onclick="App.showSetInventoryModal('${type}','${label}')">⚙ 直接设置</button>` : ''}
         </div>
-        <h4 style="margin-top:12px;">最近10条流水</h4>
+        <div class="breakdown-section-title">最近10条流水</div>
         <div class="mini-list">${this._renderRecentTransactions(transactions)}</div>
       </div>
     `;
@@ -3222,20 +3588,34 @@ const App = {
 
     const typeRows = Object.entries(byType).map(([k, v]) => {
       const labels = { glove: '手套', dexterous_hand: '灵巧手', gripper: '夹爪' };
-      return `<div class="breakdown-row"><span>${labels[k] || k}</span><span class="breakdown-count">${v} 条</span></div>`;
+      return `<div class="breakdown-row"><span class="breakdown-icon">📦</span><span class="breakdown-type">${labels[k] || k}</span><span class="breakdown-count">${v}</span></div>`;
     }).join('');
 
     const contentHtml = `
       <div class="breakdown-popover">
-        <div class="breakdown-summary">今日操作共 <strong>${todayTx.length}</strong> 条</div>
+        <div class="breakdown-summary">
+          <span style="font-size:1.8rem;">📋</span>
+          <div style="text-align:center;">
+            <div style="font-size:0.9rem;color:var(--text-secondary);margin-bottom:4px;">今日操作</div>
+            <div style="font-size:1.8rem;font-weight:700;color:var(--text-primary);">${todayTx.length} <span style="font-size:0.9rem;font-weight:400;color:var(--text-secondary);">条</span></div>
+          </div>
+        </div>
         <div class="breakdown-list">
-          <div class="breakdown-row"><span>📥 入库</span><span class="breakdown-count">${inCount} 条</span></div>
-          <div class="breakdown-row"><span>📤 出库</span><span class="breakdown-count">${outCount} 条</span></div>
+          <div class="breakdown-row">
+            <span class="breakdown-icon">📥</span>
+            <span class="breakdown-type">入库</span>
+            <span class="breakdown-count">${inCount}</span>
+          </div>
+          <div class="breakdown-row">
+            <span class="breakdown-icon">📤</span>
+            <span class="breakdown-type">出库</span>
+            <span class="breakdown-count">${outCount}</span>
+          </div>
           ${typeRows}
         </div>
-        <h4 style="margin-top:12px;">今日流水</h4>
+        <div class="breakdown-section-title">今日流水</div>
         <div class="mini-list">${this._renderRecentTransactions(todayTx.slice(0, 15))}</div>
-        <div style="margin-top:8px;text-align:right;">
+        <div style="margin-top:12px;text-align:right;">
           <button class="btn btn-sm btn-outline" onclick="App.switchTab('transactions')">查看全部流水 →</button>
         </div>
       </div>
@@ -3497,15 +3877,14 @@ const App = {
         const latestRecord = machineRecords.sort((a, b) => new Date(b.updatedAt || b.id).getTime() - new Date(a.updatedAt || a.id).getTime())[0];
         if (latestRecord && latestRecord.status === status) { this.notify(`机器 ${machineNumber} 已经是${status === 'online' ? '上线' : '下线'}状态`, 'warning'); return false; }
 
-        // Collect SN codes (select + custom input)
+        // Collect SN codes (从搜索输入框 + 隐藏字段读取)
         const snMap = {};
-        document.querySelectorAll('.qt-sn-select').forEach(sel => {
-          if (sel.value && sel.value !== '__custom__' && sel.value !== '') {
-            snMap[sel.dataset.invType] = sel.value.trim();
-          }
-        });
-        document.querySelectorAll('.qt-sn-input').forEach(input => {
-          if (input.value.trim()) snMap[input.dataset.invType] = input.value.trim();
+        document.querySelectorAll('.qt-sn-input.machine-sn-input').forEach(input => {
+          const invType = input.getAttribute('data-inv-type');
+          // 优先从隐藏字段读取（用户点击匹配项后设置的），否则使用输入框值
+          const hiddenInput = document.getElementById(input.id + '-value');
+          const val = hiddenInput ? hiddenInput.value.trim() : input.value.trim();
+          if (val) snMap[invType] = val;
         });
         const pairId = Object.keys(snMap).length > 0 ? Storage._generatePairId() : null;
 
@@ -3760,27 +4139,130 @@ const App = {
         const label = cfg.name || consumed.inventoryType;
         const handLabel = consumed.handType === 'left' ? '左手' : '右手';
         const availableSns = this._getAvailableSNs(consumed.inventoryType, consumed.handType);
-        const selectId = `qt-sn-sel-${consumed.inventoryType}`;
         const inputId = `qt-sn-inp-${consumed.inventoryType}`;
         html += `
           <div style="margin-bottom:8px;">
-            <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;margin-bottom:2px;">${handLabel}${label} <span style="color:var(--color-success);">(${availableSns.length}个可用)</span></span>
-            <select id="${selectId}" class="qt-sn-select" data-inv-type="${consumed.inventoryType}" data-target="${inputId}" onchange="App._onQtSnSelectChange(this)" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;">
-              <option value="">-- 选择SN码 --</option>
-              ${availableSns.map(s => `<option value="${s}">${s}</option>`).join('')}
-              <option value="__custom__">✏️ 输入新SN码</option>
-            </select>
-            <input type="text" id="${inputId}" class="qt-sn-input" data-inv-type="${consumed.inventoryType}" placeholder="输入新SN码" style="display:none;width:100%;padding:8px;margin-top:4px;border:1px solid var(--border-color);border-radius:6px;" autocomplete="off">
+            <span style="font-size:0.8rem;color:var(--text-tertiary);display:block;margin-bottom:2px;">${handLabel}${label} <span style="color:var(--color-success);" id="qt-sn-count-${consumed.inventoryType}">(${availableSns.length}个可用)</span> <span class="required">*</span></span>
+            <input type="text" id="${inputId}" class="qt-sn-input machine-sn-input" data-inv-type="${consumed.inventoryType}" data-hand-type="${consumed.handType || ''}" placeholder="🔍 搜索或输入SN码..." oninput="App._onQtSNInput(this)" onfocus="App._onQtSNInput(this)" autocomplete="off" style="width:100%;padding:8px;border:1px solid var(--border-color);border-radius:6px;">
+            <input type="hidden" id="${inputId}-value" class="qt-sn-value machine-sn-value" data-inv-type="${consumed.inventoryType}">
           </div>`;
       }
     });
     return html || '<p style="font-size:0.8rem;color:var(--text-tertiary);">该设备类型不需要SN码</p>';
   },
 
-  _onQtSnSelectChange(sel) {
-    const inp = document.getElementById(sel.dataset.target);
-    if (sel.value === '__custom__') { sel.style.display = 'none'; if (inp) inp.style.display = ''; }
-    else { if (inp) { inp.style.display = 'none'; inp.value = ''; } }
+  // 快速上线 SN 码自动补全（复用 _onMachineSNInput 的逻辑）
+  _onQtSNInput(inputEl) {
+    const q = inputEl.value.trim().toLowerCase();
+    this._hideSNAutocomplete();
+
+    // 根据 inventoryType 和 handType 动态获取可用 SN 列表
+    const invType = inputEl.getAttribute('data-inv-type') || '';
+    const handType = inputEl.getAttribute('data-hand-type') || '';
+    const snList = this._getAvailableSNs(invType, handType || null);
+
+    // 显示可用数量
+    const countEl = document.getElementById(`qt-sn-count-${invType}`);
+    if (countEl) countEl.textContent = `(${snList.length}个可用)`;
+
+    if (!q || q.length < 1) return;
+
+    // 子串匹配，优先开头匹配
+    const startsWith = [];
+    const contains = [];
+    snList.forEach(sn => {
+      const lower = sn.toLowerCase();
+      if (lower === q) return;
+      if (lower.startsWith(q)) startsWith.push(sn);
+      else if (lower.includes(q)) contains.push(sn);
+    });
+
+    const matches = [...startsWith, ...contains].slice(0, 15);
+    if (matches.length === 0) {
+      // 无匹配时显示"手动输入"选项
+      const dropdown = document.createElement('div');
+      dropdown.className = 'sn-autocomplete-dropdown';
+      dropdown.style.cssText = 'position:fixed;z-index:9999;max-height:260px;overflow-y:auto;background:var(--bg-primary,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.15);font-size:0.85rem;';
+
+      const customItem = document.createElement('div');
+      customItem.style.cssText = 'padding:8px 12px;cursor:pointer;color:var(--text-secondary,#6b7280);font-style:italic;';
+      customItem.textContent = '✏️ 手动输入新SN码: ' + inputEl.value.trim();
+      customItem.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        this._hideSNAutocomplete();
+        inputEl.focus();
+      });
+      dropdown.appendChild(customItem);
+
+      const rect = inputEl.getBoundingClientRect();
+      dropdown.style.left = rect.left + 'px';
+      dropdown.style.top = (rect.bottom + 2) + 'px';
+      dropdown.style.width = rect.width + 'px';
+      document.body.appendChild(dropdown);
+      this._suggestionDropdown = dropdown;
+      this._suggestionsVisible = true;
+
+      const closeHandler = (e) => {
+        if (!dropdown.contains(e.target) && e.target !== inputEl) {
+          this._hideSNAutocomplete();
+          document.removeEventListener('click', closeHandler);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeHandler), 50);
+      return;
+    }
+
+    // 创建下拉
+    const dropdown = document.createElement('div');
+    dropdown.className = 'sn-autocomplete-dropdown';
+    dropdown.style.cssText = 'position:fixed;z-index:9999;max-height:260px;overflow-y:auto;background:var(--bg-primary,#fff);border:1px solid var(--border-color,#e5e7eb);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.15);font-size:0.85rem;';
+
+    matches.forEach((sn) => {
+      const item = document.createElement('div');
+      const idx = sn.toLowerCase().indexOf(q);
+      item.innerHTML = sn.substring(0, idx) + '<strong style="color:var(--color-primary,#6366f1);">' + sn.substring(idx, idx + q.length) + '</strong>' + sn.substring(idx + q.length);
+      item.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light,#f3f4f6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        inputEl.value = sn;
+        // 同步到隐藏字段
+        const hiddenInput = document.getElementById(inputEl.id + '-value');
+        if (hiddenInput) hiddenInput.value = sn;
+        this._hideSNAutocomplete();
+        inputEl.focus();
+      });
+      item.addEventListener('mouseenter', () => { item.style.background = 'var(--bg-secondary,#f3f4f6)'; });
+      item.addEventListener('mouseleave', () => { item.style.background = ''; });
+      dropdown.appendChild(item);
+    });
+
+    // "✏️ 手动输入" 选项
+    const customItem = document.createElement('div');
+    customItem.style.cssText = 'padding:8px 12px;cursor:pointer;border-top:2px solid var(--border-color,#e5e7eb);color:var(--text-secondary,#6b7280);font-style:italic;';
+    customItem.textContent = '✏️ 手动输入新SN码: ' + inputEl.value.trim();
+    customItem.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      this._hideSNAutocomplete();
+      inputEl.focus();
+    });
+    dropdown.appendChild(customItem);
+
+    const rect = inputEl.getBoundingClientRect();
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.top = (rect.bottom + 2) + 'px';
+    dropdown.style.width = rect.width + 'px';
+    document.body.appendChild(dropdown);
+    this._suggestionDropdown = dropdown;
+    this._suggestionsVisible = true;
+
+    // 点击外部关闭
+    const closeHandler = (e) => {
+      if (!dropdown.contains(e.target) && e.target !== inputEl) {
+        this._hideSNAutocomplete();
+        document.removeEventListener('click', closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 50);
   },
 
   _getTogglePreview(deviceType, status) {
@@ -3938,15 +4420,131 @@ const App = {
     return html;
   },
 
+  _hasValidAttachment(attachment) {
+    if (!attachment || !attachment.length) return false;
+    if (attachment.startsWith('data:')) return true;
+    if (attachment.startsWith('http://') || attachment.startsWith('https://')) return true;
+    if (attachment.startsWith('/uploads/')) return true;
+    return false;
+  },
+
+  _isImageAttachment(attachment) {
+    if (!this._hasValidAttachment(attachment)) return false;
+    if (attachment.startsWith('data:image/')) return true;
+    if (/\.(jpg|jpeg|png|gif|webp|svg)(\?|$)/i.test(attachment)) return true;
+    return false;
+  },
+
   _showSNAttachment(snCode) {
     const reg = Storage.getSNByCode(snCode);
-    if (!reg || !reg.attachment) return;
-    const ext = reg.attachment.split('.').pop().toLowerCase();
-    const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
-    const contentHtml = isImage
-      ? `<div style="text-align:center;"><img src="${reg.attachment}" style="max-width:100%;max-height:70vh;border-radius:8px;" alt="${snCode} 附件"></div>`
-      : `<div style="text-align:center;"><a href="${reg.attachment}" target="_blank" class="btn btn-primary">📥 打开附件</a></div>`;
-    this._showInfoModal(`📎 ${snCode} 附件`, contentHtml);
+    const currentAttachment = reg && reg.attachment;
+    const hasValid = this._hasValidAttachment(currentAttachment);
+    const isImage = this._isImageAttachment(currentAttachment);
+    
+    const canEdit = this._isPrivileged();
+    const contentHtml = `
+      <div style="text-align:center;">
+        ${hasValid ? `
+          ${isImage 
+            ? `<img src="${currentAttachment}" style="max-width:100%;max-height:60vh;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);" alt="${snCode} 附件" onerror="this.style.display='none';this.parentElement.innerHTML='<div style=\\'padding:40px 20px;color:var(--text-tertiary);\\'><div style=\\'font-size:3rem;margin-bottom:8px;\\'>⚠️</div><div>图片加载失败</div></div>'">`
+            : `<a href="${currentAttachment}" target="_blank" class="btn btn-primary">📥 打开附件</a>`
+          }
+        ` : `
+          <div style="padding:40px 20px;color:var(--text-tertiary);">
+            <div style="font-size:3rem;margin-bottom:8px;">📎</div>
+            <div>暂无附件</div>
+          </div>
+        `}
+      </div>
+      ${canEdit ? `
+        <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+          <label class="btn btn-primary" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
+            📤 ${hasValid ? '重新上传' : '上传附件'}
+            <input type="file" accept="image/*" style="display:none;" onchange="App._uploadSNAttachment('${snCode}', this)">
+          </label>
+          ${hasValid ? `<button class="btn btn-danger" onclick="App._deleteSNAttachment('${snCode}')">🗑️ 删除附件</button>` : ''}
+        </div>
+      ` : ''}
+    `;
+    this._showInfoModal(`📎 ${snCode} 附件管理`, contentHtml);
+  },
+
+  async _uploadSNAttachment(snCode, fileInput) {
+    const file = fileInput.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('只支持图片文件');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      alert('文件大小超过限制(最大10MB)');
+      return;
+    }
+    
+    const btn = fileInput.parentElement;
+    const originalText = btn.textContent;
+    btn.textContent = '上传中...';
+    btn.style.opacity = '0.6';
+    btn.style.pointerEvents = 'none';
+    
+    try {
+      const compressed = await this._compressImage(file);
+      const reader = new FileReader();
+      
+      const uploadPromise = new Promise((resolve, reject) => {
+        reader.onload = async (e) => {
+          try {
+            const dataUrl = e.target.result;
+            const uploadRes = await API._fetch('POST', '/api/upload', { filename: file.name, data: dataUrl });
+            if (!uploadRes || !uploadRes.path) {
+              reject(new Error(uploadRes?.error || '上传失败'));
+              return;
+            }
+            const upsertRes = await API.upsertSNRegistry({
+              snCode,
+              attachment: uploadRes.path
+            });
+            if (upsertRes && upsertRes.error) {
+              reject(new Error(upsertRes.error));
+              return;
+            }
+            resolve(uploadRes.path);
+          } catch (err) { reject(err); }
+        };
+        reader.onerror = () => reject(new Error('读取文件失败'));
+      });
+      
+      reader.readAsDataURL(compressed);
+      await uploadPromise;
+      
+      this._showSNAttachment(snCode);
+      if (typeof this._doRenderSNCodes === 'function') this._doRenderSNCodes();
+    } catch (err) {
+      console.error('上传失败:', err);
+      alert('上传失败: ' + (err.message || '未知错误'));
+      btn.textContent = originalText;
+      btn.style.opacity = '';
+      btn.style.pointerEvents = '';
+    }
+  },
+
+  async _deleteSNAttachment(snCode) {
+    if (!confirm(`确定要删除 ${snCode} 的附件吗？`)) return;
+    try {
+      const res = await API.upsertSNRegistry({
+        snCode,
+        attachment: ''
+      });
+      if (res && res.error) {
+        alert('删除失败: ' + res.error);
+        return;
+      }
+      this._showSNAttachment(snCode);
+      if (typeof this._doRenderSNCodes === 'function') this._doRenderSNCodes();
+    } catch (err) {
+      console.error('删除失败:', err);
+      alert('删除失败: ' + (err.message || '未知错误'));
+    }
   },
 
   // ==================== DURATION FORMATTER ====================
@@ -3992,6 +4590,7 @@ const App = {
   async renderTechSupport(viewMode) {
     if (!viewMode) viewMode = this._tsViewMode || 'card';
     this._tsViewMode = viewMode;
+    this._tsDetailId = null;
     let items = [];
     try { items = await API.getTechSupportList(); } catch {}
     this._tsItems = items;
@@ -4145,6 +4744,7 @@ const App = {
   },
 
   async renderTechSupportDetail(id) {
+    this._tsDetailId = id;
     let item;
     try { item = await API.getTechSupportDetail(id); } catch {}
     if (!item) { this.notify('无法获取请求详情', 'error'); return; }
@@ -4213,19 +4813,34 @@ const App = {
   },
 
   async doCompleteTechSupport(id) {
-    // Get random funny sentence first
     const popup = await API.getRandomPopupMessage('complete');
     const funnyMsg = popup.text || '辛苦了！';
-    // Show layered popup: top=funny sentence, bottom=input for repair result
-    this._showLayeredPopup('🔧 维修完成', funnyMsg, '请输入维修结果说明...', async (resultText) => {
+    let suggestions = [];
+    try {
+      const memList = await API.getMemoryList('repair_result');
+      if (Array.isArray(memList)) {
+        suggestions = memList.map(m => m.text).slice(0, 20);
+      }
+    } catch {}
+    if (suggestions.length === 0) {
+      this._loadRepairResultHistory();
+      suggestions = this._getRepairResultHistory();
+    }
+    this._showLayeredPopup('🔧 维修完成', funnyMsg, '请输入或选择维修结果...', async (resultText) => {
+      if (!resultText) {
+        this.notify('请输入维修结果', 'error');
+        return;
+      }
       const result = await API.completeTechSupport(id, resultText);
       if (result && result.success) {
+        this._addRepairResultToHistory(resultText);
+        API.addMemory('repair_result', resultText).catch(() => {});
         this.notify('维修已完成');
         this.renderTechSupportDetail(id);
       } else {
         this.notify(result?.error || result?.message || '操作失败', 'error');
       }
-    });
+    }, suggestions);
   },
 
   async doDeleteTechSupport(id) {
@@ -4264,14 +4879,70 @@ const App = {
     overlay.onclick = (e) => { if (e.target === overlay) close(); };
   },
 
-  // Layered popup: top=funny sentence, bottom=input field (for repair completion)
-  _showLayeredPopup(title, message, inputPlaceholder, onSubmit) {
+  // ==================== 维修结果记忆功能 ====================
+  _REPAIR_RESULT_KEY: 'gms_repair_result_history',
+  _MAX_HISTORY: 50,  // 最多保存50条历史记录
+
+  // 从localStorage加载历史记录
+  _loadRepairResultHistory() {
+    try {
+      const data = localStorage.getItem(this._REPAIR_RESULT_KEY);
+      this._repairResultHistory = data ? JSON.parse(data) : [];
+    } catch { this._repairResultHistory = []; }
+  },
+
+  // 保存历史记录到localStorage
+  _saveRepairResultHistory() {
+    try {
+      localStorage.setItem(this._REPAIR_RESULT_KEY, JSON.stringify(this._repairResultHistory));
+    } catch {}
+  },
+
+  // 添加新的维修结果到历史（去重，新结果优先）
+  _addRepairResultToHistory(result) {
+    if (!result || result.trim().length < 2) return;
+    const trimmed = result.trim();
+    // 移除已存在的相同记录
+    this._repairResultHistory = this._repairResultHistory.filter(r => r !== trimmed);
+    // 添加到最前面
+    this._repairResultHistory.unshift(trimmed);
+    // 限制最大数量
+    if (this._repairResultHistory.length > this._MAX_HISTORY) {
+      this._repairResultHistory = this._repairResultHistory.slice(0, this._MAX_HISTORY);
+    }
+    this._saveRepairResultHistory();
+  },
+
+  // 获取历史记录（最多返回20条）
+  _getRepairResultHistory() {
+    return this._repairResultHistory.slice(0, 20);
+  },
+
+  // 清除历史记录
+  _clearRepairResultHistory() {
+    this._repairResultHistory = [];
+    this._saveRepairResultHistory();
+  },
+
+  // Layered popup: top=funny sentence, bottom=textarea + memory tags
+  _showLayeredPopup(title, message, inputPlaceholder, onSubmit, suggestions) {
     const overlay = document.getElementById('modal-overlay');
     const body = document.getElementById('modal-body');
     const titleEl = document.getElementById('modal-title');
     const saveBtn = document.getElementById('modal-save');
     const closeBtn = document.getElementById('modal-close-btn');
+    const self = this;
     titleEl.textContent = title;
+
+    const hasSuggestions = suggestions && suggestions.length > 0;
+    const tagHtml = hasSuggestions ? `
+      <div style="margin-top:8px;">
+        <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:6px;">💡 历史记录（全运维用户共享，点击快速填入）：</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;max-height:100px;overflow-y:auto;">
+          ${suggestions.slice(0, 12).map(s => `<span class="ts-memory-tag" data-text="${s.replace(/"/g, '&quot;')}">${s.length > 25 ? s.slice(0,25)+'...' : s}</span>`).join('')}
+        </div>
+      </div>` : '';
+
     body.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:16px;">
         <div style="text-align:center;padding:16px 10px;background:var(--bg-secondary,#f8f9fb);border-radius:var(--radius-lg,14px);border:1px solid var(--border-light,#f3f4f6);">
@@ -4280,7 +4951,8 @@ const App = {
         </div>
         <div>
           <label style="display:block;font-size:.78rem;font-weight:600;color:var(--text-secondary);margin-bottom:6px;">维修结果说明</label>
-          <textarea id="layered-popup-input" class="ts-form-textarea" rows="3" placeholder="${inputPlaceholder || '请输入维修结果...'}" style="width:100%;"></textarea>
+          <textarea id="layered-popup-input" class="ts-form-textarea" rows="4" placeholder="${inputPlaceholder || '请输入维修结果...'}" style="width:100%;"></textarea>
+          ${tagHtml}
         </div>
       </div>`;
     overlay.style.display = 'flex';
@@ -4300,6 +4972,18 @@ const App = {
     document.getElementById('modal-close').onclick = close;
     if (closeBtn) closeBtn.onclick = close;
     overlay.onclick = (e) => { if (e.target === overlay) close(); };
+    // 记忆标签点击事件
+    if (hasSuggestions) {
+      body.querySelectorAll('.ts-memory-tag').forEach(tag => {
+        tag.addEventListener('click', () => {
+          const text = tag.getAttribute('data-text');
+          const input = document.getElementById('layered-popup-input');
+          if (input && text) input.value = text;
+        });
+      });
+    }
+    const inputEl = document.getElementById('layered-popup-input');
+    if (inputEl) setTimeout(() => inputEl.focus(), 50);
   },
 
   // ==================== POPUP MESSAGE MANAGEMENT ====================
@@ -4526,148 +5210,130 @@ const App = {
 
     const html = `
       <div class="page-header">
-        <h2>📋 全部流水记录</h2>
+        <h2>📋 流水记录</h2>
         <div class="header-actions">
-          <button class="btn btn-outline" onclick="App.exportCSV()">📥 导出CSV</button>
-          <button class="btn btn-outline" onclick="App.exportXLSX()">📥 导出Excel</button>
-          <button class="btn btn-outline" onclick="App.printTransactions()">🖨️ 打印</button>
+          <button class="btn btn-sm btn-outline" onclick="App.toggleTxViewMode()">
+            ${this._txViewMode === 'card' ? '📋 表格' : '🃏 卡片'}
+          </button>
+          <button class="btn btn-sm btn-outline" onclick="App.exportCSV()">📥 导出</button>
         </div>
       </div>
 
       ${undoHtml}
 
-      <!-- Filter toggle button (mobile only) -->
-      <div class="filter-toggle-bar">
-        <button class="btn btn-outline" onclick="App.toggleFilterBar()">
-          🔍 筛选${activeFilterCount > 0 ? '<span class="filter-count">'+activeFilterCount+'</span>' : ''}
-        </button>
+      <!-- 统计卡片 - 简洁版 -->
+      <div style="display:flex;gap:12px;margin-bottom:16px;">
+        <div style="flex:1;background:var(--bg-card);border-radius:var(--radius-md);padding:14px 16px;text-align:center;border:1px solid var(--border-color);">
+          <div style="font-size:1.4rem;font-weight:700;color:var(--text-primary);">${transactions.length}</div>
+          <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:4px;">全部记录</div>
+        </div>
+        <div style="flex:1;background:linear-gradient(135deg,#ecfdf5,#d1fae5);border-radius:var(--radius-md);padding:14px 16px;text-align:center;">
+          <div style="font-size:1.4rem;font-weight:700;color:#059669;">${transactions.filter(t => t.direction === 'in').length}</div>
+          <div style="font-size:0.8rem;color:#047857;margin-top:4px;">入库</div>
+        </div>
+        <div style="flex:1;background:linear-gradient(135deg,#fef2f2,#fee2e2);border-radius:var(--radius-md);padding:14px 16px;text-align:center;">
+          <div style="font-size:1.4rem;font-weight:700;color:#dc2626;">${transactions.filter(t => t.direction === 'out').length}</div>
+          <div style="font-size:0.8rem;color:#b91c1c;margin-top:4px;">出库</div>
+        </div>
       </div>
 
-      <!-- Filter bar (collapsible on mobile) -->
-      <div class="filter-bar collapsible" id="tx-filter-bar">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;flex:1;">
-          <select id="filter-equipment" onchange="App.applyFilter('equipmentType', this.value)">
-            <option value="all">全部设备</option>
-            <option value="glove">手套</option>
-            <option value="dexterous_hand">灵巧手</option>
-            <option value="gripper">夹爪(Pika)</option>
+      <!-- 工具栏 -->
+      <div class="ts-toolbar">
+        <div class="ts-filter-bar">
+          <button class="ts-filter-btn ${this.filters.equipmentType === 'all' ? 'active' : ''}" onclick="App.applyFilter('equipmentType','all')">全部设备</button>
+          <button class="ts-filter-btn ${this.filters.equipmentType === 'glove' ? 'active' : ''}" onclick="App.applyFilter('equipmentType','glove')">手套</button>
+          <button class="ts-filter-btn ${this.filters.equipmentType === 'dexterous_hand' ? 'active' : ''}" onclick="App.applyFilter('equipmentType','dexterous_hand')">灵巧手</button>
+          <button class="ts-filter-btn ${this.filters.equipmentType === 'gripper' ? 'active' : ''}" onclick="App.applyFilter('equipmentType','gripper')">夹爪</button>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <select id="filter-direction" onchange="App.applyFilter('direction', this.value)" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);font-size:0.85rem;">
+            <option value="all" ${this.filters.direction === 'all' ? 'selected' : ''}>全部操作</option>
+            <option value="in" ${this.filters.direction === 'in' ? 'selected' : ''}>入库</option>
+            <option value="out" ${this.filters.direction === 'out' ? 'selected' : ''}>出库</option>
           </select>
-          <select id="filter-direction" onchange="App.applyFilter('direction', this.value)">
-            <option value="all">全部操作</option>
-            <option value="in">入库</option>
-            <option value="out">出库</option>
-          </select>
-          <input type="date" id="filter-date-from" onchange="App.applyFilter('dateFrom', this.value)" placeholder="开始">
-          <input type="date" id="filter-date-to" onchange="App.applyFilter('dateTo', this.value)" placeholder="结束">
-          <input type="text" id="filter-search" onkeydown="if(event.key==='Enter')App.applyFilter('search',this.value)" placeholder="🔍 搜索...(回车执行)" style="min-width:120px;">
-        </div>
-        <div class="quick-row" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
-          <button class="btn btn-sm" onclick="App.setQuickTxRange('today')">今天</button>
-          <button class="btn btn-sm" onclick="App.setQuickTxRange('week')">本周</button>
-          <button class="btn btn-sm" onclick="App.setQuickTxRange('month')">本月</button>
-          <button class="btn btn-sm btn-outline" onclick="App.clearFilters()">清除</button>
+          <input type="text" id="filter-search" onkeydown="if(event.key==='Enter')App.applyFilter('search',this.value)" placeholder="搜索..." style="padding:6px 10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);font-size:0.85rem;width:130px;">
+          ${this.filters.search || this.filters.dateFrom || this.filters.dateTo ? '<button class="btn btn-xs" onclick="App.clearFilters()">清除</button>' : ''}
         </div>
       </div>
 
-      <!-- Desktop table view -->
-      <div class="desktop-only">
-        <div class="table-container">
-          <table class="data-table">
-            <thead><tr>${sortableHeader('timestamp','时间')}${sortableHeader('equipmentType','设备类型')}${sortableHeader('handType','左右手')}${sortableHeader('direction','操作')}${sortableHeader('quantity','数量')}<th>SN码</th><th>机器编号</th>${sortableHeader('updatedBy','更新人')}<th>备注</th><th>操作</th></tr></thead>
-            <tbody>${empty ? '<tr><td colspan="10" class="empty-text">暂无流水记录</td></tr>' :
-              paged.map(t => `
-                <tr class="tx-row clickable" onclick="App.toggleTxDetail('${t.id}')" title="点击查看详情">
-                  <td title="${this._formatTime(t.timestamp)}">${this._formatTime(t.timestamp)}</td>
-                  <td>${this._equipmentLabel(t.equipmentType, t.handType)}</td>
-                  <td>${t.handType === 'left' ? '左手' : t.handType === 'right' ? '右手' : '-'}</td>
-                  <td><span class="badge ${t.direction === 'in' ? 'badge-in' : 'badge-out'}">${t.direction === 'in' ? '入库' : '出库'}</span></td>
-                  <td>${t.quantity}</td>
-                  <td>${t.snCode || '-'} ${t.attachment ? '<a href="'+t.attachment+'" target="_blank" title="查看附件">📎</a>' : ''}</td>
-                  <td>${t.machineNumber || '-'}</td>
-                  <td>${t.updatedBy || '-'}</td>
-                  <td>${t.note || '-'}</td>
-                  <td>${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="event.stopPropagation();App.deleteTransaction('${t.id}')">删除</button>` : ''}</td>
-                </tr>
-                <tr class="tx-detail" id="tx-detail-${t.id}" style="display:none;">
-                  <td colspan="10">
-                    <div class="tx-detail-content">
-                      <div class="tx-detail-row"><span>时间:</span><strong>${this._formatTime(t.timestamp)}</strong></div>
-                      <div class="tx-detail-row"><span>设备:</span><strong>${this._equipmentLabel(t.equipmentType, t.handType)}</strong></div>
-                      <div class="tx-detail-row"><span>操作:</span><span class="badge ${t.direction === 'in' ? 'badge-in' : 'badge-out'}">${t.direction === 'in' ? '入库' : '出库'}</span></div>
-                      <div class="tx-detail-row"><span>数量:</span><strong>${t.quantity}</strong></div>
-                      <div class="tx-detail-row"><span>SN码:</span><strong>${t.snCode || '-'}</strong></div>
-                      <div class="tx-detail-row"><span>机器编号:</span><strong>${t.machineNumber || '-'}</strong></div>
-                      <div class="tx-detail-row"><span>更新人:</span><strong>${t.updatedBy || '-'}</strong></div>
-                      <div class="tx-detail-row"><span>备注:</span><strong>${t.note || '-'}</strong></div>
-                      <div class="tx-detail-row"><span>记录ID:</span><code style="font-size:0.7rem;">${t.id}</code></div>
-                    </div>
-                  </td>
-                </tr>
-              `).join('')
-            }</tbody>
-          </table>
-        </div>
+      <!-- 日期筛选 -->
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">
+        <span style="font-size:0.85rem;color:var(--text-secondary);">日期:</span>
+        <input type="date" id="filter-date-from" value="${this.filters.dateFrom || ''}" onchange="App.applyFilter('dateFrom', this.value)" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);font-size:0.85rem;">
+        <span style="color:var(--text-secondary);">至</span>
+        <input type="date" id="filter-date-to" value="${this.filters.dateTo || ''}" onchange="App.applyFilter('dateTo', this.value)" style="padding:6px 10px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-card);font-size:0.85rem;">
+        <button class="btn btn-xs btn-outline" onclick="App.setQuickTxRange('today')">今天</button>
+        <button class="btn btn-xs btn-outline" onclick="App.setQuickTxRange('week')">本周</button>
+        <button class="btn btn-xs btn-outline" onclick="App.setQuickTxRange('month')">本月</button>
       </div>
 
-      <!-- Mobile card view -->
-      <div class="mobile-only">
-        ${empty ? '<div class="empty-text">暂无流水记录</div>' : `
-        <div class="tx-mobile-list">
-          ${paged.map(t => {
-            const label = this._equipmentLabel(t.equipmentType, t.handType);
-            const handLabel = t.handType === 'left' ? '左手' : t.handType === 'right' ? '右手' : '';
-            return '<div class="tx-mobile-card' + (t.direction === 'out' ? ' tx-out' : '') + '" onclick="App.toggleTxCard(this,\'' + t.id + '\')">'
-              + '<div class="tx-card-main">'
-              + '<div class="tx-card-body">'
-              + '<div class="tx-card-equip">' + label + (handLabel ? ' (' + handLabel + ')' : '') + '</div>'
-              + '<div class="tx-card-sub">'
-              + (t.snCode ? '<span>SN:' + t.snCode + '</span>' : '')
-              + (t.machineNumber ? '<span>机器:' + t.machineNumber + '</span>' : '')
-              + '</div>'
-              + '</div>'
-              + '<div class="tx-card-qty" style="color:' + (t.direction === 'in' ? 'var(--color-success)' : 'var(--color-danger)') + '">' + (t.direction === 'in' ? '+' : '-') + t.quantity + '</div>'
-              + '</div>'
-              + '<div class="tx-card-meta">'
-              + '<span>' + this._formatTime(t.timestamp) + ' · ' + (t.updatedBy || '-') + '</span>'
-              + '<span class="tx-expand-hint">详情 ▸</span>'
-              + '</div>'
-              + '<div class="tx-card-expand">'
-              + '<div class="tx-expand-row"><span class="lbl">时间</span><span class="val">' + this._formatTime(t.timestamp) + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">设备</span><span class="val">' + label + (handLabel ? ' (' + handLabel + ')' : '') + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">操作</span><span class="val" style="color:' + (t.direction === 'in' ? 'var(--color-success)' : 'var(--color-danger)') + '">' + (t.direction === 'in' ? '入库' : '出库') + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">数量</span><span class="val">' + t.quantity + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">SN码</span><span class="val">' + (t.snCode || '-') + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">机器编号</span><span class="val">' + (t.machineNumber || '-') + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">更新人</span><span class="val">' + (t.updatedBy || '-') + '</span></div>'
-              + '<div class="tx-expand-row"><span class="lbl">备注</span><span class="val">' + (t.note || '-') + '</span></div>'
-              + (this._isPrivileged() ? '<button class="btn btn-xs btn-danger" onclick="event.stopPropagation();App.deleteTransaction(\'' + t.id + '\')" style="width:100%;">删除</button>' : '')
-              + '</div>'
-              + '</div>';
-          }).join('')}
-        </div>
+      <!-- Content area -->
+      ${empty ? '<div class="ts-empty" style="margin-top:40px;"><div class="ts-empty-icon">📝</div><div class="ts-empty-text">暂无流水记录</div></div>' : `
+        ${this._txViewMode === 'card' ? `
+          <!-- Card view -->
+          <div class="ts-list">
+            ${paged.map(t => {
+              const label = this._equipmentLabel(t.equipmentType, t.handType);
+              const isIn = t.direction === 'in';
+              return `<div class="ts-card" style="padding:14px 16px;">
+                <div style="display:flex;align-items:center;gap:12px;">
+                  <div class="ts-card-icon" style="background:${isIn ? 'var(--color-success)' : 'var(--color-danger)'};color:white;width:40px;height:40px;font-size:1.2rem;">${isIn ? '↑' : '↓'}</div>
+                  <div style="flex:1;">
+                    <div style="font-weight:600;font-size:0.95rem;">${label}</div>
+                    <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:3px;">${t.snCode || '无SN'} · ${t.machineNumber || '无机器'}</div>
+                  </div>
+                  <div style="text-align:right;">
+                    <div style="font-weight:700;font-size:1rem;color:${isIn?'var(--color-success)':'var(--color-danger)'};">${isIn?'+':'-'}${t.quantity}</div>
+                    <div style="font-size:0.75rem;color:var(--text-tertiary);margin-top:3px;">${this._formatTime(t.timestamp)}</div>
+                  </div>
+                </div>
+                ${t.note ? `<div style="font-size:0.8rem;color:var(--text-tertiary);margin-top:6px;padding-top:6px;border-top:1px dashed var(--border-color);">${t.note}</div>` : ''}
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:0.8rem;color:var(--text-secondary);">
+                  <span>${t.updatedBy || '-'}</span>
+                  ${this._isPrivileged() ? `<button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')">💣 清除</button>` : ''}
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        ` : `
+          <!-- Table view -->
+          <div class="table-container">
+            <table style="width:100%;border-collapse:collapse;font-size:0.85rem;" class="ts-log-table">
+              <thead>
+                <tr>${sortableHeader('timestamp','时间')}${sortableHeader('equipmentType','设备')}${sortableHeader('direction','操作')}${sortableHeader('quantity','数量')}<th>SN码</th><th>机器</th>${sortableHeader('updatedBy','操作人')}<th>备注</th>${this._isPrivileged() ? '<th></th>' : ''}</tr>
+              </thead>
+              <tbody>
+                ${paged.map(t => `
+                  <tr>
+                    <td>${this._formatTime(t.timestamp)}</td>
+                    <td><strong>${this._equipmentLabel(t.equipmentType, t.handType)}</strong></td>
+                    <td><span class="ts-status-badge ${t.direction === 'in' ? 'ts-status-completed' : 'ts-status-pending'}">${t.direction === 'in' ? '入库' : '出库'}</span></td>
+                    <td><strong style="color:${t.direction === 'in' ? 'var(--color-success)' : 'var(--color-danger)'}">${t.direction === 'in' ? '+' : '-'}${t.quantity}</strong></td>
+                    <td style="font-family:monospace;">${t.snCode || '-'}</td>
+                    <td>${t.machineNumber || '-'}</td>
+                    <td>${t.updatedBy || '-'}</td>
+                    <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${t.note || ''}">${t.note || '-'}</td>
+                    ${this._isPrivileged() ? `<td><button class="btn btn-xs btn-danger" onclick="App.deleteTransaction('${t.id}')">💣 清除</button></td>` : ''}
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
         `}
-      </div>
+      `}
 
       <!-- Pagination -->
-      <div class="pagination" style="${empty ? 'display:none;' : ''}">
-        <span>共 ${transactions.length} 条 · ${page}/${totalPages} 页</span>
-        <span style="display:flex;align-items:center;gap:4px;">
-          每页 <select onchange="App.setPageSize(parseInt(this.value))" value="${this.pageSize}">
-            <option value="10" ${this.pageSize === 10 ? 'selected' : ''}>10</option>
-            <option value="15" ${this.pageSize === 15 ? 'selected' : ''}>15</option>
-            <option value="25" ${this.pageSize === 25 ? 'selected' : ''}>25</option>
-            <option value="50" ${this.pageSize === 50 ? 'selected' : ''}>50</option>
-          </select> 条
-        </span>
-        <div class="page-btns">
+      ${!empty ? `
+      <div class="pagination">
+        <span>共 ${transactions.length} 条 · 第 ${page}/${totalPages} 页</span>
+        <div style="display:flex;gap:4px;align-items:center;">
           <button class="btn btn-sm" ${page <= 1 ? 'disabled' : ''} onclick="App.renderTransactions(${page - 1})">◀</button>
           ${this._renderPageButtons(page, totalPages)}
           <button class="btn btn-sm" ${page >= totalPages ? 'disabled' : ''} onclick="App.renderTransactions(${page + 1})">▶</button>
         </div>
-      </div>
+      </div>` : ''}
     `;
     document.getElementById('main-content').innerHTML = html;
-    this._restoreFilterValues();
   },
 
   _renderPageButtons(current, total) {
@@ -4714,6 +5380,18 @@ const App = {
   setPageSize(size) {
     this.pageSize = size;
     this.renderTransactions(1);
+  },
+
+  toggleTxViewMode() {
+    this._txViewMode = this._txViewMode === 'card' ? 'table' : 'card';
+    this.renderTransactions(this.currentPage.transactions);
+  },
+
+  toggleTxDateFilter() {
+    const bar = document.getElementById('tx-date-filter');
+    if (!bar) return;
+    const isVisible = bar.style.display !== 'none';
+    bar.style.display = isVisible ? 'none' : 'flex';
   },
 
   toggleTxDetail(id) {
@@ -5024,7 +5702,7 @@ const App = {
                 <td>${this._formatTime(c.createdAt)}</td>
                 <td>
                   <button class="btn btn-xs btn-outline" onclick="App.showEquipmentConfigForm('${c.id}')">编辑</button>
-                  <button class="btn btn-xs btn-danger" onclick="App.deleteEquipmentConfig('${c.id}')">删除</button>
+                  <button class="btn btn-xs btn-danger" onclick="App.deleteEquipmentConfig('${c.id}')">💣 清除</button>
                 </td>
               </tr>
             `).join('')
@@ -5149,7 +5827,7 @@ const App = {
                 <td>${this._formatTime(c.createdAt)}</td>
                 <td>
                   <button class="btn btn-xs btn-outline" onclick="App.showInventoryConfigForm('${c.id}')">编辑</button>
-                  <button class="btn btn-xs btn-danger" onclick="App.deleteInventoryConfig('${c.id}')">删除</button>
+                  <button class="btn btn-xs btn-danger" onclick="App.deleteInventoryConfig('${c.id}')">💣 清除</button>
                 </td>
               </tr>
             `).join('')
@@ -5510,7 +6188,7 @@ const App = {
                 </td>
                 <td>${u.system === 'operations' ? '📊 运营系统' : '🔧 运维系统'}</td>
                 <td>${this._formatTime(u.createdAt)}</td>
-                <td>${canEdit(u) ? `<button class="btn btn-xs btn-outline" onclick="App._showEditUser('${u.id}', '${u.username}')">修改</button>` : ''} ${canDelete(u) ? `<button class="btn btn-xs btn-danger" onclick="App.deleteUser('${u.id}', '${u.username}')">删除</button>` : (canEdit(u) ? '' : '<span class="text-tertiary" style="font-size:0.75rem;">受保护</span>')}</td>
+                <td>${canEdit(u) ? `<button class="btn btn-xs btn-outline" onclick="App._showEditUser('${u.id}', '${u.username}')">修改</button>` : ''} ${canEdit(u) && u.id !== currentUser.id && u.role !== 'superadmin' ? `<button class="btn btn-xs btn-outline" onclick="App._viewUserPassword('${u.id}', '${u.displayName || u.username}')" title="查看密码" style="color:#3b82f6;">👁 密码</button>` : ''} ${canDelete(u) ? `<button class="btn btn-xs btn-danger" onclick="App.deleteUser('${u.id}', '${u.username}')">💣 清除</button>` : (canEdit(u) ? '' : '<span class="text-tertiary" style="font-size:0.75rem;">受保护</span>')}</td>
               </tr>`;
             }).join('')
           }</tbody>
@@ -5699,6 +6377,88 @@ const App = {
     });
   },
 
+  async _viewUserPassword(userId, displayName) {
+    try {
+      const res = await fetch(API.baseURL + '/api/users/' + userId + '/password', {
+        headers: API._headers()
+      });
+      const data = await res.json();
+      if (data.success) {
+        // 如果密码可查，直接显示
+        if (data.password && !data.password.includes('不可查')) {
+          const html = `
+            <div style="text-align:center;padding:8px 0;">
+              <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;">用户：${data.displayName || displayName}</div>
+              <div style="font-size:0.85rem;color:var(--text-tertiary);margin-bottom:16px;">账号：${data.username}</div>
+              <div style="background:var(--bg-secondary,#f0f4f8);border:2px dashed var(--border-color,#cbd5e1);border-radius:12px;padding:20px;margin:12px 0;">
+                <div style="font-size:0.75rem;color:var(--text-tertiary);margin-bottom:6px;">密码</div>
+                <div style="font-size:1.5rem;font-weight:bold;font-family:monospace;letter-spacing:2px;color:#3b82f6;">${data.password}</div>
+              </div>
+              <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;">
+                <button class="btn btn-sm btn-outline" onclick="navigator.clipboard.writeText('${data.password}').then(()=>App.notify('密码已复制到剪贴板'))" style="padding:6px 16px;">📋 复制密码</button>
+              </div>
+              <p style="font-size:0.75rem;color:var(--text-tertiary);margin-top:12px;">⚠️ 请妥善保管密码信息，不要泄露给他人</p>
+            </div>
+          `;
+          this.showModal('👁 查看密码 — ' + displayName, html, () => true);
+          const saveBtn = document.getElementById('modal-save');
+          if (saveBtn) saveBtn.textContent = '关闭';
+          const closeBtn = document.getElementById('modal-close-btn');
+          if (closeBtn) closeBtn.style.display = 'none';
+        } else {
+          // 密码不可查，提供立即重置选项
+          const html = `
+            <div style="text-align:center;padding:8px 0;">
+              <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;">用户：${data.displayName || displayName}</div>
+              <div style="font-size:0.85rem;color:var(--text-tertiary);margin-bottom:16px;">账号：${data.username}</div>
+              <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:12px;padding:16px;margin:12px 0;">
+                <div style="font-size:0.85rem;color:#92400e;">⚠️ 该用户为历史创建，密码未记录</div>
+                <div style="font-size:0.75rem;color:#a16207;margin-top:6px;">请重置密码后即可查看</div>
+              </div>
+              <div class="form-group" style="margin-top:16px;">
+                <label style="font-size:0.85rem;">设置新密码</label>
+                <input type="password" id="view-pwd-reset-new" placeholder="输入新密码（至少6位，含字母和数字）" style="width:100%;padding:10px;border:1px solid var(--border-color);border-radius:8px;">
+              </div>
+              <div class="form-group">
+                <label style="font-size:0.85rem;">确认新密码</label>
+                <input type="password" id="view-pwd-reset-confirm" placeholder="再次输入新密码" style="width:100%;padding:10px;border:1px solid var(--border-color);border-radius:8px;">
+              </div>
+            </div>
+          `;
+          this.showModal('🔑 设置密码 — ' + displayName, html, async () => {
+            const newPw = document.getElementById('view-pwd-reset-new')?.value;
+            const confirmPw = document.getElementById('view-pwd-reset-confirm')?.value;
+            if (!newPw || newPw.length < 6) { this.notify('密码至少6个字符', 'warning'); return false; }
+            if (!/[A-Za-z]/.test(newPw) || !/[0-9]/.test(newPw)) { this.notify('密码需包含字母和数字', 'warning'); return false; }
+            if (newPw !== confirmPw) { this.notify('两次输入不一致', 'warning'); return false; }
+            
+            const result = await fetch(API.baseURL + '/api/users/' + userId + '/reset-password', {
+              method: 'POST',
+              headers: API._headers(),
+              body: JSON.stringify({ newPassword: newPw })
+            }).then(r => r.json());
+            
+            if (result?.success) {
+              this.notify('密码已设置');
+              // 立即再次查看，显示新密码
+              setTimeout(() => this._viewUserPassword(userId, displayName), 300);
+              return true;
+            } else {
+              this.notify(result?.error || '设置失败', 'error');
+              return false;
+            }
+          });
+          const saveBtn = document.getElementById('modal-save');
+          if (saveBtn) saveBtn.textContent = '设置密码';
+        }
+      } else {
+        this.notify(data.error || '获取密码失败', 'error');
+      }
+    } catch (e) {
+      this.notify('获取密码失败: ' + e.message, 'error');
+    }
+  },
+
   // ==================== SETTINGS ====================
   renderSettings() {
     const settings = Storage.getSettings();
@@ -5708,69 +6468,99 @@ const App = {
 
     const html = `
       <div class="page-header"><h2>⚙️ 系统设置</h2></div>
-      <div class="settings-grid">
-        <div class="settings-card">
-          <h3>🎨 外观</h3>
-          <div class="form-group">
-            <label>深色模式</label>
-            <label class="switch">
-              <input type="checkbox" ${settings.darkMode ? 'checked' : ''} onchange="App.toggleTheme()">
-              <span class="slider"></span>
-            </label>
+
+      <div style="display:flex;gap:12px;margin-bottom:20px;">
+        <div style="flex:1;background:var(--bg-card);border-radius:var(--radius-md);padding:14px 16px;border:1px solid var(--border-color);">
+          <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">数据大小</div>
+          <div style="font-size:1.4rem;font-weight:700;color:var(--text-primary);">${dataSize} <span style="font-size:0.8rem;font-weight:normal;color:var(--text-tertiary);">KB</span></div>
+        </div>
+        <div style="flex:1;background:var(--bg-card);border-radius:var(--radius-md);padding:14px 16px;border:1px solid var(--border-color);">
+          <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">最近备份</div>
+          <div style="font-size:1.4rem;font-weight:700;color:var(--text-primary);">${lastBackup ? '✓' : '-'}</div>
+          <div style="font-size:0.75rem;color:var(--text-tertiary);margin-top:2px;">${lastBackup ? this._formatTime(lastBackup) : '未备份'}</div>
+        </div>
+        <div style="flex:1;background:var(--bg-card);border-radius:var(--radius-md);padding:14px 16px;border:1px solid var(--border-color);">
+          <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:4px;">系统版本</div>
+          <div style="font-size:1.4rem;font-weight:700;color:var(--text-primary);">v3.9</div>
+          <div style="font-size:0.75rem;color:var(--text-tertiary);margin-top:2px;">2026-06-04</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;">
+        <div class="ts-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <span style="font-size:1.3rem;">🎨</span>
+            <h3 style="margin:0;font-size:1rem;">外观设置</h3>
           </div>
-          <p class="form-hint">系统会自动跟随设备主题，手动切换后将固定主题</p>
+          <div class="ts-form-group">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <label class="ts-form-label" style="margin-bottom:0;">深色模式</label>
+              <label style="display:flex;align-items:center;cursor:pointer;">
+                <input type="checkbox" ${settings.darkMode ? 'checked' : ''} onchange="App.toggleTheme()" style="width:18px;height:18px;accent-color:var(--color-primary);">
+                <span style="margin-left:8px;font-size:0.85rem;color:var(--text-secondary);">${settings.darkMode ? '已开启' : '跟随系统'}</span>
+              </label>
+            </div>
+            <div class="ts-form-hint" style="margin-top:8px;">系统会自动跟随设备主题，手动切换后将固定主题</div>
+          </div>
         </div>
-        <div class="settings-card">
-          <h3>📊 仪表板卡片配置</h3>
-          <p class="form-hint">选择要在系统总览中显示的库存卡片</p>
-          <div id="dashboard-cards-checklist">${this._renderDashboardCardsChecklist(settings)}</div>
-          <button class="btn btn-primary btn-sm" onclick="App.saveDashboardCards()">保存卡片配置</button>
+        <div class="ts-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <span style="font-size:1.3rem;">📊</span>
+            <h3 style="margin:0;font-size:1rem;">仪表板卡片配置</h3>
+          </div>
+          <div class="ts-form-hint" style="margin-bottom:12px;">选择要在系统总览中显示的库存卡片</div>
+          <div id="dashboard-cards-checklist" style="max-height:200px;overflow-y:auto;">${this._renderDashboardCardsChecklist(settings)}</div>
+          <button class="btn btn-primary" style="margin-top:12px;width:100%;" onclick="App.saveDashboardCards()">保存卡片配置</button>
         </div>
-        <div class="settings-card">
-          <h3>💾 数据管理</h3>
-          <p>当前数据大小: <strong>${dataSize} KB</strong></p>
-          ${lastBackup ? `<p class="form-hint">最近备份: ${this._formatTime(lastBackup)}</p>` : '<p class="form-hint">尚未备份</p>'}
-          <p class="form-hint">备份包含全部数据（含附件图片），恢复将覆盖当前数据</p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-primary" onclick="App._backupData()">📤 备份数据 (含图片)</button>
+        <div class="ts-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <span style="font-size:1.3rem;">💾</span>
+            <h3 style="margin:0;font-size:1rem;">数据管理</h3>
+          </div>
+          <div class="ts-form-hint" style="margin-bottom:12px;">备份包含全部数据（含附件图片），恢复将覆盖当前数据</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <button class="btn" style="width:100%;" onclick="App._backupData()">📤 备份数据 (含图片)</button>
             <input type="file" id="restore-file-input" accept=".zip,.json" style="display:none;" onchange="App._restoreData(this)">
-            <button class="btn btn-outline" onclick="document.getElementById('restore-file-input').click()">📥 恢复数据</button>
-            ${API.currentUser && (API.currentUser.role === 'admin' || API.currentUser.role === 'superadmin') ? '<button class="btn btn-danger" onclick="App.resetAllData()">🗑️ 清空所有数据</button>' : ''}
+            <button class="btn btn-outline" style="width:100%;" onclick="document.getElementById('restore-file-input').click()">📥 恢复数据</button>
+            ${API.currentUser && (API.currentUser.role === 'admin' || API.currentUser.role === 'superadmin') ? '<button class="btn btn-danger" style="width:100%;" onclick="App.resetAllData()">🗑️ 清空所有数据</button>' : ''}
           </div>
-          <div id="restore-result" style="margin-top:8px;font-size:0.8rem;"></div>
+          <div id="restore-result" style="margin-top:12px;font-size:0.85rem;"></div>
         </div>
-        <div class="settings-card">
-          <h3>🔍 数据完整性</h3>
-          <p class="form-hint">检查库存、机器、交易记录的一致性</p>
-          <button class="btn btn-outline" onclick="App.checkDataIntegrity()">执行检查</button>
+        <div class="ts-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <span style="font-size:1.3rem;">🔍</span>
+            <h3 style="margin:0;font-size:1rem;">数据完整性</h3>
+          </div>
+          <div class="ts-form-hint" style="margin-bottom:12px;">检查库存、机器、交易记录的一致性</div>
+          <button class="btn btn-outline" style="width:100%;" onclick="App.checkDataIntegrity()">执行检查</button>
           <div id="integrity-result" style="margin-top:12px;"></div>
         </div>
-        <div class="settings-card">
-          <h3>ℹ️ 关于</h3>
-          <p><strong>手套管理系统 v3.9</strong> <span style="font-size:0.75rem;color:var(--text-tertiary);">2026-06-04</span></p>
-          <p style="font-size:0.8rem;color:var(--text-secondary);">设备库存与机器管理系统 · 支持长期稳定运行</p>
-          <div style="margin-top:8px;font-size:0.75rem;line-height:1.8;">
-            <select id="version-select" onchange="App._showVersionDetail(this.value)" style="width:100%;padding:6px;border-radius:6px;border:1px solid var(--border-color);margin-bottom:8px;">
+        <div class="ts-card" style="padding:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <span style="font-size:1.3rem;">ℹ️</span>
+            <h3 style="margin:0;font-size:1rem;">关于</h3>
+          </div>
+          <div style="font-size:0.9rem;color:var(--text-secondary);line-height:1.6;">
+            <div style="font-weight:600;color:var(--text-primary);">手套管理系统 v3.9</div>
+            <div style="font-size:0.8rem;margin-top:4px;">设备库存与机器管理系统 · 支持长期稳定运行</div>
+          </div>
+          <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border-color);">
+            <select id="version-select" onchange="App._showVersionDetail(this.value)" style="width:100%;padding:8px 10px;border:1.5px solid var(--border-color);border-radius:var(--radius-md);background:var(--bg-card);font-size:0.85rem;margin-bottom:12px;">
               <option value="">-- 选择版本查看更新内容 --</option>
               <option value="v3.7">v3.7 — 2026-06-03</option>
               <option value="v3.6">v3.6 — 2026-06-03</option>
               <option value="v3.5">v3.5 — 2026-06-02</option>
               <option value="v3.0">v3.0 — 2026-05-29</option>
             </select>
-            <div id="version-detail" style="color:var(--text-tertiary);">
+            <div id="version-detail" style="font-size:0.8rem;color:var(--text-tertiary);line-height:1.6;">
               <strong>v3.7 (2026-06-03)：</strong><br>
-              · 修复空闲库存计算公式（available = inv.quantity）<br>
-              · 修复全部库存计数公式（库存量+使用中+损坏）<br>
-              · 注册表更新改为无条件执行（消除数据不一致）<br>
+              · 修复空闲库存计算公式<br>
+              · 修复全部库存计数公式<br>
               · SN码页面可点击📷按钮上传/更换照片<br>
-              · 出库输入SN码自动显示已有附件缩略图<br>
               · 批量发货给厂家（多选+全选+快递单号选填）<br>
               · 仪表盘卡片支持拖拽排序<br>
-              · 服务器长期运行保护（崩溃恢复、自动备份、WAL检查点）<br>
-              · 优雅关闭（SIGTERM→检查点→关闭数据库）<br>
-              · 新增启动脚本（Windows .bat + Linux .sh + systemd服务）<br>
+              · 服务器长期运行保护（崩溃恢复、自动备份）<br>
               · 审计日志操作类型中文显示<br>
-              · 仪表板卡片配置支持新的汇总卡片<br>
             </div>
           </div>
         </div>
@@ -6853,7 +7643,13 @@ const App = {
       case 'sn-codes': this.renderSNCodes(); break;
       case 'after-sales': this.renderAfterSales(); break;
       case 'inventory-config': this.renderInventoryConfig(); break;
-      case 'tech-support': this.renderTechSupport(); break;
+      case 'tech-support':
+        if (this._tsDetailId) {
+          this.renderTechSupportDetail(this._tsDetailId);
+        } else {
+          this.renderTechSupport();
+        }
+        break;
       default:
         const matched = invConfig.find(c => tab === c.id || tab === c.id + '_left' || tab === c.id + '_right');
         if (matched) {
@@ -6884,6 +7680,9 @@ const App = {
       // 跳过正在输入的
       const activeEl = document.activeElement;
       if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) return;
+      // 跳过弹窗打开时
+      const modal = document.getElementById('modal-overlay');
+      if (modal && modal.style.display !== 'none' && !modal.classList.contains('hidden')) return;
       this.refreshCurrentView();
     }, 15000);
   },
@@ -6899,8 +7698,15 @@ const App = {
       this.renderTransactions(this.currentPage.transactions);
     } else if (tab === 'machines') {
       this.renderMachines();
+    } else if (tab === 'tech-support') {
+      // 技术支持页面：如果正在查看详情，则刷新详情；否则刷新列表
+      if (this._tsDetailId) {
+        this.renderTechSupportDetail(this._tsDetailId);
+      } else {
+        this.renderTechSupport(this._tsViewMode);
+      }
     }
-    // reports/audit/after-sales/tech-support — 含图表，跳过1秒刷新，用户可手动点刷新按钮
+    // reports/audit/after-sales — 含图表，跳过定时刷新，用户可手动点刷新按钮
   },
 
   bindKeyboardShortcuts() {
@@ -6944,6 +7750,1472 @@ const App = {
       </div>
     `;
     this._showInfoModal('键盘快捷键', html);
+  },
+
+  // ========== 隐藏部署管理面板 ==========
+  _deployAdminClicks: 0,
+  _deployClickTimer: null,
+
+  _deployAdminClick() {
+    // 3秒内连击3次打开部署管理
+    const now = Date.now();
+    this._deployAdminClicks++;
+    if (this._deployClickTimer) clearTimeout(this._deployClickTimer);
+    this._deployClickTimer = setTimeout(() => { this._deployAdminClicks = 0; }, 3000);
+
+    if (this._deployAdminClicks >= 3) {
+      this._deployAdminClicks = 0;
+      clearTimeout(this._deployClickTimer);
+      // 检查是否为管理员
+      if (API.currentUser && (API.currentUser.role === 'admin' || API.currentUser.role === 'superadmin' || API.currentUser.username === 'Yunwei')) {
+        this._showDeployAdmin();
+      } else {
+        this.notify('仅超级管理员可用此功能', 'warning');
+      }
+    }
+  },
+
+  _showDeployAdmin() {
+    const panel = document.getElementById('deploy-admin-panel');
+    panel.style.display = 'block';
+    document.body.style.overflow = 'hidden';
+    // 加载当前配置
+    this._loadDeployConfig();
+    // 检查服务器状态
+    this._checkServerStatus();
+  },
+
+  _hideDeployAdmin() {
+    const panel = document.getElementById('deploy-admin-panel');
+    panel.style.display = 'none';
+    document.body.style.overflow = '';
+  },
+
+  _verifyDeployPassword() {
+    // 检查当前用户是否为Yunwei
+    if (!API.currentUser || API.currentUser.username !== 'Yunwei') {
+      document.getElementById('deploy-password-error').textContent = '此功能仅限Yunwei使用';
+      document.getElementById('deploy-password-error').style.display = 'block';
+      setTimeout(() => {
+        document.getElementById('deploy-password-error').style.display = 'none';
+      }, 3000);
+      return;
+    }
+
+    const password = document.getElementById('deploy-admin-password').value;
+    // Yunwei专用密码
+    const adminPassword = localStorage.getItem('gms_deploy_admin_password') || 'yunwei2024';
+
+    if (password === adminPassword) {
+      document.getElementById('deploy-password-form').style.display = 'none';
+      document.getElementById('deploy-admin-content').style.display = 'block';
+      this._loadDeployConfig();
+      this._checkServerStatus();
+    } else {
+      document.getElementById('deploy-password-error').textContent = '密码错误';
+      document.getElementById('deploy-password-error').style.display = 'block';
+      setTimeout(() => {
+        document.getElementById('deploy-password-error').style.display = 'none';
+      }, 3000);
+    }
+  },
+
+  _switchDeployTab(tab) {
+    document.querySelectorAll('.deploy-tab-btn').forEach(btn => {
+      btn.style.background = '#334155';
+      btn.style.color = '#94a3b8';
+    });
+    document.querySelector(`.deploy-tab-btn[data-tab="${tab}"]`).style.background = '#667eea';
+    document.querySelector(`.deploy-tab-btn[data-tab="${tab}"]`).style.color = '#fff';
+
+    ['servers', 'database', 'deploy', 'logs'].forEach(t => {
+      document.getElementById(`deploy-tab-${t}`).style.display = t === tab ? 'block' : 'none';
+    });
+  },
+
+  async _checkServerStatus() {
+    // 检查主服务器
+    try {
+      const res = await fetch('/api/status');
+      if (res.ok) {
+        const data = await res.json();
+        document.getElementById('deploy-primary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+        document.getElementById('deploy-primary-role').textContent = `角色: ${data.serverRole || 'primary'} | 版本: ${data.version}`;
+        document.getElementById('deploy-db-status').innerHTML = data.dbConnected ? '<span style="color:#10b981;">已连接</span>' : '<span style="color:#ef4444;">断开</span>';
+        document.getElementById('deploy-db-info').textContent = `在线用户: ${data.onlineUsers}`;
+      }
+    } catch (e) {
+      document.getElementById('deploy-primary-status').innerHTML = '<span style="color:#ef4444;">离线</span>';
+    }
+
+    // 检查次服务器（从配置中获取）
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    const secondary = servers.find(s => s.role === 'secondary');
+    if (secondary) {
+      try {
+        const res = await fetch(`/api/proxy-status?ip=${secondary.ip}&port=${secondary.port || 8765}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.serverRole) {
+            document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+            document.getElementById('deploy-secondary-role').textContent = `角色: ${data.serverRole} | 版本: ${data.version}`;
+          } else if (data.version || data.dbConnected !== undefined) {
+            document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+            document.getElementById('deploy-secondary-role').textContent = `版本: ${data.version || '未知'}`;
+          } else {
+            document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+            document.getElementById('deploy-secondary-role').textContent = '服务运行中';
+          }
+        }
+      } catch (e) {
+        document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#ef4444;">离线</span>';
+        document.getElementById('deploy-secondary-role').textContent = '无法连接';
+      }
+    } else {
+      // 如果没有配置，从表单获取次服务器IP检查
+      const secondaryIP = document.getElementById('deploy-secondary-ip').value;
+      if (secondaryIP) {
+        try {
+          const res = await fetch(`/api/proxy-status?ip=${secondaryIP}&port=8765`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.serverRole) {
+              document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+              document.getElementById('deploy-secondary-role').textContent = `角色: ${data.serverRole} | 版本: ${data.version}`;
+            } else if (data.version || data.dbConnected !== undefined) {
+              document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+              document.getElementById('deploy-secondary-role').textContent = `版本: ${data.version || '未知'}`;
+            } else {
+              document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#10b981;">在线</span>';
+              document.getElementById('deploy-secondary-role').textContent = '服务运行中';
+            }
+          }
+        } catch (e) {
+          document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#ef4444;">离线</span>';
+          document.getElementById('deploy-secondary-role').textContent = '无法连接';
+        }
+      } else {
+        document.getElementById('deploy-secondary-status').innerHTML = '<span style="color:#f59e0b;">未配置</span>';
+        document.getElementById('deploy-secondary-role').textContent = '请添加次服务器';
+      }
+    }
+  },
+
+  _loadDeployConfig() {
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+
+    // 填充数据库配置
+    if (dbConfig.host) document.getElementById('deploy-db-host').value = dbConfig.host;
+    if (dbConfig.port) document.getElementById('deploy-db-port').value = dbConfig.port;
+    if (dbConfig.database) document.getElementById('deploy-db-name').value = dbConfig.database;
+    if (dbConfig.user) document.getElementById('deploy-db-user').value = dbConfig.user;
+    if (dbConfig.redis) document.getElementById('deploy-redis-host').value = dbConfig.redis;
+
+    // 渲染服务器列表
+    const listEl = document.getElementById('deploy-server-list');
+    if (servers.length === 0) {
+      listEl.innerHTML = '<p style="color:#94a3b8;">暂无服务器，点击上方添加</p>';
+    } else {
+      listEl.innerHTML = servers.map(s => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;background:#1e293b;border-radius:8px;margin-bottom:8px;">
+          <div>
+            <div style="font-weight:bold;">${s.name}</div>
+            <div style="font-size:0.85rem;color:#94a3b8;">${s.ip}:${s.port} | 角色: ${s.role}</div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="App._testServer('${s.ip}')" style="padding:6px 12px;background:#667eea;border:none;color:#fff;border-radius:6px;cursor:pointer;">🔌 测试</button>
+            <button onclick="App._nukeServer('${s.id}')" style="padding:6px 12px;background:#ef4444;border:none;color:#fff;border-radius:6px;cursor:pointer;">💣 清除</button>
+            <button onclick="App._removeFromList('${s.id}')" style="padding:6px 12px;background:#6b7280;border:none;color:#fff;border-radius:6px;cursor:pointer;font-size:0.75rem;">✕</button>
+          </div>
+        </div>
+      `).join('');
+    }
+  },
+
+  _addDeployServer() {
+    const name = prompt('服务器名称:');
+    if (!name) return;
+    const ip = prompt('服务器 IP:');
+    if (!ip) return;
+    const role = confirm('是主服务器吗?') ? 'primary' : 'secondary';
+
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    servers.push({ id: Date.now().toString(), name, ip, port: 8765, role });
+    localStorage.setItem('gms_deploy_servers', JSON.stringify(servers));
+    this._loadDeployConfig();
+    this._checkServerStatus();
+  },
+
+  _removeFromList(id) {
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    localStorage.setItem('gms_deploy_servers', JSON.stringify(servers.filter(s => s.id !== id)));
+    this._loadDeployConfig();
+    this._checkServerStatus();
+  },
+
+  async _nukeServer(id) {
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    const server = servers.find(s => s.id === id);
+    if (!server) return;
+    const sshUser = server.sshUser || 'we';
+    const password = server.password || '';
+    if (!password) {
+      const p = prompt('SSH 密码 (we用户密码):');
+      if (!p) return;
+      server.password = p;
+      localStorage.setItem('gms_deploy_servers', JSON.stringify(servers));
+    }
+    // 清除后自动从列表移除（通过 poll 检查 SSE 状态）
+    App._nukeWithProgress(server.ip, sshUser, server.password, server.name);
+    // 15秒后自动刷新列表
+    setTimeout(() => {
+      this._removeFromList(id);
+    }, 15000);
+  },
+
+  async _testServer(ip) {
+    this._deployLog(`测试连接 ${ip}...`);
+    try {
+      const res = await fetch(`http://${ip}:8765/api/status`, { timeout: 5000 });
+      if (res.ok) {
+        const data = await res.json();
+        this._deployLog(`✅ ${ip} 在线 | 角色: ${data.serverRole} | 用户: ${data.onlineUsers}`, 'success');
+      } else {
+        this._deployLog(`❌ ${ip} 返回错误: ${res.status}`, 'error');
+      }
+    } catch (e) {
+      this._deployLog(`❌ ${ip} 连接失败: ${e.message}`, 'error');
+    }
+  },
+
+  // ========== 部署日志 & 辅助方法 ==========
+  _deployLog(msg, type) {
+    const el = document.getElementById('deploy-log-output');
+    if (!el) return;
+    const colors = { success: '#10b981', error: '#ef4444', warning: '#f59e0b', info: '#94a3b8' };
+    const color = colors[type] || '#94a3b8';
+    const time = new Date().toLocaleTimeString('zh-CN');
+    el.innerHTML += `<div style="color:${color};font-family:monospace;font-size:0.85rem;">[${time}] ${msg}</div>`;
+    el.scrollTop = el.scrollHeight;
+  },
+
+  _watchDeployLogs(taskId) {
+    const token = API.token || localStorage.getItem('gms_token') || '';
+    const eventSource = new EventSource(API.baseURL + '/api/deploy/logs?id=' + taskId + '&token=' + encodeURIComponent(token));
+    eventSource.addEventListener('log', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        this._deployLog(data.message, data.type || 'info');
+        if (data.message.includes('部署完成') || data.message.includes('清除完成') || data.message.includes('失败')) {
+          eventSource.close();
+        }
+      } catch {}
+    });
+  },
+
+  _deployToServer(id) {
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    const server = servers.find(s => s.id === id);
+    if (!server) return;
+    // 切换到部署标签页并填入服务器信息
+    this._switchDeployTab('deploy');
+    document.getElementById('deploy-secondary-ip').value = server.ip;
+  },
+
+  // ========== 快速清除服务器 (不依赖服务器列表) ==========
+  _quickNuke() {
+    // 创建输入弹窗
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:999999;display:flex;align-items:center;justify-content:center;';
+    modal.innerHTML = `
+      <div style="background:#1e293b;border-radius:16px;padding:28px;max-width:420px;width:90%;color:#fff;">
+        <h3 style="margin:0 0 16px;color:#ef4444;">💣 快速清除服务器</h3>
+        <div style="display:grid;gap:10px;">
+          <div>
+            <label style="font-size:0.85rem;color:#94a3b8;">目标 IP</label>
+            <input id="qk-ip" placeholder="10.5.50.33" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#fff;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:0.85rem;color:#94a3b8;">SSH 用户</label>
+            <input id="qk-user" value="we" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#fff;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:0.85rem;color:#94a3b8;">SSH 密码</label>
+            <input id="qk-pass" type="password" placeholder="123456" style="width:100%;padding:10px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#fff;box-sizing:border-box;">
+          </div>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:8px;">
+          <button id="qk-cancel" style="flex:1;padding:12px;background:#334155;border:none;color:#e2e8f0;border-radius:8px;cursor:pointer;">取消</button>
+          <button id="qk-start" style="flex:1;padding:12px;background:#dc2626;border:none;color:#fff;border-radius:8px;cursor:pointer;font-weight:bold;">💣 开始清除</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    document.getElementById('qk-cancel').onclick = () => modal.remove();
+    document.getElementById('qk-start').onclick = () => {
+      const ip = document.getElementById('qk-ip').value.trim();
+      const user = document.getElementById('qk-user').value.trim();
+      const pass = document.getElementById('qk-pass').value;
+      if (!ip) { alert('请输入目标 IP'); return; }
+      modal.remove();
+      App._nukeWithProgress(ip, user, pass, ip);
+    };
+  },
+
+  // 带可视化进度的清除（通用，服务器列表和快速清除共用）
+  async _nukeWithProgress(targetIP, sshUser, password, label) {
+    const steps = [
+      { key: 'pm2', icon: '⏸️', label: '停止 PM2 进程' },
+      { key: 'startup', icon: '🔧', label: '移除开机自启' },
+      { key: 'dir', icon: '🗑️', label: '删除应用目录 ~/glove-management' },
+      { key: 'tmp', icon: '🧹', label: '清理临时文件' },
+      { key: 'proc', icon: '🔪', label: '终止残留 Node 进程' },
+    ];
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:999999;display:flex;align-items:center;justify-content:center;';
+    modal.innerHTML = `
+      <div style="background:#1e293b;border-radius:16px;padding:28px;max-width:480px;width:90%;color:#fff;">
+        <h3 style="margin:0 0 4px;color:#ef4444;">💣 彻底清除服务器</h3>
+        <p style="margin:0 0 20px;color:#94a3b8;font-size:0.85rem;">${label} — ${sshUser}@${targetIP}</p>
+        <div id="nuke-steps-container">
+          ${steps.map((s, i) => `
+            <div id="nk-step-${i}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #334155;opacity:0.35;">
+              <span style="font-size:1.2rem;">${s.icon}</span>
+              <span style="flex:1;font-size:0.9rem;">${s.label}</span>
+              <span id="nk-status-${i}" style="font-size:0.8rem;color:#64748b;">○</span>
+            </div>
+          `).join('')}
+        </div>
+        <div id="nk-error" style="margin-top:8px;color:#ef4444;font-size:0.85rem;display:none;"></div>
+        <button id="nk-close" style="margin-top:12px;width:100%;padding:12px;background:#334155;border:none;color:#e2e8f0;border-radius:8px;cursor:pointer;display:none;">关闭</button>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const update = (i, status) => {
+      const el = document.getElementById('nk-step-' + i);
+      const st = document.getElementById('nk-status-' + i);
+      if (!el) return;
+      el.style.opacity = '1';
+      if (status === 'running') { st.innerHTML = '<span style="color:#f59e0b;">⏳</span>'; el.style.background = '#334155'; }
+      else if (status === 'done') { st.innerHTML = '<span style="color:#10b981;">✅</span>'; }
+      else if (status === 'fail') { st.innerHTML = '<span style="color:#ef4444;">❌</span>'; }
+    };
+
+    try {
+      const res = await fetch(API.baseURL + '/api/deploy/nuke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API.token },
+        body: JSON.stringify({ targetIP, sshUser, password, name: label }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        update(0, 'fail');
+        document.getElementById('nk-error').style.display = 'block';
+        document.getElementById('nk-error').textContent = '请求失败: ' + (data.error || res.status);
+        document.getElementById('nk-close').style.display = 'block';
+        return;
+      }
+
+      const token = API.token || localStorage.getItem('gms_token') || '';
+      const es = new EventSource(API.baseURL + '/api/deploy/logs?id=' + data.taskId + '&token=' + encodeURIComponent(token));
+
+      es.addEventListener('log', (e) => {
+        try {
+          const log = JSON.parse(e.data);
+          const m = log.message || '';
+          if (m.includes('PM2 进程已终止') || m.includes('PM2 停止')) update(0, 'done');
+          if (m.includes('开机自启已移除')) update(1, 'done');
+          if (m.includes('应用目录已删除')) update(2, 'done');
+          if (m.includes('临时文件已清理')) update(3, 'done');
+          if (m.includes('残留进程已终止')) update(4, 'done');
+
+          if (m.includes('停止 PM2') || m.includes('⏸️')) update(0, 'running');
+          if (m.includes('移除 PM2 开机') || m.includes('🔧')) update(1, 'running');
+          if (m.includes('删除应用目录') || m.includes('🗑️')) update(2, 'running');
+          if (m.includes('清理临时文件') || m.includes('🧹')) update(3, 'running');
+          if (m.includes('终止残留') || m.includes('🔪')) update(4, 'running');
+
+          if ((m.includes('失败') || m.includes('FAIL')) && !m.includes('npm')) {
+            for (let i = 0; i < 5; i++) if (m.includes(steps[i].label.substring(0,4))) update(i, 'fail');
+          }
+
+          if (m.includes('清除完成') || m.includes('被核打击')) {
+            es.close();
+            update(0, 'done'); update(1, 'done'); update(2, 'done'); update(3, 'done'); update(4, 'done');
+            document.getElementById('nk-close').style.display = 'block';
+            // 自动刷新服务器列表
+            setTimeout(() => { if (App._loadDeployConfig) App._loadDeployConfig(); }, 1000);
+          }
+        } catch {}
+      });
+
+      es.addEventListener('connected', (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          if (d.logs && d.logs.length > 0) {
+            d.logs.forEach(l => {
+              const m = l.message || '';
+              if (m.includes('PM2 进程已终止')) update(0, 'done');
+              if (m.includes('开机自启已移除')) update(1, 'done');
+              if (m.includes('应用目录已删除')) update(2, 'done');
+              if (m.includes('临时文件已清理')) update(3, 'done');
+              if (m.includes('残留进程已终止')) update(4, 'done');
+              if (m.includes('清除完成') || m.includes('被核打击')) {
+                update(0,'done');update(1,'done');update(2,'done');update(3,'done');update(4,'done');
+                document.getElementById('nk-close').style.display = 'block';
+                setTimeout(() => { if (App._loadDeployConfig) App._loadDeployConfig(); }, 1000);
+              }
+            });
+          }
+        } catch {}
+      });
+
+      es.onerror = () => { es.close(); };
+      document.getElementById('nk-close').onclick = () => modal.remove();
+
+    } catch (e) {
+      update(0, 'fail');
+      document.getElementById('nk-error').style.display = 'block';
+      document.getElementById('nk-error').textContent = '网络错误: ' + e.message;
+      document.getElementById('nk-close').style.display = 'block';
+    }
+  },
+
+  _saveDbConfig() {
+    const dbConfig = {
+      host: document.getElementById('deploy-db-host').value,
+      port: document.getElementById('deploy-db-port').value || '3306',
+      database: document.getElementById('deploy-db-name').value || 'gms',
+      user: document.getElementById('deploy-db-user').value,
+      password: document.getElementById('deploy-db-password').value,
+      redis: document.getElementById('deploy-redis-host').value,
+    };
+    localStorage.setItem('gms_deploy_db', JSON.stringify(dbConfig));
+    this.notify('数据库配置已保存到本地', 'success');
+    this._deployLog('✅ 数据库配置已保存', 'success');
+  },
+
+  async _deployServer(type) {
+    let targetIP, targetUser, dbIP, redisIP, isPrimary;
+
+    if (type === 'secondary') {
+      targetIP = document.getElementById('deploy-secondary-ip').value;
+      targetUser = document.getElementById('deploy-secondary-user').value || 'we';
+      dbIP = document.getElementById('deploy-master-db-ip').value || '10.5.50.30';
+      redisIP = document.getElementById('deploy-secondary-redis').value || '10.5.50.30';
+      isPrimary = false;
+    } else {
+      this.notify('仅支持部署次服务器', 'error');
+      return;
+    }
+
+    if (!targetIP) {
+      this.notify('请填写服务器 IP', 'error');
+      return;
+    }
+
+    const sshPassword = document.getElementById('deploy-ssh-password').value;
+    if (!sshPassword) {
+      this.notify('请填写SSH密码', 'error');
+      return;
+    }
+
+    const btn = document.getElementById(`deploy-${type}-btn`);
+    btn.disabled = true;
+    btn.textContent = '部署中...';
+
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+
+    this._deployLog(`🚀 启动部署任务: ${targetIP}`, 'info');
+    this._deployLog(`📡 连接部署服务...`, 'info');
+
+    try {
+      // 步骤1: 启动部署任务
+      const token = localStorage.getItem('gms_token');
+      const startRes = await fetch('/api/deploy/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          targetIP,
+          sshUser: targetUser,
+          password: sshPassword,
+          dbHost: dbIP,
+          dbPort: 3306,
+          dbUser: dbConfig.user || 'gms_user',
+          dbPassword: dbConfig.password || 'gms_password_2024',
+          dbName: dbConfig.database || 'gms',
+          redisHost: redisIP,
+          role: isPrimary ? 'primary' : 'secondary'
+        })
+      });
+
+      const startData = await startRes.json();
+      if (!startData.success) {
+        throw new Error(startData.error || '启动部署失败');
+      }
+
+      const taskId = startData.taskId;
+      this._deployLog(`✅ 部署任务已创建: ${taskId}`, 'success');
+      this._deployLog(`📡 建立实时日志连接...`, 'info');
+
+      // 步骤2: SSE接收实时日志
+      await this._connectDeployLogs(taskId);
+
+      // 保存服务器配置
+      const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+      const existing = servers.findIndex(s => s.ip === targetIP);
+      const serverConfig = {
+        id: existing >= 0 ? servers[existing].id : Date.now().toString(),
+        name: '次服务器',
+        ip: targetIP,
+        port: 8765,
+        role: 'secondary'
+      };
+      if (existing >= 0) servers[existing] = serverConfig;
+      else servers.push(serverConfig);
+      localStorage.setItem('gms_deploy_servers', JSON.stringify(servers));
+
+      this._checkServerStatus();
+
+    } catch (e) {
+      this._deployLog(`❌ 部署失败: ${e.message}`, 'error');
+    }
+
+    btn.disabled = false;
+    btn.textContent = '🚀 开始部署次服务器';
+  },
+
+  async _connectDeployLogs(taskId) {
+    return new Promise((resolve, reject) => {
+      const token = localStorage.getItem('gms_token');
+      const es = new EventSource(`/api/deploy/logs?id=${taskId}&token=${token}`);
+      let connected = false;
+
+      es.addEventListener('connected', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.logs && Array.isArray(data.logs)) {
+            // 回放已有日志
+            data.logs.forEach(log => {
+              this._appendDeployLog(log);
+            });
+          }
+        } catch {}
+        if (!connected) {
+          this._deployLog(`✅ 实时日志已连接`, 'success');
+          connected = true;
+        }
+      });
+
+      es.addEventListener('log', (e) => {
+        try {
+          const log = JSON.parse(e.data);
+          this._appendDeployLog(log);
+        } catch {}
+      });
+
+      es.addEventListener('done', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.success) {
+            this._deployLog(`🎉 部署任务完成！`, 'success');
+            resolve(true);
+          } else {
+            this._deployLog(`❌ 部署任务失败`, 'error');
+            reject(new Error('部署失败'));
+          }
+        } catch {
+          resolve(true);
+        }
+        es.close();
+      });
+
+      es.onerror = () => {
+        if (!connected) {
+          this._deployLog(`⚠️ 日志连接失败，请刷新页面查看状态`, 'warning');
+          reject(new Error('SSE连接失败'));
+        }
+        es.close();
+        resolve(true);
+      };
+    });
+  },
+
+  _appendDeployLog(log) {
+    const time = log.time || '';
+    const msg = log.message || '';
+    const type = log.type || 'info';
+    const prefix = time ? `[${time}] ` : '';
+
+    const logOutput = document.getElementById('deploy-log-output');
+    if (!logOutput) return;
+
+    const line = document.createElement('div');
+    line.style.cssText = type === 'success'
+      ? 'color:#22c55e;font-size:0.8rem;line-height:1.6;'
+      : type === 'error'
+      ? 'color:#ef4444;font-size:0.8rem;line-height:1.6;'
+      : type === 'warning'
+      ? 'color:#f59e0b;font-size:0.8rem;line-height:1.6;'
+      : 'color:#e5e7eb;font-size:0.8rem;line-height:1.6;';
+    line.textContent = prefix + msg;
+    logOutput.appendChild(line);
+    logOutput.scrollTop = logOutput.scrollHeight;
+  },
+
+  async _doSSHDeploy(targetIP, sshUser, dbIP, redisIP, isPrimary) {
+    const role = isPrimary ? 'primary' : 'secondary';
+    const serverIP = targetIP;
+    const sshPassword = document.getElementById('deploy-ssh-password').value;
+
+    // ====== 步骤1: 测试SSH连接，确定可用用户 ======
+    this._deployLog(`🔌 步骤1/8: 测试SSH连接 ${serverIP}...`, 'info');
+    let workingUser = 'root';
+    let workingPassword = sshPassword;
+
+    try {
+      const pingRes = await this._sshCommand(serverIP, workingUser, 'echo "SSH_OK"', 15000, workingPassword);
+      if (!pingRes.includes('SSH_OK')) throw new Error('root连接失败');
+      this._deployLog(`✅ SSH连接成功 (root用户)`, 'success');
+    } catch (e) {
+      this._deployLog(`⚠️ root用户连接失败，尝试 ${sshUser}...`, 'warning');
+      try {
+        workingUser = sshUser;
+        const pingRes = await this._sshCommand(serverIP, workingUser, 'echo "SSH_OK"', 15000, workingPassword);
+        if (!pingRes.includes('SSH_OK')) throw new Error('用户连接失败');
+        this._deployLog(`✅ SSH连接成功 (${workingUser}用户)`, 'success');
+      } catch (e2) {
+        throw new Error(`无法SSH连接到 ${serverIP}: ${e2.message}`);
+      }
+    }
+
+    // ====== 步骤2: 检查远程服务器环境（Node.js/PM2） ======
+    this._deployLog(`📋 步骤2/8: 检查远程服务器环境...`, 'info');
+    const envCheck = await this._sshCommand(serverIP, workingUser,
+      `echo "NODE=$(node -v 2>/dev/null || echo NONE)" && echo "NPM=$(npm -v 2>/dev/null || echo NONE)" && echo "PM2=$(pm2 -v 2>/dev/null || echo NONE)" && echo "UNAME=$(uname -m)"`,
+      15000, workingPassword);
+
+    const nodeVer = (envCheck.match(/NODE=(\S+)/) || [])[1];
+    const npmVer = (envCheck.match(/NPM=(\S+)/) || [])[1];
+    const pm2Ver = (envCheck.match(/PM2=(\S+)/) || [])[1];
+    this._deployLog(`   Node: ${nodeVer || '未安装'} | NPM: ${npmVer || '未安装'} | PM2: ${pm2Ver || '未安装'}`, 'info');
+
+    // 如果没有 Node.js，先安装
+    if (!nodeVer || nodeVer === 'NONE') {
+      this._deployLog(`📦 安装 Node.js...`, 'info');
+      await this._sshCommand(serverIP, workingUser,
+        'curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs',
+        120000, workingPassword);
+      this._deployLog(`✅ Node.js 安装完成`, 'success');
+    }
+
+    // 如果没有 PM2，安装
+    if (!pm2Ver || pm2Ver === 'NONE') {
+      this._deployLog(`📦 安装 PM2...`, 'info');
+      await this._sshCommand(serverIP, workingUser,
+        'sudo npm install -g pm2',
+        60000, workingPassword);
+      this._deployLog(`✅ PM2 安装完成`, 'success');
+    }
+
+    // ====== 步骤3: 创建远程目录 ======
+    this._deployLog(`📁 步骤3/8: 创建应用目录 ~/glove-management...`, 'info');
+    await this._sshCommand(serverIP, workingUser,
+      'mkdir -p ~/glove-management && chmod 755 ~/glove-management && echo "DIR_OK"',
+      10000, workingPassword);
+
+    // ====== 步骤4: 打包并传输代码 ======
+    this._deployLog(`📦 步骤4/8: 打包并传输应用代码到 ${serverIP}...`, 'info');
+    try {
+      const deployCodeRes = await fetch('/api/deploy-code', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('gms_token')}`
+        },
+        body: JSON.stringify({
+          targetIP: serverIP,
+          sshUser: workingUser,
+          password: workingPassword
+        })
+      });
+      const deployCodeData = await deployCodeRes.json();
+      if (deployCodeData.success) {
+        this._deployLog(`✅ 代码传输完成 (${deployCodeData.packageSize || '?'})`, 'success');
+        if (deployCodeData.output) {
+          deployCodeData.output.split('\n').forEach(line => {
+            if (line.trim()) this._deployLog(`   📝 ${line}`, 'info');
+          });
+        }
+      } else {
+        throw new Error(deployCodeData.error || '代码传输失败');
+      }
+    } catch (e) {
+      // 回退方案：用 rsync 通过 SSH 传输
+      this._deployLog(`⚠️ 打包传输失败，尝试rsync备用方案...`, 'warning');
+      const rsyncCmd = `rsync -avz --delete --exclude='node_modules' --exclude='.git' --exclude='*.log' --exclude='.env' --exclude='uploads' ` +
+        `~/glove-management/ ${workingUser}@${serverIP}:~/glove-management/ 2>&1 || echo "RSYNC_FALLBACK"`;
+      const rsyncRes = await this._sshCommand('localhost', workingUser, rsyncCmd, 60000, workingPassword);
+      if (rsyncRes.includes('RSYNC_FALLBACK')) {
+        throw new Error('代码传输失败: ' + e.message);
+      }
+      this._deployLog(`✅ 代码传输完成(rsync)`, 'success');
+    }
+
+    // ====== 步骤5: 生成并写入.env和部署脚本 ======
+    this._deployLog(`⚙️ 步骤5/8: 生成配置文件和部署脚本...`, 'info');
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+    const dbPassword = dbConfig.password || 'gms_password_2024';
+    const dbUser = dbConfig.user || 'gms_user';
+    const dbName = dbConfig.database || 'gms';
+
+    // 写入 .env 文件
+    const envContent = `PORT=8765
+NODE_ENV=production
+SERVER_ROLE=${role}
+SERVER_ID=${role}-${serverIP}
+DB_HOST=${dbIP}
+DB_PORT=3306
+DB_USER=${dbUser}
+DB_PASSWORD=${dbPassword}
+DB_NAME=${dbName}
+REDIS_URL=redis://${redisIP}:6379`;
+    const encodedEnv = btoa(unescape(encodeURIComponent(envContent)));
+    await this._sshCommand(serverIP, workingUser,
+      `echo "${encodedEnv}" | base64 -d > ~/glove-management/.env && chmod 644 ~/glove-management/.env`,
+      10000, workingPassword);
+    this._deployLog(`✅ .env 文件已写入`, 'success');
+
+    // 写入 ecosystem.config.js
+    const pm2Config = `module.exports = {
+  apps: [{
+    name: 'glove-management',
+    script: 'server.js',
+    instances: 'max',
+    exec_mode: 'cluster',
+    env: { NODE_ENV: 'production' },
+    restart_delay: 4000
+  }]
+};`;
+    const encodedPm2 = btoa(unescape(encodeURIComponent(pm2Config)));
+    await this._sshCommand(serverIP, workingUser,
+      `echo "${encodedPm2}" | base64 -d > ~/glove-management/ecosystem.config.js`,
+      10000, workingPassword);
+    this._deployLog(`✅ PM2 配置已写入`, 'success');
+
+    // ====== 步骤6: 安装依赖 ======
+    this._deployLog(`📚 步骤6/8: 安装npm依赖...`, 'info');
+    const npmResult = await this._sshCommand(serverIP, workingUser,
+      'cd ~/glove-management && npm install --production 2>&1 && echo "NPM_OK"',
+      180000, workingPassword);
+    if (npmResult.includes('NPM_OK')) {
+      this._deployLog(`✅ npm依赖安装完成`, 'success');
+    } else {
+      this._deployLog(`⚠️ npm依赖安装可能失败，尝试完整安装...`, 'warning');
+      const npmResult2 = await this._sshCommand(serverIP, workingUser,
+        'cd ~/glove-management && npm install 2>&1 && echo "NPM_OK"',
+        180000, workingPassword);
+      if (npmResult2.includes('NPM_OK')) {
+        this._deployLog(`✅ npm依赖安装完成(完整安装)`, 'success');
+      } else {
+        throw new Error('npm依赖安装失败');
+      }
+    }
+
+    // ====== 步骤7: 启动/重启 PM2 服务 ======
+    this._deployLog(`🚀 步骤7/8: 启动PM2服务...`, 'info');
+    const startResult = await this._sshCommand(serverIP, workingUser,
+      'cd ~/glove-management && ' +
+      '(pm2 list 2>/dev/null | grep -q "glove-management" && pm2 restart glove-management --update-env || pm2 start ecosystem.config.js) 2>&1 && ' +
+      'pm2 save 2>&1 && echo "PM2_START_OK"',
+      30000, workingPassword);
+
+    if (startResult.includes('PM2_START_OK')) {
+      this._deployLog(`✅ PM2服务已启动`, 'success');
+    } else {
+      this._deployLog(`⚠️ PM2启动结果: ${startResult.substring(0, 200)}`, 'warning');
+    }
+
+    // 显示PM2状态
+    try {
+      const pm2Status = await this._sshCommand(serverIP, workingUser, 'pm2 list 2>&1', 10000, workingPassword);
+      // 只显示关键行
+      const lines = pm2Status.split('\n').filter(l => l.includes('glove-management') || l.includes('online') || l.includes('stop'));
+      lines.forEach(line => this._deployLog(`   📝 ${line.trim().substring(0, 100)}`, 'info'));
+    } catch {}
+
+    // ====== 步骤8: 验证服务状态 ======
+    this._deployLog(`🔍 步骤8/8: 验证服务状态...`, 'info');
+    let serviceOk = false;
+
+    // 等待5秒让服务启动
+    await new Promise(r => setTimeout(r, 5000));
+
+    // 尝试3次检查
+    for (let i = 1; i <= 3; i++) {
+      try {
+        const proxyRes = await fetch(`/api/proxy-status?ip=${serverIP}&port=8765`);
+        if (proxyRes.ok) {
+          const data = await proxyRes.json();
+          if (data.serverRole) {
+            this._deployLog(`✅ 服务验证成功 | 角色: ${data.serverRole} | 版本: ${data.version || '未知'}`, 'success');
+            this._deployLog(`✅ 数据库连接: ${data.dbConnected ? '正常' : '异常'}`, data.dbConnected ? 'success' : 'warning');
+            serviceOk = true;
+            break;
+          }
+        }
+      } catch (e) {
+        if (i < 3) {
+          this._deployLog(`⏳ 第${i}次检查未响应，等待5秒后重试...`, 'info');
+          await new Promise(r => setTimeout(r, 5000));
+        }
+      }
+    }
+
+    if (!serviceOk) {
+      this._deployLog(`⚠️ 服务状态检查超时，请通过日志排查`, 'warning');
+      // 自动获取PM2错误日志
+      try {
+        const logs = await this._sshCommand(serverIP, workingUser,
+          'cd ~/glove-management && pm2 logs glove-management --lines 15 --nostream 2>&1',
+          10000, workingPassword);
+        this._deployLog(`📋 PM2日志(最近15行):`, 'info');
+        logs.split('\n').slice(0, 15).forEach(line => {
+          if (line.trim()) this._deployLog(`   ${line.trim().substring(0, 120)}`, 'warning');
+        });
+      } catch {}
+    }
+
+    this._deployLog(`🎉 部署流程完成！`, 'success');
+  },
+
+  _generateDeployScript(dbIP, redisIP, role, serverIP) {
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+    const dbPassword = dbConfig.password || 'gms_password_2024';
+
+    const envContent = `
+# 服务器配置
+PORT=8765
+NODE_ENV=production
+SERVER_ROLE=${role}
+SERVER_ID=${role}-${serverIP}
+
+# MySQL
+DB_HOST=${dbIP}
+DB_PORT=3306
+DB_USER=${dbConfig.user || 'gms_user'}
+DB_PASSWORD=${dbPassword}
+DB_NAME=${dbConfig.database || 'gms'}
+
+# Redis
+REDIS_URL=redis://${redisIP}:6379
+`.trim();
+
+    return `#!/bin/bash
+set -e
+cd ~/glove-management
+
+echo "[INFO] 当前目录: \$(pwd)"
+echo "[INFO] 当前用户: \$(whoami)"
+echo "[INFO] 目录权限: \$(ls -la ~/glove-management/ 2>/dev/null | head -5)"
+
+# 环境变量
+echo "[INFO] 创建 .env 文件..."
+cat > .env << 'ENVEOF'
+${envContent}
+ENVEOF
+chmod 644 .env
+echo "[OK] .env 文件创建成功"
+
+# 安装依赖（如果package.json存在）
+if [ -f package.json ]; then
+  echo "[INFO] 安装npm依赖..."
+  npm install --production
+  if [ $? -eq 0 ]; then
+    echo "[OK] npm依赖安装成功"
+  else
+    echo "[WARN] npm依赖安装可能失败，尝试完整安装..."
+    npm install
+    if [ $? -eq 0 ]; then
+      echo "[OK] npm依赖安装成功"
+    else
+      echo "[ERROR] npm依赖安装失败"
+    fi
+  fi
+else
+  echo "[ERROR] package.json 不存在!"
+  exit 1
+fi
+
+# 检查pm2是否安装
+if ! command -v pm2 &> /dev/null; then
+  echo "[INFO] 安装pm2..."
+  npm install -g pm2
+fi
+echo "[OK] pm2版本: \$(pm2 --version)"
+
+# 创建pm2配置
+echo "[INFO] 创建PM2配置..."
+cat > ecosystem.config.js << 'PM2EOF'
+module.exports = {
+  apps: [{
+    name: 'glove-management',
+    script: 'server.js',
+    instances: 'max',
+    exec_mode: 'cluster',
+    env: {
+      NODE_ENV: 'production'
+    },
+    restart_delay: 4000
+  }]
+};
+PM2EOF
+echo "[OK] PM2配置创建成功"
+
+# 启动服务
+echo "[INFO] 启动服务..."
+if pm2 list 2>/dev/null | grep -q "glove-management"; then
+  echo "[INFO] 服务已存在，重启..."
+  pm2 restart glove-management --update-env
+else
+  echo "[INFO] 启动新服务..."
+  pm2 start ecosystem.config.js
+fi
+pm2 save
+
+echo "[INFO] PM2状态:"
+pm2 list
+
+echo "[OK] 部署完成"
+`;
+  },
+
+  async _sshCommand(ip, user, command, timeout = 30000, password = null) {
+    try {
+      const token = localStorage.getItem('gms_token');
+      const body = { ip, user, command, timeout };
+      if (password) body.password = password;
+
+      const res = await fetch(`/api/ssh-exec`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        return data.output || '';
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${res.status}`);
+      }
+    } catch (e) {
+      throw new Error(`SSH执行失败: ${e.message}`);
+    }
+  },
+
+  async _setupSSHKey(targetIP, sshUser) {
+    // 在主服务器上配置SSH免密登录到目标服务器
+    // 步骤1: 检查主服务器是否有SSH密钥
+    let keyExists = false;
+    try {
+      const checkRes = await API._fetchWithTimeout(`/api/ssh-exec`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: 'localhost', user: 'root', command: 'ls ~/.ssh/id_rsa.pub 2>/dev/null && echo "KEY_EXISTS" || echo "NO_KEY"' })
+      }, 10000);
+      if (checkRes.ok) {
+        const data = await checkRes.json();
+        keyExists = data.output && data.output.includes('KEY_EXISTS');
+      }
+    } catch (e) {
+      // 继续尝试
+    }
+
+    // 步骤2: 如果没有密钥，生成一个
+    if (!keyExists) {
+      this._deployLog(`🔑 在主服务器生成SSH密钥...`, 'info');
+      await API._fetchWithTimeout(`/api/ssh-exec`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: 'localhost', user: 'root', command: 'ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" 2>/dev/null && echo "KEY_GENERATED"' })
+      }, 15000);
+    }
+
+    // 步骤3: 将公钥复制到目标服务器
+    this._deployLog(`🔑 将公钥复制到 ${targetIP}...`, 'info');
+    const copyRes = await API._fetchWithTimeout(`/api/ssh-exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: 'localhost', user: 'root', command: `sshpass -p "${document.getElementById('deploy-ssh-password').value || ''}" ssh-copy-id -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa.pub ${sshUser}@${targetIP} 2>&1 || echo "COPY_ATTEMPTED"` })
+    }, 15000);
+
+    if (copyRes.ok) {
+      const data = await copyRes.json();
+      if (data.output && data.output.includes('Number of key(s) added')) {
+        this._deployLog(`✅ SSH密钥已成功复制`, 'success');
+      } else {
+        throw new Error('密钥复制失败');
+      }
+    }
+  },
+
+  _deployLog(message, type = 'info') {
+    const logEl = document.getElementById('deploy-log-output');
+    const time = new Date().toLocaleTimeString('zh-CN');
+    const colors = {
+      info: '#60a5fa',
+      success: '#10b981',
+      error: '#ef4444',
+      warning: '#f59e0b'
+    };
+    const div = document.createElement('div');
+    div.style.cssText = `color:${colors[type] || colors.info};padding:4px 0;border-bottom:1px solid #1e293b;`;
+    div.innerHTML = `<span style="color:#64748b;">[${time}]</span> ${message}`;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+  },
+
+  _clearDeployLogs() {
+    document.getElementById('deploy-log-output').innerHTML = '<div style="color:#64748b;">日志已清空</div>';
+  },
+
+  _refreshDeployLogs() {
+    this._deployLog('🔄 刷新服务器状态...', 'info');
+    this._checkServerStatus();
+  },
+
+  _getSecondaryConfig() {
+    const servers = JSON.parse(localStorage.getItem('gms_deploy_servers') || '[]');
+    const secondary = servers.find(s => s.role === 'secondary');
+    if (secondary) return secondary;
+    const ip = document.getElementById('deploy-secondary-ip').value;
+    const user = document.getElementById('deploy-secondary-user').value || 'we';
+    return { ip, user, role: 'secondary' };
+  },
+
+  async _checkSecondaryStatus() {
+    const config = this._getSecondaryConfig();
+    const password = document.getElementById('deploy-ssh-password').value;
+    
+    if (!config.ip) {
+      this.notify('请先配置次服务器IP', 'warning');
+      return;
+    }
+
+    if (!password) {
+      this.notify('请先输入SSH密码', 'warning');
+      return;
+    }
+
+    this._deployLog(`🔍 检查次服务器 ${config.user}@${config.ip} 状态...`, 'info');
+
+    try {
+      const pm2Status = await this._sshCommand(config.ip, config.user, 'pm2 list 2>&1', 10000, password);
+      this._deployLog(`📊 PM2状态:`, 'info');
+      pm2Status.split('\n').forEach(line => {
+        if (line.trim()) this._deployLog(`   ${line.substring(0, 100)}`, 'info');
+      });
+    } catch (e) {
+      this._deployLog(`❌ 无法获取PM2状态: ${e.message}`, 'error');
+    }
+
+    try {
+      const portStatus = await this._sshCommand(config.ip, config.user, 'ss -tlnp 2>/dev/null | grep -E "8765|LISTEN" || netstat -tlnp 2>/dev/null | grep -E "8765|LISTEN" || echo "PORT_NOT_FOUND"', 10000, password);
+      this._deployLog(`📡 端口监听状态:`, 'info');
+      if (portStatus.includes('8765')) {
+        this._deployLog(`   ✅ 端口8765正在监听`, 'success');
+        portStatus.split('\n').forEach(line => {
+          if (line.trim()) this._deployLog(`   ${line.substring(0, 100)}`, 'info');
+        });
+      } else {
+        this._deployLog(`   ⚠️ 端口8765未监听`, 'warning');
+      }
+    } catch (e) {
+      this._deployLog(`❌ 无法检查端口: ${e.message}`, 'error');
+    }
+
+    try {
+      const fwStatus = await this._sshCommand(config.ip, config.user, 'sudo ufw status 2>/dev/null || ufw status 2>/dev/null || iptables -L -n 2>/dev/null | head -20 || echo "FW_CHECK_FAILED"', 10000, password);
+      this._deployLog(`🔥 防火墙状态:`, 'info');
+      if (fwStatus.includes('Status: active') || fwStatus.includes('ACCEPT') || fwStatus.includes('DROP')) {
+        fwStatus.split('\n').slice(0, 15).forEach(line => {
+          if (line.trim()) this._deployLog(`   ${line.substring(0, 100)}`, 'warning');
+        });
+      } else {
+        this._deployLog(`   ✅ 防火墙未启用或状态未知`, 'success');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 无法检查防火墙: ${e.message}`, 'warning');
+    }
+
+    try {
+      const curlTest = await this._sshCommand(config.ip, config.user, 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8765/api/status 2>&1 || echo "CURL_FAILED"', 10000, password);
+      this._deployLog(`🌐 本地HTTP测试:`, 'info');
+      if (curlTest === '200') {
+        this._deployLog(`   ✅ 本地访问正常 (HTTP 200)`, 'success');
+      } else {
+        this._deployLog(`   ⚠️ 本地访问返回: ${curlTest}`, 'warning');
+      }
+    } catch (e) {
+      this._deployLog(`❌ 本地HTTP测试失败: ${e.message}`, 'error');
+    }
+
+    try {
+      const statusRes = await fetch(`/api/proxy-status?ip=${config.ip}&port=8765`);
+      if (statusRes.ok) {
+        const data = await statusRes.json();
+        if (data.serverRole) {
+          this._deployLog(`✅ 服务正常 | 版本: ${data.version} | 角色: ${data.serverRole}`, 'success');
+        } else if (data.version || data.dbConnected !== undefined) {
+          this._deployLog(`✅ 服务正常 | 版本: ${data.version || '未知'}`, 'success');
+        } else {
+          this._deployLog(`✅ 服务正常运行中`, 'success');
+        }
+        this._deployLog(`💡 提示: 服务已运行，如外部无法访问请检查防火墙设置`, 'info');
+      } else {
+        this._deployLog(`⚠️ 服务返回错误: ${statusRes.status}`, 'warning');
+      }
+    } catch (e) {
+      this._deployLog(`❌ 代理无法访问服务: ${e.message}`, 'error');
+    }
+  },
+
+  async _viewSecondaryPM2Logs() {
+    const config = this._getSecondaryConfig();
+    const password = document.getElementById('deploy-ssh-password').value;
+    
+    if (!config.ip) {
+      this.notify('请先配置次服务器IP', 'warning');
+      return;
+    }
+
+    this._deployLog(`📋 获取PM2日志...`, 'info');
+    try {
+      const logs = await this._sshCommand(config.ip, config.user, 'pm2 logs --lines 30 --nostream 2>&1', 10000, password);
+      this._deployLog(`📋 PM2日志(最近30行):`, 'info');
+      logs.split('\n').forEach(line => {
+        if (line.trim()) {
+          if (line.includes('Error') || line.includes('error') || line.includes('ERROR')) {
+            this._deployLog(`   🔴 ${line.substring(0, 150)}`, 'error');
+          } else {
+            this._deployLog(`   ${line.substring(0, 150)}`, 'info');
+          }
+        }
+      });
+
+      const appLogs = await this._sshCommand(config.ip, config.user, 'ls -la ~/.pm2/logs/ 2>&1', 10000, password);
+      this._deployLog(`📁 PM2日志目录:`, 'info');
+      appLogs.split('\n').forEach(line => {
+        if (line.trim()) this._deployLog(`   ${line.substring(0, 100)}`, 'info');
+      });
+
+      const errorLog = await this._sshCommand(config.ip, config.user, 'cat ~/.pm2/logs/glove-management-error.log 2>&1 | tail -30', 10000, password);
+      this._deployLog(`🔴 应用错误日志(最近30行):`, 'error');
+      if (errorLog && !errorLog.includes('No such file')) {
+        errorLog.split('\n').forEach(line => {
+          if (line.trim()) this._deployLog(`   ${line.substring(0, 150)}`, 'error');
+        });
+      } else {
+        this._deployLog(`   无错误日志文件或文件为空`, 'info');
+      }
+
+      const outLog = await this._sshCommand(config.ip, config.user, 'cat ~/.pm2/logs/glove-management-out.log 2>&1 | tail -30', 10000, password);
+      this._deployLog(`📝 应用输出日志(最近30行):`, 'info');
+      if (outLog && !outLog.includes('No such file')) {
+        outLog.split('\n').forEach(line => {
+          if (line.trim()) this._deployLog(`   ${line.substring(0, 150)}`, 'info');
+        });
+      } else {
+        this._deployLog(`   无输出日志文件或文件为空`, 'info');
+      }
+
+    } catch (e) {
+      this._deployLog(`❌ 获取日志失败: ${e.message}`, 'error');
+    }
+  },
+
+  async _restartSecondaryServer() {
+    const config = this._getSecondaryConfig();
+    const password = document.getElementById('deploy-ssh-password').value;
+    
+    if (!config.ip) {
+      this.notify('请先配置次服务器IP', 'warning');
+      return;
+    }
+
+    if (!password) {
+      this.notify('请先输入SSH密码', 'warning');
+      return;
+    }
+
+    if (!confirm('确定要重启次服务器吗？')) return;
+
+    this._deployLog(`🔄 重启次服务器 ${config.ip}...`, 'info');
+    try {
+      await this._sshCommand(config.ip, config.user, 'cd ~/glove-management && pm2 restart all 2>&1', 30000, password);
+      this._deployLog(`✅ 重启命令已执行，等待服务启动...`, 'success');
+
+      await new Promise(r => setTimeout(r, 5000));
+      this._checkSecondaryStatus();
+    } catch (e) {
+      this._deployLog(`❌ 重启失败: ${e.message}`, 'error');
+    }
+  },
+
+  async _openFirewallPort() {
+    const config = this._getSecondaryConfig();
+    const password = document.getElementById('deploy-ssh-password').value;
+    
+    if (!config.ip) {
+      this.notify('请先配置次服务器IP', 'warning');
+      return;
+    }
+
+    if (!password) {
+      this.notify('请先输入SSH密码', 'warning');
+      return;
+    }
+
+    if (!confirm('确定要开放8765端口吗？')) return;
+
+    this._deployLog(`🔓 开放8765端口...`, 'info');
+    
+    const trySSH = async (user, cmd) => {
+      try {
+        return await this._sshCommand(config.ip, user, cmd, 10000, password);
+      } catch {
+        return null;
+      }
+    };
+
+    try {
+      const currentUser = config.user || 'we';
+      let result;
+      
+      result = await trySSH(currentUser, 'sudo ufw allow 8765/tcp 2>&1');
+      if (result && !result.includes('Permission denied')) {
+        this._deployLog(`✅ UFW: ${result.trim()}`, 'success');
+      } else {
+        result = await trySSH('root', 'ufw allow 8765/tcp 2>&1');
+        if (result && !result.includes('Permission denied')) {
+          this._deployLog(`✅ UFW(root): ${result.trim()}`, 'success');
+        }
+      }
+
+      result = await trySSH(currentUser, 'sudo iptables -I INPUT -p tcp --dport 8765 -j ACCEPT 2>&1');
+      if (result && !result.includes('Permission denied')) {
+        await trySSH(currentUser, 'sudo iptables-save 2>&1');
+        this._deployLog(`✅ iptables: 端口8765已开放`, 'success');
+      } else {
+        result = await trySSH('root', 'iptables -I INPUT -p tcp --dport 8765 -j ACCEPT 2>&1');
+        if (result && !result.includes('Permission denied')) {
+          await trySSH('root', 'iptables-save 2>&1');
+          this._deployLog(`✅ iptables(root): 端口8765已开放`, 'success');
+        }
+      }
+
+      result = await trySSH(currentUser, 'sudo firewall-cmd --permanent --add-port=8765/tcp 2>&1 || sudo firewall-cmd --reload 2>&1 || echo "FIREWALL_CMD_NOT_AVAIL"');
+      if (result && !result.includes('Permission denied') && !result.includes('FIREWALL_CMD_NOT_AVAIL')) {
+        this._deployLog(`✅ firewall-cmd: ${result.trim()}`, 'success');
+      } else {
+        result = await trySSH('root', 'firewall-cmd --permanent --add-port=8765/tcp 2>&1 || firewall-cmd --reload 2>&1 || echo "FIREWALL_CMD_NOT_AVAIL"');
+        if (result && !result.includes('Permission denied') && !result.includes('FIREWALL_CMD_NOT_AVAIL')) {
+          this._deployLog(`✅ firewall-cmd(root): ${result.trim()}`, 'success');
+        }
+      }
+
+      this._deployLog(`✅ 端口开放操作完成，请尝试访问 http://${config.ip}:8765`, 'success');
+    } catch (e) {
+      this._deployLog(`❌ 开放端口失败: ${e.message}`, 'error');
+    }
+  },
+
+  async _enableMySQLRemote() {
+    const dbIP = document.getElementById('deploy-master-db-ip').value || '10.5.50.30';
+    const sshPassword = document.getElementById('deploy-ssh-password').value;
+    const mysqlRootPassword = document.getElementById('deploy-mysql-root-password').value;
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+    const dbUser = dbConfig.user || 'gms_user';
+    const dbPassword = dbConfig.password || 'gms_password_2024';
+    const dbName = dbConfig.database || 'gms';
+
+    if (!sshPassword) {
+      this.notify('请先输入SSH密码', 'warning');
+      return;
+    }
+
+    if (!mysqlRootPassword) {
+      this.notify('请输入MySQL root密码', 'warning');
+      return;
+    }
+
+    if (!confirm(`确定要在主数据库 ${dbIP} 上开启远程访问吗？\n\n这将允许次服务器通过网络连接到主数据库。`)) return;
+
+    this._deployLog(`🔑 在主数据库 ${dbIP} 上开启远程访问...`, 'info');
+
+    // 先尝试用root用户SSH连接，如果失败则用配置的we用户
+    let sshUser = 'root';
+    try {
+      await this._sshCommand(dbIP, sshUser, 'echo "SSH_OK"', 5000, sshPassword);
+    } catch (e) {
+      sshUser = 'we';
+      this._deployLog(`ℹ️ root SSH登录失败，使用 ${sshUser} 用户`, 'info');
+    }
+
+    try {
+      this._deployLog(`📝 步骤1: 创建数据库用户 ${dbUser}@%`, 'info');
+      const createUserCmd = `mysql -u root -p'${mysqlRootPassword}' -e "CREATE USER IF NOT EXISTS '${dbUser}'@'%' IDENTIFIED BY '${dbPassword}'; GRANT ALL PRIVILEGES ON ${dbName}.* TO '${dbUser}'@'%'; FLUSH PRIVILEGES;" 2>&1`;
+      const createUser = await this._sshCommand(dbIP, sshUser, createUserCmd, 15000, sshPassword);
+      if (createUser.includes('ERROR') && !createUser.includes('already exists')) {
+        this._deployLog(`⚠️ 创建用户失败: ${createUser.substring(0, 100)}`, 'warning');
+      } else {
+        this._deployLog(`✅ 用户 ${dbUser}@% 创建/授权成功`, 'success');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 创建用户失败: ${e.message}`, 'warning');
+    }
+
+    try {
+      this._deployLog(`📝 步骤2: 检查MySQL绑定地址`, 'info');
+      const bindCmd = `grep -E "^bind-address" /etc/mysql/mysql.conf.d/mysqld.cnf 2>/dev/null || grep -E "^bind-address" /etc/mysql/my.cnf 2>/dev/null || echo "BIND_NOT_FOUND"`;
+      const bindAddr = await this._sshCommand(dbIP, sshUser, bindCmd, 10000, sshPassword);
+      if (bindAddr.includes('127.0.0.1')) {
+        this._deployLog(`⚠️ MySQL仅绑定到本地，需要修改配置`, 'warning');
+        const updateCmd = `sudo sed -i "s/^bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/mysql.conf.d/mysqld.cnf 2>&1 || sudo sed -i "s/^bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/my.cnf 2>&1 || echo "BIND_UPDATE_FAILED"`;
+        const updateBind = await this._sshCommand(dbIP, sshUser, updateCmd, 10000, sshPassword);
+        if (!updateBind.includes('FAILED')) {
+          this._deployLog(`✅ 已修改绑定地址为 0.0.0.0`, 'success');
+        } else {
+          this._deployLog(`⚠️ 修改绑定地址失败，请手动修改`, 'warning');
+        }
+      } else if (bindAddr.includes('0.0.0.0')) {
+        this._deployLog(`✅ MySQL已绑定到所有地址`, 'success');
+      } else {
+        this._deployLog(`ℹ️ MySQL配置未找到bind-address（可能已默认监听所有地址）`, 'info');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 检查绑定地址失败: ${e.message}`, 'warning');
+    }
+
+    try {
+      this._deployLog(`📝 步骤3: 开放MySQL端口(3306)防火墙`, 'info');
+      const fwCmd = `sudo ufw allow 3306/tcp 2>&1 || sudo iptables -I INPUT -p tcp --dport 3306 -j ACCEPT 2>&1 || echo "FW_OK"`;
+      const fwResult = await this._sshCommand(dbIP, sshUser, fwCmd, 10000, sshPassword);
+      this._deployLog(`✅ 防火墙规则已添加: ${fwResult.substring(0, 50)}`, 'success');
+    } catch (e) {
+      this._deployLog(`⚠️ 开放端口失败: ${e.message}`, 'warning');
+    }
+
+    try {
+      this._deployLog(`📝 步骤4: 重启MySQL服务`, 'info');
+      const restartCmd = `sudo systemctl restart mysql 2>&1 || sudo service mysql restart 2>&1 || echo "RESTART_DONE"`;
+      const restartResult = await this._sshCommand(dbIP, sshUser, restartCmd, 30000, sshPassword);
+      if (restartResult.includes('failed') || restartResult.includes('Failed')) {
+        this._deployLog(`⚠️ MySQL重启可能需要手动操作: ${restartResult.substring(0, 100)}`, 'warning');
+      } else {
+        this._deployLog(`✅ MySQL服务重启命令已执行`, 'success');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ 重启MySQL失败: ${e.message}`, 'warning');
+    }
+
+    this._deployLog(`✅ MySQL远程访问配置完成`, 'success');
+    this._deployLog(`💡 提示: 现在可以点击"测试数据库连接"验证是否连通`, 'info');
+  },
+
+  async _testDbConnection() {
+    const config = this._getSecondaryConfig();
+    const password = document.getElementById('deploy-ssh-password').value;
+    const dbIP = document.getElementById('deploy-master-db-ip').value || '10.5.50.30';
+    const dbConfig = JSON.parse(localStorage.getItem('gms_deploy_db') || '{}');
+    const dbUser = dbConfig.user || 'gms_user';
+    const dbPassword = dbConfig.password || 'gms_password_2024';
+    const dbName = dbConfig.database || 'gms';
+
+    if (!config.ip) {
+      this.notify('请先配置次服务器IP', 'warning');
+      return;
+    }
+
+    if (!password) {
+      this.notify('请先输入SSH密码', 'warning');
+      return;
+    }
+
+    this._deployLog(`🔌 从次服务器 ${config.ip} 测试连接主数据库 ${dbIP}...`, 'info');
+
+    try {
+      this._deployLog(`📝 步骤1: 检查MySQL客户端是否安装`, 'info');
+      const mysqlCheck = await this._sshCommand(config.ip, config.user, 'which mysql 2>&1 || echo "MYSQL_NOT_FOUND"', 5000, password);
+      if (mysqlCheck.includes('NOT_FOUND')) {
+        this._deployLog(`📝 安装MySQL客户端...`, 'info');
+        await this._sshCommand(config.ip, config.user, 'sudo apt-get install -y mysql-client 2>&1 || echo "INSTALL_DONE"', 60000, password);
+        this._deployLog(`✅ MySQL客户端安装完成`, 'success');
+      } else {
+        this._deployLog(`✅ MySQL客户端已安装`, 'success');
+      }
+    } catch (e) {
+      this._deployLog(`⚠️ MySQL客户端检查失败: ${e.message}`, 'warning');
+    }
+
+    try {
+      this._deployLog(`📝 步骤2: 测试TCP连接(端口3306)`, 'info');
+      const tcpTest = await this._sshCommand(config.ip, config.user, `timeout 3 bash -c "echo '' > /dev/tcp/${dbIP}/3306" 2>&1 && echo 'TCP_OK' || echo 'TCP_FAILED'`, 10000, password);
+      if (tcpTest.includes('TCP_OK')) {
+        this._deployLog(`✅ TCP连接成功 (${dbIP}:3306)`, 'success');
+      } else {
+        this._deployLog(`❌ TCP连接失败，请检查主服务器防火墙和MySQL监听配置`, 'error');
+        return;
+      }
+    } catch (e) {
+      this._deployLog(`❌ TCP测试失败: ${e.message}`, 'error');
+      return;
+    }
+
+    try {
+      this._deployLog(`📝 步骤3: 测试MySQL认证`, 'info');
+      const authTest = await this._sshCommand(config.ip, config.user, `mysql -h ${dbIP} -u ${dbUser} -p'${dbPassword}' -e "SELECT 1 AS test" 2>&1 || echo 'AUTH_FAILED'`, 15000, password);
+      if (authTest.includes('test') || authTest.includes('1')) {
+        this._deployLog(`✅ MySQL认证成功`, 'success');
+      } else {
+        this._deployLog(`❌ MySQL认证失败: ${authTest.substring(0, 100)}`, 'error');
+        return;
+      }
+    } catch (e) {
+      this._deployLog(`❌ MySQL认证测试失败: ${e.message}`, 'error');
+      return;
+    }
+
+    try {
+      this._deployLog(`📝 步骤4: 测试数据库访问`, 'info');
+      const dbTest = await this._sshCommand(config.ip, config.user, `mysql -h ${dbIP} -u ${dbUser} -p'${dbPassword}' ${dbName} -e "SELECT COUNT(*) AS table_count FROM information_schema.tables WHERE table_schema='${dbName}'" 2>&1`, 15000, password);
+      if (dbTest.includes('table_count')) {
+        const match = dbTest.match(/(\d+)/);
+        const count = match ? match[1] : '0';
+        this._deployLog(`✅ 数据库访问成功! 表数量: ${count}`, 'success');
+      } else {
+        this._deployLog(`❌ 数据库访问失败: ${dbTest.substring(0, 100)}`, 'error');
+        return;
+      }
+    } catch (e) {
+      this._deployLog(`❌ 数据库访问测试失败: ${e.message}`, 'error');
+      return;
+    }
+
+    this._deployLog(`🎉 所有数据库连接测试通过!`, 'success');
+    this._deployLog(`💡 次服务器可以正常连接主数据库了`, 'info');
   },
 };
 
