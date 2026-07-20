@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>开发者后台 · DevConsole</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css?v=6.1">
+  <link rel="stylesheet" href="css/dev.css?v=1">
+</head>
+<body class="dev-body">
+  <!-- ==================== SIDEBAR ==================== -->
+  <aside class="sidebar dev-sidebar" id="dev-sidebar" style="display:none;">
+    <div class="sidebar-brand dev-brand">
+      <span class="dev-brand-icon">⚡</span>
+      <div class="dev-brand-text">
+        <div class="dev-brand-title">DEVCONSOLE</div>
+        <div class="dev-brand-sub" id="dev-version-tag">v--</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">
+        <div class="nav-section-title">监控</div>
+        <button class="nav-item active" data-tab="overview">
+          <span class="nav-icon">📊</span> 系统概览
+        </button>
+        <button class="nav-item" data-tab="database">
+          <span class="nav-icon">🗄️</span> 数据库
+        </button>
+        <button class="nav-item" data-tab="redis">
+          <span class="nav-icon">⚡</span> Redis
+        </button>
+        <button class="nav-item" data-tab="sessions">
+          <span class="nav-icon">👥</span> 在线会话
+        </button>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">优化</div>
+        <button class="nav-item" data-tab="cache">
+          <span class="nav-icon">🧹</span> 缓存管理
+        </button>
+        <button class="nav-item" data-tab="logs">
+          <span class="nav-icon">📄</span> 日志查看
+        </button>
+        <button class="nav-item" data-tab="tables">
+          <span class="nav-icon">📐</span> 表结构
+        </button>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">更新</div>
+        <button class="nav-item" data-tab="version">
+          <span class="nav-icon">🏷️</span> 版本管理
+        </button>
+        <button class="nav-item" data-tab="actions">
+          <span class="nav-icon">🚀</span> 快速操作
+        </button>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">返回</div>
+        <button class="nav-item" onclick="window.location.href='index.html'">
+          <span class="nav-icon">←</span> 运维系统
+        </button>
+        <button class="nav-item" onclick="window.location.href='operations.html'">
+          <span class="nav-icon">←</span> 运营系统
+        </button>
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <button id="theme-toggle" title="切换主题">🌓 主题</button>
+      <button id="auto-refresh-toggle" class="dev-auto-refresh" title="自动刷新">⏱ 自动刷新: 开</button>
+    </div>
+  </aside>
+
+  <!-- ==================== MAIN ==================== -->
+  <div class="main-area">
+    <header class="topbar dev-topbar">
+      <div class="topbar-left">
+        <button id="hamburger-btn" class="hamburger-btn" onclick="document.body.classList.toggle('sidebar-open')">☰</button>
+        <span class="topbar-title dev-topbar-title">
+          <span class="dev-pulse" id="dev-pulse"></span>
+          <span>开发者后台</span>
+          <span class="dev-subtitle" id="dev-section-name">系统概览</span>
+        </span>
+      </div>
+      <div class="topbar-right">
+        <span id="health-dot" class="health-dot" title="服务器连接状态"></span>
+        <button id="refresh-btn" class="btn btn-sm btn-outline" onclick="DevApp.refresh()" title="刷新数据">⟳ 刷新</button>
+        <span id="dev-uptime" class="dev-uptime" title="服务器运行时长">⏱ --</span>
+        <span id="topbar-user" class="dev-user-chip"></span>
+        <button class="btn btn-sm btn-outline" onclick="DevApp.logout()">退出</button>
+      </div>
+    </header>
+    <div id="main-content" class="dev-content">
+      <!-- Dynamic content rendered by dev.js -->
+    </div>
+  </div>
+
+  <!-- ==================== MODAL ==================== -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal Title</h3>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer" id="modal-footer">
+        <button class="btn btn-outline" id="modal-close-btn">取消</button>
+        <button class="btn btn-primary" id="modal-save">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== NOTIFICATIONS ==================== -->
+  <div id="notification-container"></div>
+
+  <!-- ==================== SCRIPTS ==================== -->
+  <script src="js/config.js?v=4"></script>
+  <script src="js/api.js?v=37"></script>
+  <script src="js/dev.js?v=1"></script>
+</body>
+</html>

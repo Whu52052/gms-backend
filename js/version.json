@@ -1,8 +1,9 @@
 {
-  "app": 17,
-  "operations": 10,
-  "api": 8,
+  "app": 18,
+  "operations": 11,
+  "api": 9,
   "ws-client": 1,
   "storage": 8,
-  "config": 4
+  "config": 4,
+  "dev": 1
 }

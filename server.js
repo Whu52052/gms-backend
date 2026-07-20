@@ -2589,6 +2589,21 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/upload' && req.method === 'POST') return handleUpload(req, res, body);
     if (url.pathname === '/api/delete-upload' && req.method === 'POST') return handleDeleteUpload(req, res, body);
 
+    // ==================== Developer Console (superadmin only) ====================
+    if (url.pathname === '/api/dev/overview' && req.method === 'GET') return handleDevOverview(req, res, authUser);
+    if (url.pathname === '/api/dev/db-stats' && req.method === 'GET') return handleDevDbStats(req, res, authUser);
+    if (url.pathname === '/api/dev/redis-stats' && req.method === 'GET') return handleDevRedisStats(req, res, authUser);
+    if (url.pathname === '/api/dev/cache' && req.method === 'GET') return handleDevCacheStats(req, res, authUser);
+    if (url.pathname === '/api/dev/cache/clear' && req.method === 'POST') return handleDevCacheClear(req, res, authUser, body);
+    if (url.pathname === '/api/dev/logs' && req.method === 'GET') return handleDevLogs(req, res, authUser, url);
+    if (url.pathname === '/api/dev/version' && req.method === 'GET') return handleDevVersion(req, res, authUser);
+    if (url.pathname === '/api/dev/version' && req.method === 'POST') return handleDevVersionBump(req, res, authUser, body);
+    if (url.pathname === '/api/dev/online-sessions' && req.method === 'GET') return handleDevOnlineSessions(req, res, authUser);
+    if (url.pathname === '/api/dev/static-cache' && req.method === 'GET') return handleDevStaticCache(req, res, authUser);
+    if (url.pathname === '/api/dev/static-cache/clear' && req.method === 'POST') return handleDevStaticCacheClear(req, res, authUser);
+    if (url.pathname === '/api/dev/restart' && req.method === 'POST') return handleDevRestart(req, res, authUser, body);
+    if (url.pathname === '/api/dev/tables' && req.method === 'GET') return handleDevTables(req, res, authUser);
+
     sendJSON(res, { error: 'Not found' }, 404);
   } catch (e) {
     console.error('[REQUEST ERROR]', req.url, e.message);
@@ -2702,6 +2717,585 @@ function getStaticFile(filePath, contentType, cacheKey) {
     staticCache.set(cacheKey, entry);
     return entry;
   } catch { return null; }
+}
+
+// ==================== DEVELOPER CONSOLE HANDLERS ====================
+// All endpoints require superadmin role
+
+function _requireSuperAdmin(res, user) {
+  if (!user || user.role !== 'superadmin') {
+    sendJSON(res, { error: '仅超级管理员可访问开发者后台' }, 403);
+    return false;
+  }
+  return true;
+}
+
+function _formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 2) + ' ' + units[i];
+}
+
+function _formatDuration(seconds) {
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+// /api/dev/overview — System overview: process, memory, CPU, cluster, sessions
+async function handleDevOverview(req, res, user) {
+  if (!_requireSuperAdmin(res, user)) return;
+  const mem = process.memoryUsage();
+  const cpuUsage = process.cpuUsage();
+  const cpus = os.cpus();
+  const nets = os.networkInterfaces();
+  const sessions = await _collectOnlineSessions();
+  // Recent crash log summary
+  let crashCount = 0, lastCrash = null;
+  try {
+    const crashLog = path.join(DATA_DIR, 'crash.log');
+    if (fs.existsSync(crashLog)) {
+      const content = fs.readFileSync(crashLog, 'utf-8');
+      crashCount = (content.match(/^\d{4}-\d{2}-\d{2}/gm) || []).length;
+      const m = content.match(/^\d{4}-\d{2}-\d{2}T[^ ]+/m);
+      if (m) lastCrash = m[0];
+    }
+  } catch {}
+  // Static cache size
+  let staticCacheSize = 0;
+  staticCache.forEach(v => { staticCacheSize += (v.data?.length || 0) + (v.gzipped?.length || 0); });
+  const overview = {
+    timestamp: new Date().toISOString(),
+    process: {
+      pid: process.pid,
+      ppid: process.ppid,
+      pm_id: process.env.pm_id || null,
+      nodeVersion: process.version,
+      platform: `${process.platform}/${process.arch}`,
+      uptime: process.uptime(),
+      uptimeHuman: _formatDuration(process.uptime()),
+      cwd: process.cwd(),
+    },
+    memory: {
+      rss: mem.rss,
+      rssHuman: _formatBytes(mem.rss),
+      heapTotal: mem.heapTotal,
+      heapTotalHuman: _formatBytes(mem.heapTotal),
+      heapUsed: mem.heapUsed,
+      heapUsedHuman: _formatBytes(mem.heapUsed),
+      external: mem.external,
+      externalHuman: _formatBytes(mem.external),
+      arrayBuffers: mem.arrayBuffers,
+      heapUtilization: mem.heapTotal ? (mem.heapUsed / mem.heapTotal * 100).toFixed(1) : '0',
+    },
+    cpu: {
+      user: cpuUsage.user,
+      system: cpuUsage.system,
+      cores: cpus.length,
+      model: cpus[0]?.model || 'unknown',
+      speed: cpus[0]?.speed || 0,
+      loadAvg1: os.loadavg()[0],
+      loadAvg5: os.loadavg()[1],
+      loadAvg15: os.loadavg()[2],
+    },
+    os: {
+      hostname: os.hostname(),
+      type: os.type(),
+      release: os.release(),
+      totalMem: os.totalmem(),
+      totalMemHuman: _formatBytes(os.totalmem()),
+      freeMem: os.freemem(),
+      freeMemHuman: _formatBytes(os.freemem()),
+      uptime: os.uptime(),
+      uptimeHuman: _formatDuration(os.uptime()),
+    },
+    network: Object.entries(nets)
+      .filter(([, addrs]) => addrs && addrs.length)
+      .map(([name, addrs]) => ({
+        iface: name,
+        ipv4: addrs.find(a => a.family === 'IPv4' && !a.internal)?.address || null,
+      }))
+      .filter(n => n.ipv4),
+    environment: {
+      PORT,
+      DB_HOST: DB_HOST.split('.')[0] + '.*',
+      DB_NAME,
+      REDIS_AVAILABLE: !!(redisClient && redisClient.isReady),
+      REDIS_URL: REDIS_URL.replace(/\/\/[^@]+@/, '//***@'),
+      NODE_ENV: process.env.NODE_ENV || 'production',
+      LOG_LEVEL: process.env.LOG_LEVEL || 'INFO',
+    },
+    sessions: {
+      total: sessions.length,
+      bySystem: sessions.reduce((acc, s) => { acc[s.system] = (acc[s.system] || 0) + 1; return acc; }, {}),
+      byRole: sessions.reduce((acc, s) => { acc[s.role] = (acc[s.role] || 0) + 1; return acc; }, {}),
+    },
+    staticCache: {
+      entries: staticCache.size,
+      sizeBytes: staticCacheSize,
+      sizeHuman: _formatBytes(staticCacheSize),
+    },
+    crashLog: { count: crashCount, lastCrash },
+    version: '4.0.0',
+  };
+  return sendJSON(res, overview);
+}
+
+// Helper: collect all online sessions from Redis (preferred) or memory
+async function _collectOnlineSessions() {
+  const sessions = [];
+  if (redisClient && redisClient.isReady) {
+    try {
+      let cursor = 0;
+      do {
+        const r = await redisClient.scan(cursor, { MATCH: 'tk:*', COUNT: 200 });
+        cursor = r.cursor;
+        for (const key of r.keys) {
+          try {
+            const raw = await redisClient.get(key);
+            if (!raw) continue;
+            const t = JSON.parse(raw);
+            if (t.expires > Date.now()) {
+              sessions.push({
+                userId: t.userId,
+                username: t.username,
+                role: t.role,
+                system: t.system,
+                loginAt: t.loginAt,
+                expires: t.expires,
+                ip: t.ip || null,
+                remaining: Math.max(0, Math.floor((t.expires - Date.now()) / 1000)),
+              });
+            }
+          } catch {}
+        }
+      } while (cursor !== 0 && sessions.length < 1000);
+    } catch {}
+  }
+  if (sessions.length === 0) {
+    Object.entries(tokens).forEach(([token, t]) => {
+      if (t.expires > Date.now()) {
+        sessions.push({
+          userId: t.userId,
+          username: t.username,
+          role: t.role,
+          system: t.system,
+          loginAt: t.loginAt,
+          expires: t.expires,
+          ip: t.ip || null,
+          remaining: Math.max(0, Math.floor((t.expires - Date.now()) / 1000)),
+        });
+      }
+    });
+  }
+  return sessions;
+}
+
+// /api/dev/db-stats — Database pool & table stats
+async function handleDevDbStats(req, res, user) {
+  if (!_requireSuperAdmin(res, user)) return;
+  if (!pool) return sendJSON(res, { error: '数据库未初始化' }, 503);
+  // Pool stats (mysql2)
+  const poolStats = {
+    totalConnections: pool.totalConnections || 0,
+    idleConnections: pool.idleConnections || 0,
+    activeConnections: pool.activeConnections || 0,
+    queuedRequests: pool.queuedRequests || 0,
+    connectionLimit: pool.connectionLimit || 0,
+  };
+  // List all tables with row counts and sizes
+  const tables = [];
+  try {
+    const [rows] = await pool.query(`
+      SELECT
+        t.TABLE_NAME as name,
+        t.ENGINE as engine,
+        t.TABLE_ROWS as rows,
+        t.DATA_LENGTH as dataBytes,
+        t.INDEX_LENGTH as indexBytes,
+        t.DATA_FREE as freeBytes,
+        t.AUTO_INCREMENT as autoIncrement,
+        t.TABLE_COLLATION as collation,
+        t.CREATE_TIME as createdAt,
+        t.UPDATE_TIME as updatedAt
+      FROM information_schema.TABLES t
+      WHERE t.TABLE_SCHEMA = ?
+      ORDER BY t.DATA_LENGTH DESC
+    `, [DB_NAME]);
+    rows.forEach(r => {
+      tables.push({
+        name: r.name,
+        engine: r.engine,
+        rows: r.rows || 0,
+        dataBytes: Number(r.dataBytes) || 0,
+        dataHuman: _formatBytes(Number(r.dataBytes) || 0),
+        indexBytes: Number(r.indexBytes) || 0,
+        indexHuman: _formatBytes(Number(r.indexBytes) || 0),
+        freeBytes: Number(r.freeBytes) || 0,
+        freeHuman: _formatBytes(Number(r.freeBytes) || 0),
+        autoIncrement: r.autoIncrement || null,
+        collation: r.collation,
+        createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
+      });
+    });
+  } catch (e) {
+    return sendJSON(res, { error: '查询表信息失败: ' + e.message }, 500);
+  }
+  // DB-level size
+  let dbSize = 0;
+  tables.forEach(t => dbSize += t.dataBytes + t.indexBytes);
+  return sendJSON(res, {
+    database: DB_NAME,
+    host: DB_HOST.split('.')[0] + '.*',
+    pool: poolStats,
+    totalSizeBytes: dbSize,
+    totalSizeHuman: _formatBytes(dbSize),
+    tables,
+  });
+}
+
+// /api/dev/redis-stats — Redis INFO stats
+async function handleDevRedisStats(req, res, user) {
+  if (!_requireSuperAdmin(res, user)) return;
+  if (!redisClient || !redisClient.isReady) {
+    return sendJSON(res, { available: false, message: 'Redis 未连接或未配置' });
+  }
+  try {
+    const info = await redisClient.info();
+    // Parse Redis INFO text format
+    const sections = {};
+    let currentSection = 'default';
+    info.split('\r\n').forEach(line => {
+      if (!line) return;
+      if (line.startsWith('#')) {
+        currentSection = line.replace(/^#\s*/, '');
+        sections[currentSection] = {};
+        return;
+      }
+      const idx = line.indexOf(':');
+      if (idx < 0) return;
+      const k = line.slice(0, idx);
+      const v = line.slice(idx + 1);
+      if (!sections[currentSection]) sections[currentSection] = {};
+      sections[currentSection][k] = v;
+    });
+    // Count keys by prefix
+    const keyStats = { tokens: 0, cache: 0, other: 0, total: 0 };
+    try {
+      let cursor = 0;
+      do {
+        const r = await redisClient.scan(cursor, { MATCH: '*', COUNT: 500 });
+        cursor = r.cursor;
+        r.keys.forEach(k => {
+          keyStats.total++;
+          if (k.startsWith('tk:')) keyStats.tokens++;
+          else if (k.startsWith('cache:')) keyStats.cache++;
+          else keyStats.other++;
+        });
+      } while (cursor !== 0 && keyStats.total < 5000);
+    } catch {}
+    const server = sections['Server'] || {};
+    const clients = sections['Clients'] || {};
+    const memory = sections['Memory'] || {};
+    const stats = sections['Stats'] || {};
+    const keyspace = sections['Keyspace'] || {};
+    return sendJSON(res, {
+      available: true,
+      server: {
+        version: server.redis_version,
+        mode: server.redis_mode,
+        os: server.os,
+        uptime: server.uptime_in_seconds ? parseInt(server.uptime_in_seconds) : 0,
+        uptimeHuman: server.uptime_in_seconds ? _formatDuration(parseInt(server.uptime_in_seconds)) : '0s',
+      },
+      clients: {
+        connected: parseInt(clients.connected_clients || 0),
+        blocked: parseInt(clients.blocked_clients || 0),
+      },
+      memory: {
+        used: parseInt(memory.used_memory || 0),
+        usedHuman: memory.used_memory_human || '0B',
+        peak: parseInt(memory.used_memory_peak || 0),
+        peakHuman: memory.used_memory_peak_human || '0B',
+        max: parseInt(memory.maxmemory || 0),
+        maxHuman: memory.maxmemory_human || '0B',
+        fragmentationRatio: parseFloat(memory.mem_fragmentation_ratio || 0),
+        allocator: memory.mem_allocator,
+      },
+      stats: {
+        totalConnections: parseInt(stats.total_connections_received || 0),
+        totalCommands: parseInt(stats.total_commands_processed || 0),
+        opsPerSec: parseInt(stats.instantaneous_ops_per_sec || 0),
+        keyspaceHits: parseInt(stats.keyspace_hits || 0),
+        keyspaceMisses: parseInt(stats.keyspace_misses || 0),
+        hitRate: stats.keyspace_hits ?
+          (parseInt(stats.keyspace_hits) / (parseInt(stats.keyspace_hits) + parseInt(stats.keyspace_misses || 0)) * 100).toFixed(2) + '%' : 'N/A',
+        rejectedConnections: parseInt(stats.rejected_connections || 0),
+        expiredKeys: parseInt(stats.expired_keys || 0),
+        evictedKeys: parseInt(stats.evicted_keys || 0),
+      },
+      keyspace: Object.entries(keyspace).map(([db, info]) => ({ db, raw: info })),
+      keyStats,
+    });
+  } catch (e) {
+    return sendJSON(res, { available: false, error: e.message });
+  }
+}
+
+// /api/dev/cache — In-memory cache stats
+async function handleDevCacheStats(req, res, user) {
+  if (!_requireSuperAdmin(res, user)) return;
+  let totalSize = 0;
+  staticCache.forEach(v => { totalSize += (v.data?.length || 0) + (v.gzipped?.length || 0); });
+  const entries = Array.from(staticCache.entries()).map(([key, v]) => ({
+    key,
+    sizeBytes: (v.data?.length || 0) + (v.gzipped?.length || 0),
+    sizeHuman: _formatBytes((v.data?.length || 0) + (v.gzipped?.length || 0)),
+    contentType: v.contentType,
+    ageMs: Date.now() - v.ts,
+    fileMtime: v.fileMtime,
+  })).sort((a, b) => b.sizeBytes - a.sizeBytes);
+  // Memory tokens count
+  const memoryTokens = Object.keys(tokens).length;
+  return sendJSON(res, {
+    staticCache: {
+      entries: staticCache.size,
+      totalSizeBytes: totalSize,
+      totalSizeHuman: _formatBytes(totalSize),
+      entries_list: entries.slice(0, 100),
+    },
+    memoryTokens,
+    redisAvailable: !!(redisClient && redisClient.isReady),
+  });
+}
+
+// /api/dev/cache/clear — Clear static cache
+async function handleDevCacheClear(req, res, user, body) {
+  if (!_requireSuperAdmin(res, user)) return;
+  const { target } = body || {};
+  let cleared = { static: 0, redis: 0 };
+  if (!target || target === 'static' || target === 'all') {
+    cleared.static = staticCache.size;
+    staticCache.clear();
+  }
+  if (redisClient && redisClient.isReady && (!target || target === 'redis' || target === 'all')) {
+    try {
+      // Only clear cache: prefix, NOT tokens (tk:)
+      let cursor = 0;
+      do {
+        const r = await redisClient.scan(cursor, { MATCH: 'cache:*', COUNT: 200 });
+        cursor = r.cursor;
+        if (r.keys.length) {
+          await redisClient.unlink(r.keys);
+          cleared.redis += r.keys.length;
+        }
+      } while (cursor !== 0 && cleared.redis < 10000);
+    } catch (e) {
+      return sendJSON(res, { error: '清理 Redis 缓存失败: ' + e.message }, 500);
+    }
+  }
+  try { fs.appendFileSync(path.join(DATA_DIR, 'audit-dev.log'),
+    `${new Date().toISOString()} CACHE_CLEAR by ${user.username} target=${target || 'all'} cleared=${JSON.stringify(cleared)}\n`); } catch {}
+  return sendJSON(res, { ok: true, cleared });
+}
+
+// /api/dev/logs — Read recent logs
+async function handleDevLogs(req, res, user, url) {
+  if (!_requireSuperAdmin(res, user)) return;
+  const type = url.searchParams.get('type') || 'app'; // app|audit|crash|dev
+  const lines = parseInt(url.searchParams.get('lines') || '200');
+  const maxLines = Math.min(Math.max(lines, 10), 2000);
+  const LOG_DIR = path.join(__dirname, 'logs');
+  // Pick the most recent log file matching the type
+  let files = [];
+  try {
+    files = fs.readdirSync(LOG_DIR)
+      .filter(f => f.startsWith(`yunwei-${type}-`))
+      .sort()
+      .reverse();
+  } catch {}
+  // Fallback to data dir for crash/dev logs
+  if (files.length === 0 && (type === 'crash' || type === 'dev')) {
+    const dataLog = path.join(DATA_DIR, type === 'crash' ? 'crash.log' : 'audit-dev.log');
+    try {
+      if (fs.existsSync(dataLog)) {
+        const content = fs.readFileSync(dataLog, 'utf-8');
+        const allLines = content.split('\n').filter(Boolean);
+        return sendJSON(res, {
+          type, source: dataLog, lines: allLines.slice(-maxLines),
+          totalLines: allLines.length,
+        });
+      }
+    } catch {}
+    return sendJSON(res, { type, source: null, lines: [], totalLines: 0 });
+  }
+  if (files.length === 0) {
+    return sendJSON(res, { type, source: null, lines: [], totalLines: 0, message: '没有日志文件' });
+  }
+  const source = path.join(LOG_DIR, files[0]);
+  try {
+    const content = fs.readFileSync(source, 'utf-8');
+    const allLines = content.split('\n').filter(Boolean);
+    return sendJSON(res, {
+      type, source, sourceFile: files[0],
+      lines: allLines.slice(-maxLines),
+      totalLines: allLines.length,
+      availableFiles: files.slice(0, 10),
+    });
+  } catch (e) {
+    return sendJSON(res, { type, source, lines: [], error: e.message });
+  }
+}
+
+// /api/dev/version — Get version info
+async function handleDevVersion(req, res, user) {
+  if (!_requireSuperAdmin(res, user)) return;
+  let v = {};
+  try { v = JSON.parse(fs.readFileSync(path.join(__dirname, 'js', 'version.json'), 'utf-8')); } catch {}
+  // Read package.json version
+  let pkgVersion = 'unknown';
+  try { pkgVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf-8')).version; } catch {}
+  // Recent git info if available
+  let git = null;
+  try {
+    const { execSync } = require('child_process');
+    git = {
+      branch: execSync('git rev-parse --abbrev-ref HEAD 2>/dev/null', { encoding: 'utf-8' }).trim(),
+      commit: execSync('git rev-parse --short HEAD 2>/dev/null', { encoding: 'utf-8' }).trim(),
+      lastCommit: execSync('git log -1 --format=%cd 2>/dev/null', { encoding: 'utf-8' }).trim(),
+      status: execSync('git status --porcelain 2>/dev/null', { encoding: 'utf-8' }).trim().split('\n').filter(Boolean).length,
+    };
+  } catch {}
+  return sendJSON(res, {
+    packageVersion: pkgVersion,
+    versionJson: v,
+    serverVersion: '4.0.0',
+    nodeVersion: process.version,
+    startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    git,
+  });
+}
+
+// /api/dev/version — Bump version
+async function handleDevVersionBump(req, res, user, body) {
+  if (!_requireSuperAdmin(res, user)) return;
+  const { component, increment = 1 } = body || {};
+  if (!component) return sendJSON(res, { error: '缺少 component 参数' }, 400);
+  const versionPath = path.join(__dirname, 'js', 'version.json');
+  let v = {};
+  try { v = JSON.parse(fs.readFileSync(versionPath, 'utf-8')); } catch {}
+  if (typeof v[component] !== 'number') return sendJSON(res, { error: `组件 ${component} 不存在` }, 400);
+  const oldVal = v[component];
+  v[component] = oldVal + parseInt(increment);
+  try {
+    fs.writeFileSync(versionPath, JSON.stringify(v, null, 2) + '\n');
+    // Invalidate cache for the version file
+    staticCache.delete(path.join(__dirname, 'js', 'version.json'));
+  } catch (e) {
+    return sendJSON(res, { error: '写入 version.json 失败: ' + e.message }, 500);
+  }
+  try { fs.appendFileSync(path.join(DATA_DIR, 'audit-dev.log'),
+    `${new Date().toISOString()} VERSION_BUMP by ${user.username} ${component}: ${oldVal} -> ${v[component]}\n`); } catch {}
+  return sendJSON(res, { ok: true, component, from: oldVal, to: v[component], versionJson: v });
+}
+
+// /api/dev/online-sessions — List all online sessions
+async function handleDevOnlineSessions(req, res, user) {
+  if (!_requireSuperAdmin(res, user)) return;
+  const sessions = await _collectOnlineSessions();
+  return sendJSON(res, {
+    total: sessions.length,
+    sessions: sessions.sort((a, b) => (b.loginAt || 0) - (a.loginAt || 0)),
+  });
+}
+
+// /api/dev/static-cache — Alias of cache stats (kept for clarity in UI)
+async function handleDevStaticCache(req, res, user) {
+  if (!_requireSuperAdmin(res, user)) return;
+  let totalSize = 0;
+  const entries = [];
+  staticCache.forEach((v, key) => {
+    const size = (v.data?.length || 0) + (v.gzipped?.length || 0);
+    totalSize += size;
+    entries.push({
+      key,
+      sizeBytes: size,
+      sizeHuman: _formatBytes(size),
+      contentType: v.contentType,
+      ageMs: Date.now() - v.ts,
+    });
+  });
+  return sendJSON(res, {
+    entries: staticCache.size,
+    totalSizeBytes: totalSize,
+    totalSizeHuman: _formatBytes(totalSize),
+    items: entries.sort((a, b) => b.sizeBytes - a.sizeBytes),
+  });
+}
+
+// /api/dev/static-cache/clear — Clear static cache
+async function handleDevStaticCacheClear(req, res, user) {
+  if (!_requireSuperAdmin(res, user)) return;
+  const count = staticCache.size;
+  staticCache.clear();
+  try { fs.appendFileSync(path.join(DATA_DIR, 'audit-dev.log'),
+    `${new Date().toISOString()} STATIC_CACHE_CLEAR by ${user.username} cleared=${count}\n`); } catch {}
+  return sendJSON(res, { ok: true, cleared: count });
+}
+
+// /api/dev/tables — Show table schema
+async function handleDevTables(req, res, user) {
+  if (!_requireSuperAdmin(res, user)) return;
+  if (!pool) return sendJSON(res, { error: '数据库未初始化' }, 503);
+  const schemas = {};
+  const tableNames = [
+    'inventory', 'machines', 'transactions', 'audit_log', 'settings', 'users',
+    'equipment_config', 'inventory_config', 'ops_orders', 'ops_customers', 'ops_production',
+    'sn_registry', 'tech_support', 'group_transfers', 'popup_messages'
+  ];
+  for (const t of tableNames) {
+    try {
+      const [cols] = await pool.query(`
+        SELECT COLUMN_NAME as name, COLUMN_TYPE as type, IS_NULLABLE as nullable,
+               COLUMN_KEY as keyType, COLUMN_DEFAULT as defaultVal, EXTRA as extra
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+        ORDER BY ORDINAL_POSITION
+      `, [DB_NAME, t]);
+      schemas[t] = cols;
+    } catch (e) {
+      schemas[t] = { error: e.message };
+    }
+  }
+  return sendJSON(res, { schemas });
+}
+
+// /api/dev/restart — Schedule graceful restart (cluster mode: pm2 reload; standalone: exit)
+async function handleDevRestart(req, res, user, body) {
+  if (!_requireSuperAdmin(res, user)) return;
+  const { delay = 1 } = body || {};
+  try { fs.appendFileSync(path.join(DATA_DIR, 'audit-dev.log'),
+    `${new Date().toISOString()} RESTART by ${user.username} delay=${delay}\n`); } catch {}
+  // Acknowledge first
+  sendJSON(res, { ok: true, message: '服务器将在 ' + delay + ' 秒后重启', pm_id: process.env.pm_id || null });
+  // Schedule restart
+  setTimeout(() => {
+    if (process.env.pm_id) {
+      // Under PM2 — exit; PM2 will auto-restart
+      console.log('[DEV] Restart requested via developer console, exiting for PM2 restart...');
+      gracefulShutdown('dev-restart');
+    } else {
+      console.log('[DEV] Restart requested via developer console, exiting...');
+      process.exit(0);
+    }
+  }, Math.max(1, parseInt(delay)) * 1000);
 }
 
 // Start the server (single process — SSE broadcasting requires shared memory)

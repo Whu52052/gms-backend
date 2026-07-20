@@ -877,6 +877,11 @@ const OpsApp = {
       // Show user management nav only for admin or superadmin
       navGroup.style.display = (user && (user.role === 'admin' || user.role === 'superadmin')) ? '' : 'none';
     }
+    // Dev console: superadmin only
+    const devGroup = document.getElementById('nav-group-dev-console');
+    if (devGroup) {
+      devGroup.style.display = (user && user.role === 'superadmin') ? '' : 'none';
+    }
   },
 
   async renderUserManagement() {

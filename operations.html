@@ -93,6 +93,19 @@
           </button>
         </div>
       </div>
+
+      <!-- 开发者后台 section (仅超级管理员可见) -->
+      <div class="nav-group" id="nav-group-dev-console" style="display:none;">
+        <button class="nav-group-title" onclick="OpsApp.toggleNavGroup('dev')">
+          <span>⚡ 开发者</span>
+          <span class="nav-group-arrow" id="arrow-dev">▼</span>
+        </button>
+        <div class="nav-group-items" id="group-dev">
+          <button class="nav-item" onclick="window.location.href='dev.html'">
+            <span class="nav-icon">⚡</span> 开发者后台
+          </button>
+        </div>
+      </div>
     </nav>
 
     <!-- Theme toggle -->

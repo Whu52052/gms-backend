@@ -262,6 +262,9 @@ const App = {
       const navEl = document.getElementById(id);
       if (navEl) navEl.style.display = isAdmin ? '' : 'none';
     });
+    // Dev console: superadmin only
+    const devNav = document.getElementById('nav-dev-console');
+    if (devNav) devNav.style.display = (API.online && user && user.role === 'superadmin') ? '' : 'none';
 
     if (API.online && user) {
       const roleLabel = user.role === 'superadmin' ? ' (超级管理员)' : user.role === 'admin' ? ' (管理员)' : '';
