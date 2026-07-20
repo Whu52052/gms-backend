@@ -2383,9 +2383,24 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.url === '/api/status' && req.method === 'GET') {
-      const onlineIds = new Set();
-      Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
-      const count = onlineIds.size;
+      let count = 0;
+      // Redis 优先: 扫描 tk:* 计数活跃 token（跨 worker 准确）
+      if (redisClient && redisClient.isReady) {
+        try {
+          let cursor = 0;
+          do {
+            const r = await redisClient.scan(cursor, { MATCH: 'tk:*', COUNT: 500 });
+            cursor = r.cursor;
+            count += r.keys.length;
+          } while (cursor !== 0);
+        } catch {}
+      }
+      // 纯内存兜底
+      if (count === 0) {
+        const onlineIds = new Set();
+        Object.values(tokens).forEach(t => { if (t.expires > Date.now()) onlineIds.add(t.userId); });
+        count = onlineIds.size;
+      }
       // Load level: idle(0) / smooth(1-99) / busy(100-199) / full(200+)
       let level = 'idle', label = '空闲';
       if (count >= 200) { level = 'full'; label = '爆满'; }
