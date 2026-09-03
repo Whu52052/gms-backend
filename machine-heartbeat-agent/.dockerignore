@@ -1,0 +1,26 @@
+# 文档文件
+*.md
+README.md
+DEPLOYMENT-GUIDE.md
+CAMERA-MONITORING.md
+GLOVE-MONITORING.md
+DEVICE-IP-CONFIG.md
+FINAL-SUMMARY.md
+PROJECT-SUMMARY.md
+QUICK-START.md
+
+# 部署脚本（已在宿主机执行）
+deploy.sh
+quick-deploy.sh
+batch-deploy.sh
+
+# 后端集成文件（不属于客户端镜像）
+backend-integration/
+
+# Git
+.git
+.gitignore
+
+# 本地环境变量
+.env
+.env.local
