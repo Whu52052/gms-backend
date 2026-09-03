@@ -172,7 +172,7 @@ module.exports = function createEdgeHandlers(deps) {
   //   - 机器已有未完成工单（人工或自动）→ 跳过，10 分钟后才重试；
   //   - 告警恢复（本次心跳不再出现）→ 清除标记（复发可再建）；
   //   - 不自动关单：维修完成必须人工确认。
-  async function _autoTicket(machineNumber, alerts, prevData) {
+  async function _autoTicket(machineNumber, alerts, prevData, heartbeatPayload) {
     const ticketed = (prevData && prevData.ticketedAlerts) || {};
     if (String(process.env.EDGE_AUTO_TICKET || 'on').toLowerCase() === 'off') {
       return ticketed;
@@ -182,6 +182,32 @@ module.exports = function createEdgeHandlers(deps) {
     const enabled = _ticketEnabledCodes();
     const now = Date.now();
     const activeKeys = new Set();
+
+    // 从心跳 payload 提取环境信息
+    const environmentInfo = heartbeatPayload ? {
+      hostname: heartbeatPayload.hostname || null,
+      ipAddress: heartbeatPayload.ipAddress || null,
+      agentVersion: heartbeatPayload.agentVersion || null,
+      lastHeartbeat: new Date().toISOString(),
+      cpuCount: (heartbeatPayload.host && heartbeatPayload.host.cpus) || null,
+      totalMemory: (heartbeatPayload.host && heartbeatPayload.host.totalMemory) || null,
+      freeMemory: (heartbeatPayload.host && heartbeatPayload.host.freeMemory) || null,
+      platform: (heartbeatPayload.host && heartbeatPayload.host.platform) || null,
+    } : null;
+
+    // 从心跳 payload 提取设备快照
+    const devices = (heartbeatPayload && heartbeatPayload.devices) || {};
+    const deviceSnapshot = {
+      leftGlove: !!(devices.gloves && devices.gloves.left && devices.gloves.left.connected),
+      leftGloveSN: (devices.gloves && devices.gloves.left && devices.gloves.left.snCode) || null,
+      rightGlove: !!(devices.gloves && devices.gloves.right && devices.gloves.right.connected),
+      rightGloveSN: (devices.gloves && devices.gloves.right && devices.gloves.right.snCode) || null,
+      leftDexterous: !!(devices.dexterousHands && devices.dexterousHands.left && devices.dexterousHands.left.connected),
+      rightDexterous: !!(devices.dexterousHands && devices.dexterousHands.right && devices.dexterousHands.right.connected),
+      roboticArm: !!(devices.roboticArm && devices.roboticArm.connected),
+      quest: !!(heartbeatPayload.quest && heartbeatPayload.quest.connected),
+      questBattery: (heartbeatPayload.quest && heartbeatPayload.quest.battery) || null,
+    };
 
     for (const a of alerts) {
       if (!a || !a.code || !enabled.has(a.code)) continue;
@@ -194,6 +220,48 @@ module.exports = function createEdgeHandlers(deps) {
       if (prev && prev.ticketId) continue; // 已建单，等人工处理
       if (prev && prev.skippedAt && now - new Date(prev.skippedAt).getTime() < TICKET_RETRY_MS) continue;
 
+      // 构建详细的诊断信息
+      const diagnostics = {};
+      if (a.snCode) diagnostics.observedSN = a.snCode;
+      if (a.hand) diagnostics.actualHand = a.hand;
+
+      // 根据告警类型添加特定诊断信息
+      if (a.code === 'hand_mismatch') {
+        // 左右手接反
+        diagnostics.expectedHand = a.hand === 'left' ? 'right' : 'left';
+        diagnostics.possibleCause = '手套网线接错端口，或标定文件中左右手标记错误';
+        diagnostics.suggestedAction = '检查192.168.1.100(左手)和192.168.1.101(右手)的网线连接是否正确';
+      } else if (a.code === 'sn_unusable') {
+        // 设备状态异常
+        diagnostics.deviceStatus = '不可用（damaged/transferred/shipped/repairing等）';
+        diagnostics.possibleCause = '设备在系统中标记为不可用状态';
+        diagnostics.suggestedAction = '检查设备实际状态，必要时在系统中更新设备状态';
+      } else if (a.code === 'sn_bound_elsewhere') {
+        // 设备串用
+        diagnostics.possibleCause = '设备可能从其他机器移动过来，但系统中未更新绑定关系';
+        diagnostics.suggestedAction = '确认设备实际位置，在系统中解绑原机器并重新绑定';
+      } else if (a.code === 'unregistered_sn') {
+        // 未登记
+        diagnostics.possibleCause = '新设备尚未入库登记，或SN码识别错误';
+        diagnostics.suggestedAction = '在"SN码管理"中登记该设备，或检查标定文件中的SN是否正确';
+      } else if (a.code === 'bound_but_disconnected') {
+        // 绑定但未连接
+        diagnostics.registeredSN = a.snCode;
+        diagnostics.possibleCause = '设备断电、网线松动、或设备故障';
+        diagnostics.suggestedAction = '检查设备电源和网线连接，尝试重启设备';
+      } else if (a.code === 'glove_no_sn') {
+        // 无法识别SN
+        diagnostics.possibleCause = '标定文件缺失、格式错误、或采集器容器未运行';
+        diagnostics.suggestedAction = '检查/var/.rdc2/wuji_calib/目录是否存在标定文件，或检查importer-staging容器状态';
+      }
+
+      // 告警上下文
+      const alertContext = {
+        firstDetected: new Date().toISOString(),
+        occurrenceCount: 1,
+        relatedAlerts: alerts.filter(x => x.code !== a.code).map(x => `${x.code}(${x.hand || '-'})`),
+      };
+
       try {
         const r = await _createSystemTicket({
           machineNumber,
@@ -203,6 +271,10 @@ module.exports = function createEdgeHandlers(deps) {
           faultDescription: a.message,
           priority: rule.priority,
           alertCode: a.code,
+          diagnostics,
+          deviceSnapshot,
+          environmentInfo,
+          alertContext,
         });
         const ts = new Date().toISOString();
         if (r && r.ok) {
@@ -264,7 +336,7 @@ module.exports = function createEdgeHandlers(deps) {
     // 故障类告警 → 自动创建技术支持工单（内部调用，失败不影响心跳）
     let ticketedAlerts = {};
     try {
-      ticketedAlerts = await _autoTicket(machineNumber, alerts, prevData);
+      ticketedAlerts = await _autoTicket(machineNumber, alerts, prevData, b);
     } catch (e) {
       console.error('[EDGE] 自动工单流程异常:', e.message);
     }

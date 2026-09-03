@@ -313,6 +313,8 @@ module.exports = function createTechSupportHandlers(deps) {
   // 与 handleSubmitTechSupport 区别：无 HTTP/authUser 上下文，提交人为系统
   // 运营账号；复用同一套去重（机器有未完成工单则跳过）、SLA、机器状态联动、
   // 飞书通知。仅允许服务端内部调用（edge 域 reconcile 后触发），agent 不直接接触。
+  //
+  // 增强版：自动建单比人工建单更详细，包含完整的诊断信息、环境快照、设备状态
   // ============================================================
   async function createSystemTicket(opts) {
     const {
@@ -324,6 +326,11 @@ module.exports = function createTechSupportHandlers(deps) {
       equipmentTypeName = '手套',
       alertCode = null,
       source = 'edge_agent',
+      // 新增：详细诊断信息
+      diagnostics = null,        // 诊断详情对象
+      deviceSnapshot = null,     // 设备快照
+      environmentInfo = null,    // 环境信息
+      alertContext = null,       // 告警上下文
     } = opts || {};
 
     if (!machineNumber || !faultType || !(faultDescription || '').trim()) {
@@ -360,6 +367,108 @@ module.exports = function createTechSupportHandlers(deps) {
       console.error('[EDGE-TICKET] 系统账号读取失败，使用默认提交人名:', e.message);
     }
 
+    // 构建详细的故障描述（比人工建单更详细）
+    let detailedDescription = `【系统自动检测·边缘代理】${faultDescription}`;
+
+    // 添加诊断详情
+    if (diagnostics) {
+      detailedDescription += '\n\n━━━━━━ 诊断详情 ━━━━━━';
+      if (diagnostics.observedSN) {
+        detailedDescription += `\n• 观测到的 SN: ${diagnostics.observedSN}`;
+      }
+      if (diagnostics.registeredSN) {
+        detailedDescription += `\n• 系统登记 SN: ${diagnostics.registeredSN}`;
+      }
+      if (diagnostics.expectedHand) {
+        detailedDescription += `\n• 应该接入: ${diagnostics.expectedHand === 'left' ? '左手' : '右手'}网口`;
+      }
+      if (diagnostics.actualHand) {
+        detailedDescription += `\n• 实际接入: ${diagnostics.actualHand === 'left' ? '左手' : '右手'}网口`;
+      }
+      if (diagnostics.deviceStatus) {
+        detailedDescription += `\n• 设备状态: ${diagnostics.deviceStatus}`;
+      }
+      if (diagnostics.boundMachine) {
+        detailedDescription += `\n• 绑定机器: ${diagnostics.boundMachine}`;
+      }
+    }
+
+    // 添加设备快照
+    if (deviceSnapshot) {
+      detailedDescription += '\n\n━━━━━━ 设备状态快照 ━━━━━━';
+      if (deviceSnapshot.leftGlove !== undefined) {
+        detailedDescription += `\n• 左手手套: ${deviceSnapshot.leftGlove ? '✅ 已连接' : '❌ 未连接'}`;
+        if (deviceSnapshot.leftGloveSN) {
+          detailedDescription += ` (SN: ${deviceSnapshot.leftGloveSN})`;
+        }
+      }
+      if (deviceSnapshot.rightGlove !== undefined) {
+        detailedDescription += `\n• 右手手套: ${deviceSnapshot.rightGlove ? '✅ 已连接' : '❌ 未连接'}`;
+        if (deviceSnapshot.rightGloveSN) {
+          detailedDescription += ` (SN: ${deviceSnapshot.rightGloveSN})`;
+        }
+      }
+      if (deviceSnapshot.leftDexterous !== undefined) {
+        detailedDescription += `\n• 左手灵巧手: ${deviceSnapshot.leftDexterous ? '✅ 已连接' : '❌ 未连接'}`;
+      }
+      if (deviceSnapshot.rightDexterous !== undefined) {
+        detailedDescription += `\n• 右手灵巧手: ${deviceSnapshot.rightDexterous ? '✅ 已连接' : '❌ 未连接'}`;
+      }
+      if (deviceSnapshot.roboticArm !== undefined) {
+        detailedDescription += `\n• 机械臂: ${deviceSnapshot.roboticArm ? '✅ 已连接' : '❌ 未连接'}`;
+      }
+      if (deviceSnapshot.quest !== undefined) {
+        detailedDescription += `\n• Quest 头显: ${deviceSnapshot.quest ? '✅ 已连接' : '❌ 未连接'}`;
+        if (deviceSnapshot.questBattery) {
+          detailedDescription += ` (电量: ${deviceSnapshot.questBattery}%)`;
+        }
+      }
+    }
+
+    // 添加环境信息
+    if (environmentInfo) {
+      detailedDescription += '\n\n━━━━━━ 环境信息 ━━━━━━';
+      if (environmentInfo.hostname) {
+        detailedDescription += `\n• 主机名: ${environmentInfo.hostname}`;
+      }
+      if (environmentInfo.ipAddress) {
+        detailedDescription += `\n• IP 地址: ${environmentInfo.ipAddress}`;
+      }
+      if (environmentInfo.agentVersion) {
+        detailedDescription += `\n• 代理版本: ${environmentInfo.agentVersion}`;
+      }
+      if (environmentInfo.lastHeartbeat) {
+        detailedDescription += `\n• 最后心跳: ${new Date(environmentInfo.lastHeartbeat).toLocaleString('zh-CN')}`;
+      }
+      if (environmentInfo.cpuCount) {
+        detailedDescription += `\n• CPU 核心数: ${environmentInfo.cpuCount}`;
+      }
+      if (environmentInfo.totalMemory) {
+        const memGB = (environmentInfo.totalMemory / 1024 / 1024 / 1024).toFixed(1);
+        detailedDescription += `\n• 总内存: ${memGB} GB`;
+      }
+    }
+
+    // 添加告警上下文
+    if (alertContext) {
+      detailedDescription += '\n\n━━━━━━ 告警上下文 ━━━━━━';
+      if (alertContext.firstDetected) {
+        detailedDescription += `\n• 首次检测: ${new Date(alertContext.firstDetected).toLocaleString('zh-CN')}`;
+      }
+      if (alertContext.occurrenceCount) {
+        detailedDescription += `\n• 发生次数: ${alertContext.occurrenceCount}`;
+      }
+      if (alertContext.relatedAlerts && alertContext.relatedAlerts.length > 0) {
+        detailedDescription += `\n• 相关告警: ${alertContext.relatedAlerts.join(', ')}`;
+      }
+      if (alertContext.possibleCause) {
+        detailedDescription += `\n• 可能原因: ${alertContext.possibleCause}`;
+      }
+      if (alertContext.suggestedAction) {
+        detailedDescription += `\n• 建议操作: ${alertContext.suggestedAction}`;
+      }
+    }
+
     const now = new Date().toISOString();
     const id = `ts-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     const p = ['P0', 'P1', 'P2', 'P3'].includes(priority) ? priority : 'P2';
@@ -373,7 +482,7 @@ module.exports = function createTechSupportHandlers(deps) {
       machineId: machineNumber,
       machineNumber,
       faultType,
-      faultDescription: `【系统自动检测·边缘代理】${faultDescription}`,
+      faultDescription: detailedDescription,
       status: 'pending',
       responderId: null,
       responderName: null,
@@ -393,6 +502,11 @@ module.exports = function createTechSupportHandlers(deps) {
       autoCreated: true,
       alertCode,
       source,
+      // 保存原始诊断数据供后续分析
+      diagnosticsData: diagnostics || {},
+      deviceSnapshotData: deviceSnapshot || {},
+      environmentData: environmentInfo || {},
+      alertContextData: alertContext || {},
     });
     await saveTechSupport(id, item);
     await _updateMachineStatusByNumber(machineNumber, 'waiting_repair');
