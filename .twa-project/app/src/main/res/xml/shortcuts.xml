@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="dashboard"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_dashboard"
+        android:shortcutShortLabel="@string/shortcut_dashboard_short"
+        android:shortcutLongLabel="@string/shortcut_dashboard">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.gms.twa"
+            android:targetClass="com.gms.twa.MainActivity"
+            android:data="http://10.5.51.216:8765/mobile.html" />
+    </shortcut>
+    
+    <shortcut
+        android:shortcutId="tech-support"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_support"
+        android:shortcutShortLabel="@string/shortcut_support_short"
+        android:shortcutLongLabel="@string/shortcut_support">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.gms.twa"
+            android:targetClass="com.gms.twa.MainActivity"
+            android:data="http://10.5.51.216:8765/mobile.html" />
+    </shortcut>
+    
+    <shortcut
+        android:shortcutId="profile"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_profile"
+        android:shortcutShortLabel="@string/shortcut_profile_short"
+        android:shortcutLongLabel="@string/shortcut_profile">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.gms.twa"
+            android:targetClass="com.gms.twa.MainActivity"
+            android:data="http://10.5.51.216:8765/mobile.html" />
+    </shortcut>
+</shortcuts>

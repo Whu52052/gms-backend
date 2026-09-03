@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GMS 手套管理系统</string>
+    <string name="gms_description">手套/灵巧手/夹爪库存与机器管理系统</string>
+</resources>

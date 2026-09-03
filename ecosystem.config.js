@@ -1,75 +1,52 @@
 // PM2 Ecosystem Configuration — 3-Instance Load Balanced
 // 使用方法: pm2 start ecosystem.config.js
-module.exports = {
-  apps: [
-    {
-      name: 'yunwei-1',
-      script: 'server.js',
-      instances: 1,
-      exec_mode: 'fork',
-      max_memory_restart: '2G',
-      kill_timeout: 10000,
-      env: {
-        NODE_ENV: 'production',
-        PORT: '8765',
-        TZ: 'Asia/Shanghai',
-        DB_HOST: '127.0.0.1',
-        DB_PORT: '3306',
-        DB_USER: 'root',
-        DB_PASSWORD: 'Wh111852',
-        DB_NAME: 'gms',
-        REDIS_HOST: '127.0.0.1',
-        REDIS_PORT: '6379',
-      },
-      error_file: '/tmp/yunwei-1-error.log',
-      out_file: '/tmp/yunwei-1-out.log',
-      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-    },
-    {
-      name: 'yunwei-2',
-      script: 'server.js',
-      instances: 1,
-      exec_mode: 'fork',
-      max_memory_restart: '2G',
-      kill_timeout: 10000,
-      env: {
-        NODE_ENV: 'production',
-        PORT: '8766',
-        TZ: 'Asia/Shanghai',
-        DB_HOST: '127.0.0.1',
-        DB_PORT: '3306',
-        DB_USER: 'root',
-        DB_PASSWORD: 'Wh111852',
-        DB_NAME: 'gms',
-        REDIS_HOST: '127.0.0.1',
-        REDIS_PORT: '6379',
-      },
-      error_file: '/tmp/yunwei-2-error.log',
-      out_file: '/tmp/yunwei-2-out.log',
-      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-    },
-    {
-      name: 'yunwei-3',
-      script: 'server.js',
-      instances: 1,
-      exec_mode: 'fork',
-      max_memory_restart: '2G',
-      kill_timeout: 10000,
-      env: {
-        NODE_ENV: 'production',
-        PORT: '8767',
-        TZ: 'Asia/Shanghai',
-        DB_HOST: '127.0.0.1',
-        DB_PORT: '3306',
-        DB_USER: 'root',
-        DB_PASSWORD: 'Wh111852',
-        DB_NAME: 'gms',
-        REDIS_HOST: '127.0.0.1',
-        REDIS_PORT: '6379',
-      },
-      error_file: '/tmp/yunwei-3-error.log',
-      out_file: '/tmp/yunwei-3-out.log',
-      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-    },
-  ],
+//
+// S1 安全加固: 密钥不再硬编码，从 .env / process.env 读取。
+//   - 历史泄露的密码 Wh111852 必须在部署前轮换
+//   - 缺失关键密钥时 PM2 启动会报错（fail fast），避免误用空值连库
+require('dotenv').config();
+
+// 三个实例共享的公共环境（仅 PORT 和日志文件按实例区分）
+const sharedEnv = {
+  NODE_ENV: 'production',
+  TZ: 'Asia/Shanghai',
+  DB_HOST: process.env.DB_HOST || '127.0.0.1',
+  DB_PORT: process.env.DB_PORT || '3306',
+  DB_USER: process.env.DB_USER || 'root',
+  DB_PASSWORD: process.env.DB_PASSWORD, // 必须由 .env 提供，不再硬编码
+  DB_NAME: process.env.DB_NAME || 'gms',
+  REDIS_HOST: process.env.REDIS_HOST || '127.0.0.1',
+  REDIS_PORT: process.env.REDIS_PORT || '6379',
+  // 加密密钥（encryptPassword 用，S6 批次会改用随机 IV）
+  ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
+  // HTTPS 标志（控制是否下发 HSTS）
+  HTTPS_ENABLED: process.env.HTTPS_ENABLED || 'false',
 };
+
+// 启动前校验关键密钥（fail fast，避免空密码误连库）
+if (!sharedEnv.DB_PASSWORD) {
+  console.error('[ecosystem] 致命错误: DB_PASSWORD 未设置。请在 .env 文件中配置（参考 .env.example）。');
+  // PM2 加载本文件时退出，阻止启动
+  process.exit(1);
+}
+
+// 按端口生成 3 个 fork 实例（端口 8765/8766/8767）
+const ports = [8765, 8766, 8767];
+const apps = ports.map(port => {
+  const idx = ports.indexOf(port) + 1;
+  return {
+    name: `yunwei-${idx}`,
+    script: 'server.js',
+    instances: 1,
+    exec_mode: 'fork',
+    node_args: '--expose-gc',
+    max_memory_restart: '2G',
+    kill_timeout: 10000,
+    env: { ...sharedEnv, PORT: String(port) },
+    error_file: `/tmp/yunwei-${idx}-error.log`,
+    out_file: `/tmp/yunwei-${idx}-out.log`,
+    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+  };
+});
+
+module.exports = { apps };

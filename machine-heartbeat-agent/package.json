@@ -1,0 +1,13 @@
+{
+  "name": "machine-heartbeat-agent",
+  "version": "1.0.0",
+  "description": "GMS机器心跳监控代理 - 部署在每台主机上，自动向运维系统报告在线状态",
+  "main": "heartbeat-agent.js",
+  "scripts": {
+    "start": "node heartbeat-agent.js"
+  },
+  "keywords": ["heartbeat", "monitoring", "gms"],
+  "author": "GMS Team",
+  "license": "MIT",
+  "dependencies": {}
+}

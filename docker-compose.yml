@@ -11,10 +11,10 @@ services:
     container_name: yunwei-mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-Wh111852}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD required (set in .env)}
       MYSQL_DATABASE: gms
       MYSQL_USER: Wuzhenyu
-      MYSQL_PASSWORD: ${DB_PASSWORD:-Wh111852}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required (set in .env)}
     volumes:
       - mysql_data:/var/lib/mysql
       - ./mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -52,7 +52,7 @@ services:
     container_name: yunwei-mysql-exporter
     restart: always
     environment:
-      DATA_SOURCE_NAME: "Wuzhenyu:${DB_PASSWORD:-Wh111852}@(mysql:3306)/gms"
+      DATA_SOURCE_NAME: "Wuzhenyu:${DB_PASSWORD:?DB_PASSWORD required (set in .env)}@(mysql:3306)/gms"
     depends_on:
       - mysql
     ports:
@@ -116,12 +116,12 @@ services:
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: Wuzhenyu
-      DB_PASSWORD: ${DB_PASSWORD:-Wh111852}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required (set in .env)}
       DB_NAME: gms
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      FEISHU_APP_ID: cli_aaa42355f0389cfc
-      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-v2vU8YCrU0GHJdUsIa8nN1edaEGdkPm8}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-cli_aaa42355f0389cfc}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:?FEISHU_APP_SECRET required (set in .env)}
       # SZX3 多维表格 + 运维通知群机器人
       FEISHU_APP_TOKEN: ${FEISHU_APP_TOKEN:-Lo7mb8Virax0k2smZticmh6JnAg}
       FEISHU_TABLE_ID: ${FEISHU_TABLE_ID:-tblJ65qGy7te8NC5}

@@ -1,0 +1,62 @@
+/* 全局基础样式（AntD 负责大部分组件样式，这里只处理布局骨架） */
+/* 字体与 status-pages.css（sn-status.html）保持一致 */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.35);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* AntD Sider 内部还有一层 children 容器，需撑满高度才能让侧边栏内部 flex 布局与独立滚动生效 */
+.ant-layout-sider-children {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 侧边栏独立细滚动条（对齐 status-pages 的细滚动条风格） */
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 128, 128, 0.45) transparent;
+}
+.sidebar-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.45);
+  border-radius: 4px;
+}
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 批次管理：临期/过期行浅色高亮 */
+.batch-row-expiring > td {
+  background: rgba(250, 173, 20, 0.08) !important;
+}
+.batch-row-expired > td {
+  background: rgba(255, 77, 79, 0.08) !important;
+}

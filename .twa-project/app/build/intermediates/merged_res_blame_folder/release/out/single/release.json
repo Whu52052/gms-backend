@@ -1,0 +1,46 @@
+[
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/xml_shortcuts.xml.flat",
+        "source": "com.gms.twa.app-main-37:/xml/shortcuts.xml"
+    },
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/xml_file_paths.xml.flat",
+        "source": "com.gms.twa.app-main-37:/xml/file_paths.xml"
+    },
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/drawable_ic_shortcut_dashboard.xml.flat",
+        "source": "com.gms.twa.app-main-37:/drawable/ic_shortcut_dashboard.xml"
+    },
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.gms.twa.app-main-37:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/mipmap-anydpi-v26_ic_launcher_round.xml.flat",
+        "source": "com.gms.twa.app-main-37:/mipmap-anydpi-v26/ic_launcher_round.xml"
+    },
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/drawable_ic_launcher_monochrome.xml.flat",
+        "source": "com.gms.twa.app-main-37:/drawable/ic_launcher_monochrome.xml"
+    },
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/drawable_ic_shortcut_profile.xml.flat",
+        "source": "com.gms.twa.app-main-37:/drawable/ic_shortcut_profile.xml"
+    },
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/drawable_splash_background.xml.flat",
+        "source": "com.gms.twa.app-main-37:/drawable/splash_background.xml"
+    },
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.gms.twa.app-main-37:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/drawable_ic_shortcut_support.xml.flat",
+        "source": "com.gms.twa.app-main-37:/drawable/ic_shortcut_support.xml"
+    },
+    {
+        "merged": "com.gms.twa.app-merged_res-36:/drawable_ic_launcher_background.xml.flat",
+        "source": "com.gms.twa.app-main-37:/drawable/ic_launcher_background.xml"
+    }
+]

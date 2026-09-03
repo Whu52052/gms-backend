@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>手套状态</title>
+  <link rel="stylesheet" href="css/status-pages.css?v=2">
+  <style>
+    .sn-code {
+      font-family: var(--mono);
+      font-size: 0.88rem;
+      font-weight: 500;
+      color: var(--text);
+      letter-spacing: 0.02em;
+      word-break: break-all;
+    }
+
+    /* Status */
+    .status-block { text-align: center; padding: 8px 0; }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 20px;
+      border-radius: 50px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; }
+    .status-available { background: #ecfdf5; color: #047857; }
+    .status-available .status-dot { background: #10b981; }
+    .status-in_use { background: #f0f0f0; color: #0a0a0a; }
+    .status-in_use .status-dot { background: #0a0a0a; }
+    .status-damaged { background: #fff1f2; color: #be123c; }
+    .status-damaged .status-dot { background: #f43f5e; }
+    .status-in_repair { background: #fff1f2; color: #be123c; }
+    .status-in_repair .status-dot { background: #f43f5e; }
+    .status-transferred { background: #f0f0f0; color: #525252; }
+    .status-transferred .status-dot { background: #737373; }
+    .status-shipped { background: #fff1f2; color: #be123c; }
+    .status-shipped .status-dot { background: #f43f5e; }
+    .status-repaired { background: #ecfdf5; color: #047857; }
+    .status-repaired .status-dot { background: #10b981; }
+    .status-replacement { background: #fff3cd; color: #856404; }
+    .status-replacement .status-dot { background: #eab308; }
+    .status-retired { background: #e2e3e5; color: #383d41; }
+    .status-retired .status-dot { background: #6b7280; }
+
+    /* History */
+    .history-list { max-height: 360px; overflow-y: auto; }
+    .history-list::-webkit-scrollbar { width: 3px; }
+    .history-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .history-item {
+      display: flex; gap: 14px; padding: 14px 0;
+      border-bottom: 1px solid var(--surface2);
+    }
+    .history-item:last-child { border-bottom: none; }
+    .history-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      margin-top: 7px; flex-shrink: 0;
+    }
+    .history-dot.damaged, .history-dot.in_repair, .history-dot.shipped { background: #f43f5e; }
+    .history-dot.transferred { background: #737373; }
+    .history-dot.in_use { background: #0a0a0a; }
+    .history-dot.available, .history-dot.repaired { background: #10b981; }
+    .history-dot.replacement { background: #eab308; }
+    .history-dot.retired { background: #6b7280; }
+    .history-content { flex: 1; min-width: 0; }
+    .history-title { font-size: 0.84rem; font-weight: 600; color: var(--text); }
+    .history-meta { font-size: 0.72rem; color: var(--text3); margin-top: 2px; font-family: var(--mono); }
+    .history-reason {
+      font-size: 0.76rem; color: var(--text2); margin-top: 6px;
+      padding: 8px 12px; background: var(--surface);
+      border-radius: var(--radius-sm);
+      border-left: 2px solid var(--border);
+    }
+
+    /* Machine picker */
+    .action-area { margin-top: 8px; }
+    .search-input {
+      width: 100%; padding: 11px 14px; margin-bottom: 12px;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      font-size: 0.85rem; font-family: var(--sans); background: var(--bg);
+      transition: border-color 0.15s;
+    }
+    .search-input:focus { outline: none; border-color: #0a0a0a; }
+    .machine-list { max-height: 50vh; overflow-y: auto; }
+    .machine-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px; border-radius: var(--radius-sm);
+      cursor: pointer; margin-bottom: 2px;
+      border: 1px solid transparent;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .machine-item:active { background: var(--surface); }
+    .machine-item.selected { background: var(--surface); border-color: #0a0a0a; }
+    .machine-item.disabled { opacity: 0.35; cursor: not-allowed; }
+    .machine-num { font-size: 0.88rem; font-weight: 600; color: var(--text); font-family: var(--mono); }
+    .machine-info { font-size: 0.7rem; color: var(--text3); margin-top: 2px; }
+    .machine-occ { display: flex; gap: 6px; margin-top: 4px; }
+    .occ-tag {
+      font-size: 0.65rem; padding: 1px 6px;
+      border-radius: 4px; background: var(--surface);
+      color: var(--text2); font-weight: 500; font-family: var(--mono);
+    }
+    .occ-tag.filled { background: #fff1f2; color: #be123c; }
+    .occ-tag.match { background: var(--surface2); color: var(--text); }
+    .picker-hint { font-size: 0.7rem; color: var(--text3); margin-bottom: 12px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <p class="header-label">glove status</p>
+    <h1 class="header-title">手套状态</h1>
+  </div>
+
+  <div class="container" id="main-content">
+    <div class="loading"><div class="spinner"></div></div>
+  </div>
+
+  <div id="auth-overlay" class="overlay" style="display:none;">
+    <div class="sheet">
+      <h2 class="sheet-title">用户验证</h2>
+      <p class="sheet-desc">首次使用请验证运维账号</p>
+      <div class="form-error" id="auth-error"></div>
+      <input type="text" class="input" id="auth-username" placeholder="用户名" autocomplete="off">
+      <input type="password" class="input" id="auth-password" placeholder="密码" autocomplete="off">
+      <button class="btn btn-primary" onclick="doAuth()">验证登录</button>
+    </div>
+  </div>
+
+  <div id="machine-overlay" class="overlay" style="display:none;">
+    <div class="sheet" style="max-width: 380px;">
+      <h2 class="sheet-title">选择机器编码</h2>
+      <p class="sheet-desc" id="picker-desc">为手套选择绑定的机器</p>
+      <input type="text" class="search-input" id="machine-search" placeholder="搜索机器编码" oninput="filterMachines()">
+      <div class="picker-hint" id="picker-hint"></div>
+      <div class="machine-list" id="machine-list"></div>
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button class="btn btn-outline" style="margin-bottom:0;" onclick="closeMachinePicker()">取消</button>
+        <button class="btn btn-primary" style="margin-bottom:0;" id="confirm-machine" disabled onclick="confirmUseMachine()">确认上线</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="js/status-pages-common.js?v=1"></script>
+  <script>
+    var escapeHtml = StatusPageUtils.escapeHtml;
+    var formatTime = StatusPageUtils.formatTime;
+    var showToast = StatusPageUtils.showToast;
+    const API_BASE = window.location.origin;
+    let currentUser = null;
+    let snData = null;
+    let machinesCache = null;
+    let selectedMachine = null;
+
+    // ---------- 本地存储 ----------
+    function getStoredUser() {
+      try {
+        const stored = localStorage.getItem('gms_mobile_user');
+        if (stored) {
+          const data = JSON.parse(stored);
+          if (data.token && data.user && data.expiresAt && data.expiresAt > Date.now()) return data;
+        }
+      } catch (e) {}
+      return null;
+    }
+    function storeUser(token, user) {
+      try {
+        localStorage.setItem('gms_mobile_user', JSON.stringify({ token, user, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 }));
+      } catch (e) {}
+    }
+    function clearStoredUser() { try { localStorage.removeItem('gms_mobile_user'); } catch (e) {} }
+
+    // ---------- UI 辅助 ----------
+    // escapeHtml, formatTime, showToast — provided by StatusPageUtils (status-pages-common.js)
+    function showAuthDialog() {
+      document.getElementById('auth-overlay').style.display = 'flex';
+      setTimeout(() => document.getElementById('auth-username').focus(), 100);
+    }
+    function hideAuthDialog() { document.getElementById('auth-overlay').style.display = 'none'; }
+
+    // ---------- 认证 ----------
+    async function doAuth() {
+      const username = document.getElementById('auth-username').value.trim();
+      const password = document.getElementById('auth-password').value.trim();
+      const errorEl = document.getElementById('auth-error');
+      if (!username || !password) { errorEl.textContent = '请输入用户名和密码'; return; }
+      errorEl.textContent = '';
+      try {
+        const res = await fetch(`${API_BASE}/api/mobile/auth`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+        if (data.success) {
+          currentUser = data.user;
+          storeUser(data.token, data.user);
+          hideAuthDialog();
+          await loadSNStatus();
+        } else {
+          errorEl.textContent = data.error || '登录失败';
+        }
+      } catch (e) { errorEl.textContent = '网络错误，请重试'; }
+    }
+
+    function logout() {
+      clearStoredUser();
+      currentUser = null;
+      snData = null;
+      showAuthDialog();
+      document.getElementById('main-content').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    }
+
+    // ---------- 数据请求 ----------
+    async function fetchData(url) {
+      try {
+        const res = await fetch(`${API_BASE}${url}`);
+        return await res.json();
+      } catch (e) { return { error: '网络错误' }; }
+    }
+
+    async function loadSNStatus() {
+      const params = new URLSearchParams(window.location.search);
+      const snCode = params.get('sn');
+      if (!snCode) {
+        document.getElementById('main-content').innerHTML = `<div class="empty-state"><div class="empty-icon">—</div><p style="font-size:0.85rem;">无效的链接</p></div>`;
+        return;
+      }
+      const statusRes = await fetchData(`/api/sn-registry/${encodeURIComponent(snCode)}/status`);
+      if (!statusRes.success) {
+        document.getElementById('main-content').innerHTML = `<div class="empty-state"><div class="empty-icon">—</div><p style="font-size:0.85rem;">${statusRes.error || '未找到该手套信息'}</p></div>`;
+        return;
+      }
+      snData = statusRes;
+      renderStatus(statusRes);
+      await loadHistory(snCode);
+    }
+
+    async function loadHistory(snCode) {
+      const list = document.getElementById('history-list');
+      if (!list) return;
+      list.innerHTML = '<div class="empty-state" style="padding:16px;"><div class="spinner" style="margin:0 auto;"></div></div>';
+      try {
+        const historyRes = await fetchData(`/api/sn-registry/${encodeURIComponent(snCode)}/history`);
+        if (historyRes.success && historyRes.history && historyRes.history.length > 0) {
+          renderHistory(historyRes.history);
+        } else {
+          list.innerHTML = '<div class="empty-state" style="padding:16px;"><p style="font-size:0.78rem;">暂无变更记录</p></div>';
+        }
+      } catch (e) {
+        list.innerHTML = '<div class="empty-state" style="padding:16px;"><p style="font-size:0.78rem;color:#be123c;">加载失败，请刷新重试</p></div>';
+      }
+    }
+
+    // ---------- 渲染 ----------
+    function renderStatus(data) {
+      const handLabel = data.handType === 'left' ? '左手' : data.handType === 'right' ? '右手' : '未指定';
+      const eqLabel = data.equipmentType === 'glove' ? '手套' : data.equipmentType || '设备';
+
+      // 信息单元 - 仅显示与当前状态相关的信息
+      let infoHtml = '';
+      if (data.machineNumber && data.status === 'in_use') {
+        infoHtml += `<div class="info-cell"><div class="info-label">绑定设备</div><div class="info-value">${escapeHtml(data.machineNumber)}</div></div>`;
+      }
+      if (data.damageReason && (data.status === 'damaged' || data.status === 'in_repair' || data.status === 'transferred')) {
+        const reasonLabel = data.status === 'transferred' ? '转出原因' : '损坏原因';
+        infoHtml += `<div class="info-cell full"><div class="info-label">${reasonLabel}</div><div class="info-value danger">${escapeHtml(data.damageReason)}</div></div>`;
+      }
+      if (data.trackingNumber && (data.status === 'in_repair' || data.status === 'transferred')) {
+        infoHtml += `<div class="info-cell"><div class="info-label">快递单号</div><div class="info-value">${escapeHtml(data.trackingNumber)}</div></div>`;
+      }
+      if (data.shippedAt && (data.status === 'in_repair' || data.status === 'transferred')) {
+        infoHtml += `<div class="info-cell"><div class="info-label">发货时间</div><div class="info-value">${formatTime(data.shippedAt)}</div></div>`;
+      }
+      if (data.status === 'replacement') {
+        infoHtml += `<div class="info-cell full"><div class="info-label">说明</div><div class="info-value" style="font-weight:400;color:var(--text2);">该手套正在置换库存中，暂时不可使用</div></div>`;
+      }
+      if (data.status === 'retired') {
+        infoHtml += `<div class="info-cell full"><div class="info-label">说明</div><div class="info-value" style="font-weight:400;color:#be123c;">该手套已发货厂家，SN 码已报废</div></div>`;
+      }
+
+      // 操作按钮
+      let actionButtons = '';
+      if (data.status === 'available') {
+        actionButtons = `<button class="btn btn-primary" onclick="openMachinePicker()">投入使用</button><button class="btn btn-danger" onclick="setStatus('${data.snCode}', 'damaged')">标记损坏</button><button class="btn btn-outline" onclick="transferOut()">调出到其他场地</button><button class="btn btn-outline" onclick="addReplacement()">加入置换库存</button>`;
+      } else if (data.status === 'in_use') {
+        actionButtons = `<button class="btn btn-danger" onclick="setStatus('${data.snCode}', 'damaged')">报修损坏</button><button class="btn btn-outline" onclick="setStatus('${data.snCode}', 'available', '', '', true)">退回库存</button><button class="btn btn-outline" onclick="addReplacement()">加入置换库存</button>`;
+      } else if (data.status === 'replacement') {
+        actionButtons = `<button class="btn btn-success" onclick="returnReplacement()">退回库存</button><button class="btn btn-danger" onclick="shipReplacement()">发货厂家</button>`;
+      } else if (data.status === 'retired') {
+        actionButtons = `<button class="btn btn-outline" disabled>该 SN 已发货厂家，不再使用</button>`;
+      } else if (data.status === 'damaged') {
+        actionButtons = `<button class="btn btn-primary" onclick="setStatus('${data.snCode}', 'in_repair')">发货维修</button><button class="btn btn-outline" onclick="setStatus('${data.snCode}', 'available', '', '', true)">误标恢复</button>`;
+      } else if (data.status === 'in_repair') {
+        actionButtons = `<button class="btn btn-success" onclick="setStatus('${data.snCode}', 'available', '', '', true)">维修完成</button>`;
+      } else if (data.status === 'transferred') {
+        actionButtons = `<button class="btn btn-primary" onclick="setStatus('${data.snCode}', 'available', '', '', true)">转回库存</button>`;
+      }
+
+      const userBar = currentUser ? `
+        <div class="user-bar">
+          <span>操作人：<span class="user-name">${escapeHtml(currentUser.displayName || currentUser.username)}</span></span>
+          <button class="link-btn" onclick="logout()">退出</button>
+        </div>` : '';
+
+      document.getElementById('main-content').innerHTML = `
+        ${userBar}
+        <div class="card">
+          <div class="card-label">sn code</div>
+          <div class="sn-code">${escapeHtml(data.snCode)}</div>
+          <div class="meta-row">
+            <span class="meta-tag">${escapeHtml(eqLabel)}</span>
+            <span class="meta-tag">${escapeHtml(handLabel)}</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">status</div>
+          <div class="status-block">
+            <span class="status-badge status-${data.status}"><span class="status-dot"></span>${escapeHtml(data.statusLabel)}</span>
+          </div>
+          ${infoHtml ? `<div class="info-grid">${infoHtml}</div>` : ''}
+        </div>
+        <div class="card">
+          <div class="card-label">history</div>
+          <div id="history-list" class="history-list">
+            <div class="empty-state" style="padding:16px;"><p style="font-size:0.78rem;">暂无变更记录</p></div>
+          </div>
+        </div>
+        <div class="action-area">${actionButtons}</div>
+      `;
+    }
+
+    function renderHistory(history) {
+      const html = history.map(item => {
+        const dotClass = item.newStatus || 'available';
+        const fromStatus = item.oldStatus ? `${escapeHtml(item.oldStatusLabel || item.oldStatus)} → ` : '';
+        return `
+          <div class="history-item">
+            <div class="history-dot ${dotClass}"></div>
+            <div class="history-content">
+              <div class="history-title">${fromStatus}${escapeHtml(item.newStatusLabel || item.newStatus)}</div>
+              <div class="history-meta">${formatTime(item.createdAt)} · ${escapeHtml(item.operator || '系统')}${item.machineNumber ? ' · ' + escapeHtml(item.machineNumber) : ''}</div>
+              ${item.reason ? `<div class="history-reason">${escapeHtml(item.reason)}</div>` : ''}
+            </div>
+          </div>`;
+      }).join('');
+      const list = document.getElementById('history-list');
+      if (list) list.innerHTML = html;
+    }
+
+    // ---------- 机器选择 ----------
+    async function openMachinePicker() {
+      if (!currentUser) { showAuthDialog(); return; }
+      document.getElementById('machine-overlay').style.display = 'flex';
+      selectedMachine = null;
+      document.getElementById('confirm-machine').disabled = true;
+      document.getElementById('machine-search').value = '';
+
+      const handLabel = snData && snData.handType === 'left' ? '左手' : snData && snData.handType === 'right' ? '右手' : '该手型';
+      document.getElementById('picker-hint').textContent = `每台机器仅可绑定一只左手和一只右手手套。当前为${handLabel}手套，已绑定同手型的机器不可选。`;
+      document.getElementById('picker-desc').textContent = `为${handLabel}手套选择绑定机器`;
+
+      const listEl = document.getElementById('machine-list');
+      listEl.innerHTML = '<div class="loading" style="padding:30px;"><div class="spinner"></div></div>';
+
+      if (!machinesCache) {
+        const res = await fetchData('/api/mobile/machines');
+        if (res.success) machinesCache = res.machines;
+        else machinesCache = [];
+      }
+      renderMachineList(machinesCache);
+      setTimeout(() => document.getElementById('machine-search').focus(), 100);
+    }
+
+    function closeMachinePicker() {
+      document.getElementById('machine-overlay').style.display = 'none';
+    }
+
+    function renderMachineList(machines) {
+      const listEl = document.getElementById('machine-list');
+      const handType = snData ? snData.handType : null;
+      if (!machines || machines.length === 0) {
+        listEl.innerHTML = '<div class="empty-state" style="padding:24px;"><p style="font-size:0.78rem;">暂无机器</p></div>';
+        return;
+      }
+      listEl.innerHTML = machines.map(m => {
+        const occupied = handType === 'left' ? !!m.leftSN : handType === 'right' ? !!m.rightSN : false;
+        const disabled = occupied;
+        const occTags = [];
+        if (m.leftSN) occTags.push(`<span class="occ-tag ${handType === 'left' ? 'match' : 'filled'}">L: ${escapeHtml(m.leftSN)}</span>`);
+        if (m.rightSN) occTags.push(`<span class="occ-tag ${handType === 'right' ? 'match' : 'filled'}">R: ${escapeHtml(m.rightSN)}</span>`);
+        return `
+          <div class="machine-item ${disabled ? 'disabled' : ''} ${selectedMachine === m.machineNumber ? 'selected' : ''}" data-machine="${escapeHtml(m.machineNumber)}" ${disabled ? '' : `onclick="selectMachine('${escapeHtml(m.machineNumber)}')"`}>
+            <div>
+              <div class="machine-num">${escapeHtml(m.machineNumber)}</div>
+              <div class="machine-info">${escapeHtml(m.deviceType || '未分类')} · ${escapeHtml(m.status || 'offline')}</div>
+              ${occTags.length ? `<div class="machine-occ">${occTags.join('')}</div>` : ''}
+            </div>
+            ${occupied ? '<span style="font-size:0.68rem;color:#be123c;font-weight:500;">已占用</span>' : (selectedMachine === m.machineNumber ? '<span style="color:#0a0a0a;font-size:1rem;">✓</span>' : '')}
+          </div>`;
+      }).join('');
+    }
+
+    function selectMachine(num) {
+      selectedMachine = num;
+      document.getElementById('confirm-machine').disabled = false;
+      renderMachineList(filteredList());
+    }
+
+    function filteredList() {
+      if (!machinesCache) return [];
+      const q = document.getElementById('machine-search').value.trim().toLowerCase();
+      if (!q) return machinesCache;
+      return machinesCache.filter(m => String(m.machineNumber).toLowerCase().includes(q));
+    }
+
+    function filterMachines() {
+      renderMachineList(filteredList());
+    }
+
+    async function confirmUseMachine() {
+      if (!selectedMachine) return;
+      await setStatus(snData.snCode, 'in_use', '', '', false, selectedMachine);
+      closeMachinePicker();
+    }
+
+    // ---------- 状态变更 ----------
+    async function setStatus(snCode, newStatus, reason = '', trackingNumber = '', unbindMachine = false, machineNumber = null) {
+      if (!currentUser) { showAuthDialog(); return; }
+
+      if (newStatus === 'damaged') {
+        reason = prompt('请输入损坏原因：');
+        if (!reason) return;
+      } else if (newStatus === 'shipped') {
+        trackingNumber = prompt('请输入快递单号（可选）：') || '';
+      } else if (newStatus === 'repaired') {
+        reason = prompt('请输入维修结果：') || '';
+      }
+
+      const payload = { snCode, newStatus };
+      if (reason) payload.reason = reason;
+      if (trackingNumber) payload.trackingNumber = trackingNumber;
+      if (unbindMachine) payload.machineNumber = '';
+      if (machineNumber) payload.machineNumber = machineNumber;
+
+      const buttons = document.querySelectorAll('.action-area .btn');
+      const origTexts = Array.from(buttons).map(b => b.textContent);
+      buttons.forEach(b => { b.disabled = true; b.textContent = '提交中...'; });
+
+      try {
+        const stored = getStoredUser();
+        if (!stored) { throw new Error('用户信息已过期，请重新登录'); }
+        const res = await fetch(`${API_BASE}/api/sn-status-change`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${stored.token}` },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('操作成功');
+          machinesCache = null;
+          await loadSNStatus();
+        } else {
+          if (data.error && (data.error.includes('过期') || data.error.includes('未登录'))) {
+            clearStoredUser(); currentUser = null;
+            showToast('登录已过期，请重新验证');
+            showAuthDialog();
+          } else {
+            showToast(data.error || '操作失败', 3000);
+          }
+        }
+      } catch (e) {
+        showToast('网络错误：' + e.message, 3000);
+      } finally {
+        buttons.forEach((b, i) => { b.disabled = false; b.textContent = origTexts[i]; });
+      }
+    }
+
+    // ---------- 调出到其他场地 ----------
+    async function transferOut() {
+      if (!currentUser) { showAuthDialog(); return; }
+      const loc = prompt('请输入调出地点（如：广州工厂 / 上海仓库 / 北京展会）：');
+      if (!loc) return;
+      const stored = getStoredUser();
+      if (!stored) { showToast('登录已过期，请重新验证'); showAuthDialog(); return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/sn-status-change`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${stored.token}` },
+          body: JSON.stringify({ snCode: snData.snCode, newStatus: 'transferred', reason: loc })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`已调出至 ${loc}`);
+          machinesCache = null;
+          await loadSNStatus();
+        } else {
+          showToast(data.error || '操作失败', 3000);
+        }
+      } catch (e) { showToast('网络错误：' + e.message, 3000); }
+    }
+
+    // ---------- 手套置换 ----------
+    async function addReplacement() {
+      if (!currentUser) { showAuthDialog(); return; }
+      if (!confirm('确认将 ' + snData.snCode + ' 加入置换库存？加入后该手套将暂时不可使用。')) return;
+      const stored = getStoredUser();
+      if (!stored) { showToast('登录已过期，请重新验证'); showAuthDialog(); return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/replacement/add`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${stored.token}` },
+          body: JSON.stringify({ snCode: snData.snCode, note: '' })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('已加入置换库存');
+          await loadSNStatus();
+        } else {
+          showToast(data.error || '操作失败', 3000);
+        }
+      } catch (e) { showToast('网络错误：' + e.message, 3000); }
+    }
+
+    async function returnReplacement() {
+      if (!currentUser) { showAuthDialog(); return; }
+      if (!confirm('确认将 ' + snData.snCode + ' 退回库存？')) return;
+      const stored = getStoredUser();
+      if (!stored) { showToast('登录已过期，请重新验证'); showAuthDialog(); return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/replacement/return`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${stored.token}` },
+          body: JSON.stringify({ snCode: snData.snCode, note: '' })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('已退回库存');
+          await loadSNStatus();
+        } else {
+          showToast(data.error || '操作失败', 3000);
+        }
+      } catch (e) { showToast('网络错误：' + e.message, 3000); }
+    }
+
+    async function shipReplacement() {
+      if (!currentUser) { showAuthDialog(); return; }
+      const tracking = prompt('请输入运单号（可选）：');
+      if (tracking === null) return;
+      if (!confirm('确认将 ' + snData.snCode + ' 发货厂家？此操作后该 SN 将报废不可再用！')) return;
+      const stored = getStoredUser();
+      if (!stored) { showToast('登录已过期，请重新验证'); showAuthDialog(); return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/replacement/ship`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${stored.token}` },
+          body: JSON.stringify({ snCode: snData.snCode, trackingNumber: tracking || '', note: '' })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('已发货厂家');
+          if (confirm('是否打印发货单？')) {
+            const printItem = encodeURIComponent(JSON.stringify([{ snCode: snData.snCode, eqLabel: snData.equipmentType === 'glove' ? 'wuji手套' : (snData.equipmentType || '设备'), handLabel: snData.handType === 'left' ? '左手' : (snData.handType === 'right' ? '右手' : ''), equipmentType: snData.equipmentType, handType: snData.handType }]));
+            window.open(`delivery-note.html?type=replacement&items=${printItem}&tracking=${encodeURIComponent(tracking || '')}&operator=${encodeURIComponent(currentUser?.username || '')}`, '_blank');
+          }
+          await loadSNStatus();
+        } else {
+          showToast(data.error || '操作失败', 3000);
+        }
+      } catch (e) { showToast('网络错误：' + e.message, 3000); }
+    }
+
+    // ---------- 工具 ----------
+    // escapeHtml, formatTime — provided by StatusPageUtils (status-pages-common.js)
+
+    // ---------- 初始化 ----------
+    async function init() {
+      const stored = getStoredUser();
+      if (stored) { currentUser = stored.user; await loadSNStatus(); }
+      else { showAuthDialog(); }
+    }
+    window.addEventListener('load', init);
+    document.getElementById('auth-password').addEventListener('keypress', e => { if (e.key === 'Enter') doAuth(); });
+  </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "packageId": "com.gms.twa",
+  "name": "GMS 手套管理系统",
+  "shortName": "GMS",
+  "startUrl": "http://localhost:8765/index.html",
+  "themeColor": "#3b82f6",
+  "backgroundColor": "#ffffff",
+  "displayMode": "standalone",
+  "orientation": "portrait",
+  "iconUrl": "http://localhost:8765/icons/icon-512.png",
+  "splashScreen": {
+    "show": true
+  }
+}

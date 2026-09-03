@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>Worldengine</title>
+  <link rel="icon" href="/icons/logo-we.png" type="image/png">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#3b82f6">
+  <meta name="application-name" content="GMS 手套管理系统">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <script>
+  // 移动端重定向（须同步执行，避免桌面内容闪现）
+  (function(){
+    try {
+      var isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+      if (!isMobile) return;
+      var user = null;
+      try { user = JSON.parse(localStorage.getItem('gms_user') || 'null'); } catch (e) {}
+      if (user && user.system === 'operations' && user.role !== 'superadmin') {
+        location.replace('mobile-ops.html');
+      } else {
+        location.replace('mobile.html');
+      }
+    } catch (e) {
+      location.replace('mobile.html');
+    }
+  })();
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/operations/main.tsx"></script>
+</body>
+</html>

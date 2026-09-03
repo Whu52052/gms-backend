@@ -1,0 +1,1290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GMS 机器管理系统</title>
+  <style>
+    :root {
+      --primary: #1890ff;
+      --primary-hover: #40a9ff;
+      --success: #52c41a;
+      --warning: #faad14;
+      --error: #ff4d4f;
+      --bg: #f0f2f5;
+      --card-bg: #ffffff;
+      --text-primary: #262626;
+      --text-secondary: #8c8c8c;
+      --border: #d9d9d9;
+      --shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+      --shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.12);
+      --radius: 8px;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text-primary);
+      line-height: 1.6;
+    }
+
+    /* ==================== 顶部导航栏 ==================== */
+    .navbar {
+      background: var(--card-bg);
+      box-shadow: var(--shadow);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 0 32px;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .navbar-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .navbar-brand .logo {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    .navbar-stats {
+      display: flex;
+      gap: 32px;
+      align-items: center;
+    }
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .stat-item .label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+
+    .stat-item .value {
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .stat-item .value.success { color: var(--success); }
+    .stat-item .value.error { color: var(--error); }
+
+    /* ==================== 主容器 ==================== */
+    .container {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 32px;
+    }
+
+    /* ==================== 过滤器栏 ==================== */
+    .filters {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .filters-left {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .filter-chip {
+      padding: 6px 16px;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: white;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 14px;
+      color: var(--text-primary);
+    }
+
+    .filter-chip:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    .filter-chip.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    .search-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: white;
+      transition: all 0.2s;
+    }
+
+    .search-box:focus-within {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+    }
+
+    .search-box input {
+      border: none;
+      outline: none;
+      font-size: 14px;
+      width: 200px;
+    }
+
+    .search-icon {
+      color: var(--text-secondary);
+      font-size: 16px;
+    }
+
+    /* ==================== 机器网格 ==================== */
+    .machines-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 24px;
+      margin-bottom: 32px;
+    }
+
+    .machine-card {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      border: 2px solid transparent;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .machine-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--primary), var(--primary-hover));
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.3s;
+    }
+
+    .machine-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-hover);
+    }
+
+    .machine-card:hover::before {
+      transform: scaleX(1);
+    }
+
+    .machine-card.selected {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.1);
+    }
+
+    .machine-card.selected::before {
+      transform: scaleX(1);
+    }
+
+    .machine-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 20px;
+    }
+
+    .machine-name {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .machine-type-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: #f0f0f0;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .status-badge {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-badge.online {
+      background: #f6ffed;
+      color: var(--success);
+    }
+
+    .status-badge.offline {
+      background: #fff1f0;
+      color: var(--error);
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .health-section {
+      text-align: center;
+      margin: 24px 0;
+      position: relative;
+    }
+
+    .health-circle {
+      width: 120px;
+      height: 120px;
+      margin: 0 auto;
+      position: relative;
+    }
+
+    .health-circle svg {
+      transform: rotate(-90deg);
+    }
+
+    .health-circle-bg {
+      fill: none;
+      stroke: #f0f0f0;
+      stroke-width: 8;
+    }
+
+    .health-circle-fill {
+      fill: none;
+      stroke-width: 8;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 0.5s ease;
+    }
+
+    .health-circle-fill.good { stroke: var(--success); }
+    .health-circle-fill.warning { stroke: var(--warning); }
+    .health-circle-fill.bad { stroke: var(--error); }
+
+    .health-score-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+    }
+
+    .health-score-value {
+      font-size: 32px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .health-score-value.good { color: var(--success); }
+    .health-score-value.warning { color: var(--warning); }
+    .health-score-value.bad { color: var(--error); }
+
+    .health-score-label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    .device-summary {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .device-item-mini {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #fafafa;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    .device-icon {
+      font-size: 18px;
+    }
+
+    .device-item-mini .status-indicator {
+      margin-left: auto;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .device-item-mini .status-indicator.on {
+      background: var(--success);
+    }
+
+    .device-item-mini .status-indicator.off {
+      background: var(--error);
+    }
+
+    .machine-footer {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #f0f0f0;
+      font-size: 12px;
+      color: var(--text-secondary);
+      text-align: center;
+    }
+
+    /* ==================== 详情抽屉 ==================== */
+    .drawer-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.45);
+      z-index: 1000;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.3s;
+    }
+
+    .drawer-overlay.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 600px;
+      background: var(--card-bg);
+      box-shadow: -2px 0 8px rgba(0, 0, 0, 0.15);
+      z-index: 1001;
+      transform: translateX(100%);
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .drawer.visible {
+      transform: translateX(0);
+    }
+
+    .drawer-header {
+      padding: 24px;
+      border-bottom: 1px solid #f0f0f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .drawer-title {
+      font-size: 20px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .drawer-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .drawer-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }
+
+    /* ==================== 按钮 ==================== */
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      box-shadow: 0 2px 8px rgba(24, 144, 255, 0.3);
+    }
+
+    .btn-primary:active {
+      transform: translateY(1px);
+    }
+
+    .btn-primary:disabled {
+      background: #d9d9d9;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover {
+      color: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .btn-icon {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      transition: all 0.2s;
+      color: var(--text-secondary);
+    }
+
+    .btn-icon:hover {
+      background: #f0f0f0;
+      color: var(--text-primary);
+    }
+
+    /* ==================== 设备详情卡片 ==================== */
+    .detail-section {
+      background: #fafafa;
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .detail-section-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .detail-section-icon {
+      font-size: 20px;
+    }
+
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .detail-row:last-child {
+      border-bottom: none;
+    }
+
+    .detail-label {
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+
+    .detail-value {
+      font-weight: 500;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+    }
+
+    .status-icon.success {
+      background: #f6ffed;
+      color: var(--success);
+    }
+
+    .status-icon.error {
+      background: #fff1f0;
+      color: var(--error);
+    }
+
+    /* ==================== 提示框 ==================== */
+    .alert {
+      padding: 12px 16px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      animation: slideDown 0.3s ease;
+    }
+
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .alert.info {
+      background: #e6f7ff;
+      color: #0050b3;
+      border-left: 3px solid var(--primary);
+    }
+
+    .alert.success {
+      background: #f6ffed;
+      color: #135200;
+      border-left: 3px solid var(--success);
+    }
+
+    .alert.error {
+      background: #fff1f0;
+      color: #a8071a;
+      border-left: 3px solid var(--error);
+    }
+
+    /* ==================== 加载状态 ==================== */
+    .loading {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-secondary);
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      margin: 0 auto 16px;
+      border: 3px solid #f0f0f0;
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* ==================== 空状态 ==================== */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+    }
+
+    .empty-icon {
+      font-size: 64px;
+      color: #d9d9d9;
+      margin-bottom: 16px;
+    }
+
+    .empty-text {
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+
+    /* ==================== 响应式 ==================== */
+    @media (max-width: 1200px) {
+      .machines-grid {
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      }
+
+      .drawer {
+        width: 500px;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .container {
+        padding: 16px;
+      }
+
+      .navbar {
+        padding: 0 16px;
+      }
+
+      .navbar-stats {
+        display: none;
+      }
+
+      .filters {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .machines-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .drawer {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- 顶部导航栏 -->
+  <nav class="navbar">
+    <div class="navbar-brand">
+      <div class="logo">G</div>
+      <span>GMS 机器管理系统</span>
+    </div>
+    <div class="navbar-stats">
+      <div class="stat-item">
+        <div class="label">在线</div>
+        <div class="value success" id="stat-online">-</div>
+      </div>
+      <div class="stat-item">
+        <div class="label">离线</div>
+        <div class="value error" id="stat-offline">-</div>
+      </div>
+      <div class="stat-item">
+        <div class="label">总计</div>
+        <div class="value" id="stat-total">-</div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- 主容器 -->
+  <div class="container">
+    <!-- 过滤器 -->
+    <div class="filters">
+      <div class="filters-left">
+        <div class="filter-chip active" data-filter="all">全部</div>
+        <div class="filter-chip" data-filter="online">在线</div>
+        <div class="filter-chip" data-filter="offline">离线</div>
+        <div class="filter-chip" data-filter="dexterous">灵巧手</div>
+        <div class="filter-chip" data-filter="glove_only">纯手套</div>
+      </div>
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" placeholder="搜索机器编号..." id="search-input">
+      </div>
+    </div>
+
+    <!-- 机器网格 -->
+    <div id="machines-grid" class="machines-grid">
+      <div class="loading">
+        <div class="spinner"></div>
+        <p>加载机器列表中...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 详情抽屉 -->
+  <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
+  <div class="drawer" id="drawer">
+    <div class="drawer-header">
+      <div class="drawer-title">
+        <span>📊</span>
+        <span id="drawer-machine-name">机器详情</span>
+      </div>
+      <div class="drawer-actions">
+        <button class="btn btn-primary" id="check-btn" onclick="triggerCheck()">
+          <span>🔄</span>
+          <span id="check-btn-text">检测设备</span>
+        </button>
+        <button class="btn-icon" onclick="closeDrawer()">✕</button>
+      </div>
+    </div>
+    <div class="drawer-content" id="drawer-content">
+      <div class="loading">
+        <div class="spinner"></div>
+        <p>加载详情中...</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = 'http://10.5.51.216:8765/api';
+    let allMachines = [];
+    let selectedMachine = null;
+    let checkRequestId = null;
+    let currentFilter = 'all';
+
+    // ==================== 初始化 ====================
+    async function init() {
+      await loadMachines();
+      setupEventListeners();
+
+      // 定期刷新
+      setInterval(loadMachines, 30000);
+    }
+
+    // ==================== 设置事件监听 ====================
+    function setupEventListeners() {
+      // 过滤器
+      document.querySelectorAll('.filter-chip').forEach(chip => {
+        chip.addEventListener('click', (e) => {
+          document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+          e.target.classList.add('active');
+          currentFilter = e.target.dataset.filter;
+          filterMachines();
+        });
+      });
+
+      // 搜索
+      document.getElementById('search-input').addEventListener('input', (e) => {
+        filterMachines(e.target.value);
+      });
+    }
+
+    // ==================== 加载机器列表 ====================
+    async function loadMachines() {
+      try {
+        const response = await fetch(`${API_BASE}/machines`);
+        allMachines = await response.json();
+
+        updateStats();
+        renderMachines();
+      } catch (error) {
+        console.error('加载失败:', error);
+        showError('加载机器列表失败');
+      }
+    }
+
+    // ==================== 更新统计 ====================
+    function updateStats() {
+      const online = allMachines.filter(m => m.status === 'online').length;
+      const offline = allMachines.length - online;
+
+      document.getElementById('stat-online').textContent = online;
+      document.getElementById('stat-offline').textContent = offline;
+      document.getElementById('stat-total').textContent = allMachines.length;
+    }
+
+    // ==================== 渲染机器列表 ====================
+    function renderMachines(machines = allMachines) {
+      const grid = document.getElementById('machines-grid');
+
+      if (machines.length === 0) {
+        grid.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">📭</div>
+            <div class="empty-text">没有找到匹配的机器</div>
+          </div>
+        `;
+        return;
+      }
+
+      grid.innerHTML = '';
+      machines.forEach(machine => {
+        const card = createMachineCard(machine);
+        grid.appendChild(card);
+      });
+    }
+
+    // ==================== 创建机器卡片 ====================
+    function createMachineCard(machine) {
+      const card = document.createElement('div');
+      card.className = 'machine-card';
+      if (selectedMachine === machine.machineNumber) {
+        card.classList.add('selected');
+      }
+      card.onclick = () => showDetail(machine.machineNumber);
+
+      const healthClass = machine.healthScore >= 80 ? 'good' :
+                         machine.healthScore >= 50 ? 'warning' : 'bad';
+
+      const circumference = 2 * Math.PI * 54;
+      const offset = circumference - (machine.healthScore / 100) * circumference;
+
+      const typeText = machine.machineType === 'dexterous' ? '灵巧手' : '纯手套';
+      const statusText = machine.status === 'online' ? '在线' : '离线';
+
+      card.innerHTML = `
+        <div class="machine-header">
+          <div class="machine-name">
+            ${machine.machineNumber}
+            <span class="machine-type-badge">${typeText}</span>
+          </div>
+          <div class="status-badge ${machine.status}">
+            <span class="status-dot"></span>
+            ${statusText}
+          </div>
+        </div>
+
+        <div class="health-section">
+          <div class="health-circle">
+            <svg width="120" height="120">
+              <circle class="health-circle-bg" cx="60" cy="60" r="54"></circle>
+              <circle class="health-circle-fill ${healthClass}"
+                      cx="60" cy="60" r="54"
+                      stroke-dasharray="${circumference}"
+                      stroke-dashoffset="${offset}"></circle>
+            </svg>
+            <div class="health-score-text">
+              <div class="health-score-value ${healthClass}">${machine.healthScore}</div>
+              <div class="health-score-label">健康度</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="device-summary">
+          <div class="device-item-mini">
+            <span class="device-icon">🧤</span>
+            <span>手套</span>
+            <span class="status-indicator on"></span>
+          </div>
+          <div class="device-item-mini">
+            <span class="device-icon">🥽</span>
+            <span>Quest</span>
+            <span class="status-indicator ${machine.status === 'online' ? 'on' : 'off'}"></span>
+          </div>
+          ${machine.machineType === 'dexterous' ? `
+            <div class="device-item-mini">
+              <span class="device-icon">🤖</span>
+              <span>灵巧手</span>
+              <span class="status-indicator on"></span>
+            </div>
+            <div class="device-item-mini">
+              <span class="device-icon">🦾</span>
+              <span>机械臂</span>
+              <span class="status-indicator on"></span>
+            </div>
+          ` : `
+            <div class="device-item-mini">
+              <span class="device-icon">📷</span>
+              <span>摄像头</span>
+              <span class="status-indicator on"></span>
+            </div>
+          `}
+        </div>
+
+        <div class="machine-footer">
+          最后心跳: ${formatTime(machine.lastHeartbeat)}
+        </div>
+      `;
+
+      return card;
+    }
+
+    // ==================== 过滤机器 ====================
+    function filterMachines(searchText = '') {
+      let filtered = allMachines;
+
+      // 按状态/类型过滤
+      if (currentFilter !== 'all') {
+        if (currentFilter === 'online' || currentFilter === 'offline') {
+          filtered = filtered.filter(m => m.status === currentFilter);
+        } else {
+          filtered = filtered.filter(m => m.machineType === currentFilter);
+        }
+      }
+
+      // 按搜索文本过滤
+      if (searchText) {
+        filtered = filtered.filter(m =>
+          m.machineNumber.toLowerCase().includes(searchText.toLowerCase())
+        );
+      }
+
+      renderMachines(filtered);
+    }
+
+    // ==================== 显示详情 ====================
+    async function showDetail(machineNumber) {
+      selectedMachine = machineNumber;
+
+      // 更新选中状态
+      document.querySelectorAll('.machine-card').forEach(card => {
+        card.classList.remove('selected');
+      });
+      event.currentTarget.classList.add('selected');
+
+      // 显示抽屉
+      document.getElementById('drawer-machine-name').textContent = machineNumber;
+      document.getElementById('drawer-overlay').classList.add('visible');
+      document.getElementById('drawer').classList.add('visible');
+      document.getElementById('drawer-content').innerHTML = `
+        <div class="loading">
+          <div class="spinner"></div>
+          <p>加载详情中...</p>
+        </div>
+      `;
+
+      // 加载详细信息
+      try {
+        const response = await fetch(`${API_BASE}/machines/${machineNumber}`);
+        const data = await response.json();
+        renderDetail(data);
+      } catch (error) {
+        console.error('加载详情失败:', error);
+        document.getElementById('drawer-content').innerHTML = `
+          <div class="alert error">
+            <span>❌</span>
+            <span>加载失败: ${error.message}</span>
+          </div>
+        `;
+      }
+    }
+
+    // ==================== 渲染详情 ====================
+    function renderDetail(data) {
+      const { devices, cameras, gloves } = data;
+      let html = '';
+
+      // 手套
+      html += `
+        <div class="detail-section">
+          <div class="detail-section-header">
+            <span class="detail-section-icon">🧤</span>
+            <span>手套状态</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">左手连接</span>
+            <span class="detail-value">
+              <span class="status-icon ${gloves.left?.connected ? 'success' : 'error'}">
+                ${gloves.left?.connected ? '✓' : '✕'}
+              </span>
+              ${gloves.left?.connected ? '在线' : '离线'}
+            </span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">左手 SN</span>
+            <span class="detail-value">${gloves.left?.snCode || '未知'}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">左手验证</span>
+            <span class="detail-value">
+              <span class="status-icon ${gloves.left?.validation?.valid ? 'success' : 'error'}">
+                ${gloves.left?.validation?.valid ? '✓' : '✕'}
+              </span>
+              ${gloves.left?.validation?.valid ? '有效' : '无效'}
+            </span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">右手连接</span>
+            <span class="detail-value">
+              <span class="status-icon ${gloves.right?.connected ? 'success' : 'error'}">
+                ${gloves.right?.connected ? '✓' : '✕'}
+              </span>
+              ${gloves.right?.connected ? '在线' : '离线'}
+            </span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">右手 SN</span>
+            <span class="detail-value">${gloves.right?.snCode || '未知'}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">右手验证</span>
+            <span class="detail-value">
+              <span class="status-icon ${gloves.right?.validation?.valid ? 'success' : 'error'}">
+                ${gloves.right?.validation?.valid ? '✓' : '✕'}
+              </span>
+              ${gloves.right?.validation?.valid ? '有效' : '无效'}
+            </span>
+          </div>
+        </div>
+      `;
+
+      // Quest
+      html += `
+        <div class="detail-section">
+          <div class="detail-section-header">
+            <span class="detail-section-icon">🥽</span>
+            <span>Quest 头显</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">连接状态</span>
+            <span class="detail-value">
+              <span class="status-icon ${devices.quest?.connected ? 'success' : 'error'}">
+                ${devices.quest?.connected ? '✓' : '✕'}
+              </span>
+              ${devices.quest?.connected ? '在线' : '离线'}
+            </span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">电量</span>
+            <span class="detail-value">${devices.quest?.battery ? devices.quest.battery + '%' : '未知'}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">左手柄</span>
+            <span class="detail-value">${devices.questControllers?.left ? devices.questControllers.left + '%' : '未知'}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">右手柄</span>
+            <span class="detail-value">${devices.questControllers?.right ? devices.questControllers.right + '%' : '未知'}</span>
+          </div>
+        </div>
+      `;
+
+      // 摄像头
+      if (cameras && cameras.length > 0) {
+        html += `
+          <div class="detail-section">
+            <div class="detail-section-header">
+              <span class="detail-section-icon">📷</span>
+              <span>摄像头</span>
+            </div>
+        `;
+        cameras.forEach(cam => {
+          html += `
+            <div class="detail-row">
+              <span class="detail-label">${cam.name || cam.device}</span>
+              <span class="detail-value">
+                <span class="status-icon ${cam.status === 'ok' ? 'success' : 'error'}">
+                  ${cam.status === 'ok' ? '✓' : '✕'}
+                </span>
+                ${cam.fps?.toFixed(1) || 0} fps
+              </span>
+            </div>
+          `;
+        });
+        html += `</div>`;
+      }
+
+      // 灵巧手机器额外设备
+      if (devices.machineType === 'dexterous') {
+        html += `
+          <div class="detail-section">
+            <div class="detail-section-header">
+              <span class="detail-section-icon">🤖</span>
+              <span>灵巧手 & 机械臂</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">左手灵巧手</span>
+              <span class="detail-value">
+                <span class="status-icon ${devices.dexterousHands?.left ? 'success' : 'error'}">
+                  ${devices.dexterousHands?.left ? '✓' : '✕'}
+                </span>
+                ${devices.dexterousHands?.left ? '在线' : '离线'}
+              </span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">右手灵巧手</span>
+              <span class="detail-value">
+                <span class="status-icon ${devices.dexterousHands?.right ? 'success' : 'error'}">
+                  ${devices.dexterousHands?.right ? '✓' : '✕'}
+                </span>
+                ${devices.dexterousHands?.right ? '在线' : '离线'}
+              </span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">机械臂</span>
+              <span class="detail-value">
+                <span class="status-icon ${devices.roboticArm?.connected ? 'success' : 'error'}">
+                  ${devices.roboticArm?.connected ? '✓' : '✕'}
+                </span>
+                ${devices.roboticArm?.connected ? '在线' : '离线'}
+              </span>
+            </div>
+          </div>
+        `;
+      }
+
+      document.getElementById('drawer-content').innerHTML = html;
+    }
+
+    // ==================== 触发检测 ====================
+    async function triggerCheck() {
+      if (!selectedMachine) return;
+
+      const btn = document.getElementById('check-btn');
+      const btnText = document.getElementById('check-btn-text');
+      const content = document.getElementById('drawer-content');
+
+      btn.disabled = true;
+      btnText.textContent = '检测中...';
+
+      // 添加提示
+      const alert = document.createElement('div');
+      alert.className = 'alert info';
+      alert.innerHTML = `
+        <span>ℹ️</span>
+        <span>正在请求设备检测，等待客户端响应...</span>
+      `;
+      content.insertBefore(alert, content.firstChild);
+
+      try {
+        const response = await fetch(`${API_BASE}/machines/${selectedMachine}/check`, {
+          method: 'POST',
+        });
+        const result = await response.json();
+        checkRequestId = result.requestId;
+
+        await pollCheckResult(alert);
+      } catch (error) {
+        alert.className = 'alert error';
+        alert.innerHTML = `
+          <span>❌</span>
+          <span>检测失败: ${error.message}</span>
+        `;
+
+        btn.disabled = false;
+        btnText.textContent = '检测设备';
+      }
+    }
+
+    // ==================== 轮询检测结果 ====================
+    async function pollCheckResult(alertEl) {
+      const maxAttempts = 30;
+      let attempts = 0;
+
+      const poll = async () => {
+        attempts++;
+
+        try {
+          const response = await fetch(`${API_BASE}/check-requests/${checkRequestId}`);
+          const result = await response.json();
+
+          if (result.status === 'completed') {
+            alertEl.className = 'alert success';
+            alertEl.innerHTML = `
+              <span>✅</span>
+              <span>设备检测完成！正在刷新数据...</span>
+            `;
+
+            setTimeout(() => {
+              showDetail(selectedMachine);
+              loadMachines();
+
+              const btn = document.getElementById('check-btn');
+              btn.disabled = false;
+              document.getElementById('check-btn-text').textContent = '检测设备';
+            }, 1000);
+
+            return;
+          }
+
+          if (attempts < maxAttempts) {
+            setTimeout(poll, 1000);
+          } else {
+            throw new Error('检测超时');
+          }
+        } catch (error) {
+          alertEl.className = 'alert error';
+          alertEl.innerHTML = `
+            <span>❌</span>
+            <span>检测失败: ${error.message}</span>
+          `;
+
+          const btn = document.getElementById('check-btn');
+          btn.disabled = false;
+          document.getElementById('check-btn-text').textContent = '检测设备';
+        }
+      };
+
+      poll();
+    }
+
+    // ==================== 关闭抽屉 ====================
+    function closeDrawer() {
+      document.getElementById('drawer-overlay').classList.remove('visible');
+      document.getElementById('drawer').classList.remove('visible');
+      selectedMachine = null;
+
+      document.querySelectorAll('.machine-card').forEach(card => {
+        card.classList.remove('selected');
+      });
+    }
+
+    // ==================== 工具函数 ====================
+    function formatTime(timestamp) {
+      const date = new Date(timestamp);
+      const now = new Date();
+      const diff = now - date;
+
+      if (diff < 60000) {
+        return '刚刚';
+      } else if (diff < 3600000) {
+        return `${Math.floor(diff / 60000)} 分钟前`;
+      } else if (diff < 86400000) {
+        return `${Math.floor(diff / 3600000)} 小时前`;
+      } else {
+        return date.toLocaleString('zh-CN');
+      }
+    }
+
+    function showError(message) {
+      const grid = document.getElementById('machines-grid');
+      grid.innerHTML = `
+        <div class="alert error" style="grid-column: 1/-1;">
+          <span>❌</span>
+          <span>${message}</span>
+        </div>
+      `;
+    }
+
+    // 初始化
+    init();
+  </script>
+</body>
+</html>

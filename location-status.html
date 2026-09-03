@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>库位状态</title>
+  <link rel="stylesheet" href="css/status-pages.css?v=2">
+  <style>
+    .container { max-width: 640px; margin: 0 auto; }
+    .location-code {
+      font-family: var(--mono);
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.02em;
+      word-break: break-all;
+    }
+    .count-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 10px 24px;
+      border-radius: 50px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      background: #f0f0f0;
+      color: #525252;
+    }
+    .count-badge .num { font-family: var(--mono); font-size: 1.1rem; }
+    .sn-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 8px;
+    }
+    .sn-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .sn-code {
+      font-family: var(--mono);
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .sn-status {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 50px;
+      font-weight: 500;
+    }
+    .sn-info {
+      font-size: 0.78rem;
+      color: var(--text2);
+      display: flex; gap: 8px; flex-wrap: wrap;
+    }
+    .sn-info span { display: inline-flex; align-items: center; gap: 3px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-label">storage location</div>
+    <div class="header-title">库位状态</div>
+  </div>
+
+  <div class="container">
+    <div id="main-content">
+      <div class="loading"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <div id="conn-indicator" class="conn-indicator" title="实时连接"></div>
+
+  <script src="js/status-pages-common.js?v=1"></script>
+  <script>
+    var escapeHtml = StatusPageUtils.escapeHtml;
+    var formatTime = StatusPageUtils.formatTime;
+    var showToast = StatusPageUtils.showToast;
+    const API_BASE = window.location.origin;
+    let locationCode = null;
+    let evtSource = null;
+
+    const stMap = {
+      in_use: { cls: '#10b981', label: '使用中' },
+      idle: { cls: '#6b7280', label: '空闲' },
+      waiting_repair: { cls: '#f59e0b', label: '待维修' },
+      repairing: { cls: '#ef4444', label: '维修中' },
+      scrapped: { cls: '#9ca3af', label: '报废' },
+    };
+
+    async function loadLocation() {
+      if (!locationCode) {
+        document.getElementById('main-content').innerHTML = '<div class="empty-state"><div class="empty-icon">—</div><p style="font-size:0.85rem;">无效的链接</p></div>';
+        return;
+      }
+      try {
+        const res = await fetch(API_BASE + '/api/location-status/' + encodeURIComponent(locationCode));
+        const data = await res.json();
+        if (!data.success || !data.location) {
+          document.getElementById('main-content').innerHTML = '<div class="empty-state"><div class="empty-icon">—</div><p style="font-size:0.85rem;">未找到该库位</p></div>';
+          return;
+        }
+        renderLocation(data.location, data.devices || []);
+      } catch (e) {
+        document.getElementById('main-content').innerHTML = '<div class="empty-state"><div class="empty-icon">!</div><p style="font-size:0.85rem;">加载失败，请刷新重试</p></div>';
+      }
+    }
+
+    function renderLocation(loc, sns) {
+      var snList = Array.isArray(sns) ? sns : [];
+      var snCount = loc.snCount || snList.length || 0;
+      var statusBadge = '<span class="count-badge"><span class="num">' + snCount + '</span> 台设备</span>';
+
+      var snHtml = '';
+      if (snList.length === 0) {
+        snHtml = '<div class="empty-state"><p style="font-size:0.82rem;color:var(--text3);">该库位暂无设备</p></div>';
+      } else {
+        snList.forEach(function(s) {
+          var sn = s.snCode || s.sn || s.id || '—';
+          var st = stMap[s.status] || { cls: '#6b7280', label: s.status || '未知' };
+          var statusStyle = 'background:' + st.cls + '22;color:' + st.cls + ';border:1px solid ' + st.cls + '44;';
+          var handType = s.handType === 'left' ? '左手' : s.handType === 'right' ? '右手' : '';
+          var eqType = s.equipmentType || '-';
+          var source = s.source ? ('<span>来源: ' + escapeHtml(s.source) + '</span>') : '';
+          var machine = s.machineNumber ? ('<span>绑定: ' + escapeHtml(s.machineNumber) + '</span>') : '';
+          snHtml += '<div class="sn-card">' +
+            '<div class="sn-header"><span class="sn-code">' + escapeHtml(sn) + '</span><span class="sn-status" style="' + statusStyle + '">' + escapeHtml(st.label) + '</span></div>' +
+            '<div class="sn-info">' +
+              '<span>' + escapeHtml(eqType) + '</span>' +
+              (handType ? '<span>' + handType + '</span>' : '') +
+              source +
+              machine +
+            '</div>' +
+          '</div>';
+        });
+      }
+
+      document.getElementById('main-content').innerHTML = '' +
+        '<div class="card">' +
+          '<div class="card-label">location code</div>' +
+          '<div class="location-code">' + escapeHtml(loc.code) + '</div>' +
+          '<div class="meta-row">' +
+            '<span class="meta-tag">' + escapeHtml(loc.name || '—') + '</span>' +
+            (loc.area ? '<span class="meta-tag">' + escapeHtml(loc.area) + '</span>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="card" style="text-align:center;">' +
+          '<div class="card-label">devices</div>' +
+          '<div style="padding:6px 0;">' + statusBadge + '</div>' +
+          (loc.description ? '<div style="font-size:0.78rem;color:var(--text2);margin-top:8px;">' + escapeHtml(loc.description) + '</div>' : '') +
+        '</div>' +
+        '<div class="card">' +
+          '<div class="card-label">设备列表</div>' +
+          snHtml +
+        '</div>' +
+      '';
+    }
+
+    function initSSE() {
+      try {
+        evtSource = new EventSource(API_BASE + '/api/events');
+      } catch (e) { return; }
+      var indicator = document.getElementById('conn-indicator');
+      evtSource.addEventListener('data_changed', function(e) {
+        var p = {}; try { p = JSON.parse(e.data || '{}'); } catch {}
+        if (p.main === 'storage_locations' || (p.sideEffects || []).indexOf('storage_locations') !== -1) {
+          loadLocation();
+        }
+      });
+      evtSource.onopen = function() { indicator.classList.remove('offline'); };
+      evtSource.onerror = function() { indicator.classList.add('offline'); };
+    }
+
+    function init() {
+      var params = new URLSearchParams(window.location.search);
+      locationCode = params.get('code');
+      if (!locationCode) {
+        document.getElementById('main-content').innerHTML = '<div class="empty-state"><div class="empty-icon">—</div><p style="font-size:0.85rem;">无效的链接</p><p style="font-size:0.72rem;color:var(--text3);margin-top:6px;">链接需包含 ?code=库位编码</p></div>';
+        return;
+      }
+      loadLocation();
+      initSSE();
+    }
+    window.addEventListener('load', init);
+  </script>
+</body>
+</html>

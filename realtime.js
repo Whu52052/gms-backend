@@ -34,14 +34,38 @@ let wss = null;
 const clients = new Map();          // wsId → clientInfo
 const userSockets = new Map();     // userId → Set<ws>
 const sseClients = new Set();      // HTTP response objects
+const sseUsers = new Map();        // response → authenticated user
 const offlineQueue = new Map();    // userId → [{event, data, ts}]
 
 const MAX_OFFLINE_QUEUE = 100;     // 每用户最多缓存 100 条离线消息
 const HEARTBEAT_INTERVAL = 15000;  // 15秒心跳
 const STALE_TIMEOUT = 45000;       // 45秒无心跳→断开
 
+// S5.2: validateToken injected via init(deps). Null until then — cookie auth
+// (authenticateConnection) and message auth (handleAuth) both degrade to
+// "wait for client" / "auth unavailable" when not injected (e.g. in tests).
+let _validateToken = null;
+
+// S5.2: minimal cookie parser (same logic as server.js parseCookies).
+// Duplicated here to keep realtime.js dependency-free (no require of server.js
+// — which would create a circular dependency since server.js requires realtime).
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  if (!cookieHeader) return cookies;
+  cookieHeader.split(';').forEach(pair => {
+    const idx = pair.indexOf('=');
+    if (idx > 0) cookies[pair.substring(0, idx).trim()] = pair.substring(idx + 1).trim();
+  });
+  return cookies;
+}
+
 // ==================== INIT ====================
-function init(httpServer, redisModule) {
+function init(httpServer, redisModule, deps = {}) {
+  // S5.2: inject validateToken for cookie-based WS auth (design A — web path).
+  // When injected, wss.on('connection') reads gms_token from the upgrade request
+  // cookie and authenticates immediately; mobile clients still send a
+  // {type:'auth', token} message as fallback.
+  if (deps && deps.validateToken) _validateToken = deps.validateToken;
   wss = new WebSocketServer({
     server: httpServer,
     path: '/ws',
@@ -72,6 +96,13 @@ function init(httpServer, redisModule) {
 
     // 发送握手确认
     safeSend(ws, { type: 'connected', wsId, ts: Date.now() });
+
+    // S5.2: try cookie-based auth first (web primary path — design A).
+    // If the upgrade request carries a valid gms_token cookie, authenticate
+    // immediately. On failure (no cookie / invalid token), keep
+    // info.authenticated=false and wait for the client to send a
+    // {type:'auth', token} message (mobile fallback) in handleMessage.
+    authenticateConnection(ws, info, req.headers.cookie).catch(() => {});
 
     // 消息处理
     ws.on('message', (raw) => handleMessage(ws, info, raw));
@@ -138,71 +169,122 @@ async function handleMessage(ws, info, raw) {
         });
       }
       break;
+
+    case 'chat:message':
+      // 实时聊天消息转发
+      if (info.authenticated && payload.toUserId) {
+        // 查找接收者的 WebSocket 连接并发送
+        var targetSockets = userSockets.get(payload.toUserId);
+        if (targetSockets) {
+          targetSockets.forEach(function(ws) {
+            if (ws.readyState === 1) {
+              safeSend(ws, {
+                type: 'chat:message',
+                data: {
+                  id: payload.id,
+                  senderId: info.userId,
+                  senderName: info.displayName || info.username,
+                  message: payload.message,
+                  createdAt: payload.createdAt,
+                }
+              });
+            }
+          });
+        }
+        // 同时也通过 deliver 广播给接收者（SSE 备用通道也能收到）
+        deliver('chat:message', {
+          id: payload.id,
+          senderId: info.userId,
+          senderName: info.displayName || info.username,
+          recipientId: payload.toUserId,
+          message: payload.message,
+          createdAt: payload.createdAt,
+        }, { userId: payload.toUserId, force: true });
+      }
+      break;
   }
 }
 
-// ==================== AUTH ====================
+// ==================== AUTH (S5.2 refactor) ====================
+// S5.2: Apply an authenticated user to a connection. Shared by the cookie-auth
+// path (authenticateConnection, web) and the message-auth path (handleAuth,
+// mobile fallback). Fills info, registers in userSockets, sends auth_ok,
+// broadcasts user:online, and delivers queued offline messages.
+function _applyAuthenticated(ws, info, user) {
+  info.authenticated = true;
+  info.userId = user.userId;
+  info.username = user.username;
+  info.displayName = user.displayName || user.username;
+  info.role = user.role;
+  info.system = user.system;
+
+  // 维护用户索引
+  if (!userSockets.has(info.userId)) userSockets.set(info.userId, new Set());
+  userSockets.get(info.userId).add(ws);
+
+  safeSend(ws, {
+    type: 'auth_ok',
+    user: {
+      userId: user.userId,
+      username: user.username,
+      displayName: user.displayName,
+      role: user.role,
+      system: user.system,
+    },
+  });
+
+  // 通知其他用户: 此人上线
+  broadcastToAll({ type: 'user:online', userId: info.userId, username: info.displayName || info.username }, ws);
+
+  // 投递离线消息
+  deliverOfflineMessages(info.userId, ws);
+}
+
+// S5.2: cookie-based authentication at WS connection time (design A — web path).
+// Reads gms_token from the upgrade request cookie and validates it via the
+// injected _validateToken. Returns true on success, false if no valid cookie
+// (caller keeps info.authenticated=false and waits for a client auth message).
+async function authenticateConnection(ws, info, cookieHeader) {
+  if (!_validateToken) return false;
+  const cookies = parseCookies(cookieHeader || '');
+  const token = cookies.gms_token;
+  if (!token) return false;
+  let user;
+  try {
+    user = await _validateToken(token);
+  } catch {
+    return false;
+  }
+  if (!user) return false;
+  _applyAuthenticated(ws, info, user);
+  return true;
+}
+
+// Message-based auth (mobile/legacy fallback). S5.2: now calls the injected
+// _validateToken directly instead of looping back through /api/auth/verify
+// (faster, no HTTP roundtrip, no dependency on the HTTP server being reachable
+// from the worker). Behavior is equivalent — both paths validate the same token.
 async function handleAuth(ws, info, token) {
   if (!token) {
     safeSend(ws, { type: 'error', code: 'AUTH_REQUIRED', message: '需要认证' });
     return;
   }
-
+  if (!_validateToken) {
+    safeSend(ws, { type: 'error', code: 'AUTH_ERROR', message: '认证服务不可用' });
+    return;
+  }
+  let user;
   try {
-    // 复用 HTTP 的 token 验证
-    const http = require('http');
-    const result = await new Promise((resolve, reject) => {
-      const req = http.request({
-        hostname: '127.0.0.1',
-        port: process.env.PORT || 8765,
-        path: '/api/auth/verify',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 3000,
-      }, (res) => {
-        let body = '';
-        res.on('data', c => body += c);
-        res.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve({ valid: false }); } });
-      });
-      req.on('error', () => resolve({ valid: false }));
-      req.write(JSON.stringify({ token }));
-      req.end();
-    });
-
-    if (result.valid && result.user) {
-      info.authenticated = true;
-      info.userId = result.user.userId;
-      info.username = result.user.username;
-      info.displayName = result.user.displayName || result.user.username;
-      info.role = result.user.role;
-      info.system = result.user.system;
-
-      // 维护用户索引
-      if (!userSockets.has(info.userId)) userSockets.set(info.userId, new Set());
-      userSockets.get(info.userId).add(ws);
-
-      safeSend(ws, {
-        type: 'auth_ok',
-        user: {
-          userId: result.user.userId,
-          username: result.user.username,
-          displayName: result.user.displayName,
-          role: result.user.role,
-          system: result.user.system,
-        },
-      });
-
-      // 通知其他用户: 此人上线
-      broadcastToAll({ type: 'user:online', userId: info.userId, username: info.displayName || info.username }, ws);
-
-      // 投递离线消息
-      deliverOfflineMessages(info.userId, ws);
-    } else {
-      safeSend(ws, { type: 'error', code: 'AUTH_FAILED', message: 'Token无效' });
-    }
+    user = await _validateToken(token);
   } catch {
     safeSend(ws, { type: 'error', code: 'AUTH_ERROR', message: '认证服务不可用' });
+    return;
   }
+  if (!user) {
+    safeSend(ws, { type: 'error', code: 'AUTH_FAILED', message: 'Token无效' });
+    return;
+  }
+  _applyAuthenticated(ws, info, user);
 }
 
 // ==================== DELIVERY ENGINE ====================
@@ -236,6 +318,11 @@ function deliver(event, data, options = {}) {
   // 2. 本地 SSE 广播
   const sseFrame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   sseClients.forEach((res) => {
+    if (res.destroyed || res.writableEnded || res.socket?.destroyed) { sseClients.delete(res); return; }
+    const user = sseUsers.get(res);
+    if (!user) return;
+    if (options.system && user.system !== options.system) return;
+    if (options.userId && user.userId !== options.userId) return;
     try { res.write(sseFrame); } catch { sseClients.delete(res); }
   });
 
@@ -258,8 +345,26 @@ function broadcastToAll(message, excludeWs = null) {
   // SSE
   const sseFrame = `event: ${message.type}\ndata: ${JSON.stringify(message.data || message)}\n\n`;
   sseClients.forEach((res) => {
+    if (res.destroyed || res.writableEnded || res.socket?.destroyed) { sseClients.delete(res); sseUsers.delete(res); return; }
+    if (!sseUsers.has(res)) return;
     try { res.write(sseFrame); } catch { sseClients.delete(res); }
   });
+}
+
+// Redis payloads are published by other workers as either a serialized event
+// object or a serialized message. Normalize both forms before local delivery.
+function deliverToAll(rawMessage) {
+  let message = rawMessage;
+  if (typeof rawMessage === 'string') {
+    try { message = JSON.parse(rawMessage); } catch { return; }
+  }
+  if (!message || typeof message !== 'object') return;
+  if (message.type && Object.prototype.hasOwnProperty.call(message, 'data')) {
+    const { type, data, ...options } = message;
+    deliver(type, data, { ...options, force: true });
+    return;
+  }
+  broadcastToAll(message);
 }
 
 /**
@@ -322,14 +427,22 @@ function handleDisconnect(ws, info) {
 }
 
 // ==================== SSE CLIENT MANAGEMENT ====================
-function addSSEClient(res) {
+function addSSEClient(res, user) {
   sseClients.add(res);
-  res.on('close', () => sseClients.delete(res));
-  res.on('error', () => sseClients.delete(res));
+  if (user) sseUsers.set(res, user);
+  res.on('close', () => {
+    sseClients.delete(res);
+    sseUsers.delete(res);
+  });
+  res.on('error', () => {
+    sseClients.delete(res);
+    sseUsers.delete(res);
+  });
 }
 
 function removeSSEClient(res) {
   sseClients.delete(res);
+  sseUsers.delete(res);
 }
 
 // ==================== HELPERS ====================
@@ -422,4 +535,10 @@ module.exports = {
 
   // 指标
   getMetrics,
+
+  // S5.2: cookie-based WS auth (exported for unit testing)
+  authenticateConnection,
+  // S5.2: test-only setter — inject a mock validateToken without calling init()
+  // (init() requires an http server + ws lib). Production path injects via init(deps).
+  _setValidateToken: (fn) => { _validateToken = fn; },
 };

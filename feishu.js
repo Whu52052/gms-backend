@@ -41,7 +41,7 @@ async function getAccessToken() {
 
   if (res.code !== 0) {
     console.error('[Feishu] Failed to get token:', res.msg);
-    throw new Error('Feishu auth failed: ' + res.msg);
+    throw new Error(`Feishu auth failed: ${  res.msg}`);
   }
 
   cachedToken = res.tenant_access_token;
@@ -71,7 +71,7 @@ function feishuRequest(method, path, body) {
         try {
           resolve(JSON.parse(data));
         } catch (e) {
-          reject(new Error('Invalid JSON response: ' + data.slice(0, 200)));
+          reject(new Error(`Invalid JSON response: ${  data.slice(0, 200)}`));
         }
       });
     });
@@ -96,7 +96,7 @@ async function feishuAuthRequest(method, path, body) {
       method: method,
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
-        'Authorization': 'Bearer ' + token,
+        'Authorization': `Bearer ${  token}`,
       },
     };
 
@@ -107,7 +107,7 @@ async function feishuAuthRequest(method, path, body) {
         try {
           resolve(JSON.parse(data));
         } catch (e) {
-          reject(new Error('Invalid JSON response: ' + data.slice(0, 200)));
+          reject(new Error(`Invalid JSON response: ${  data.slice(0, 200)}`));
         }
       });
     });
@@ -123,11 +123,10 @@ async function feishuAuthRequest(method, path, body) {
 // ==================== FIELD MAPPING ====================
 // tech_support record → Feishu Bitable fields
 function mapToFeishuFields(item) {
+  // 3 种状态：待响应 / 处理中 / 已完成（兼容旧枚举）
+  // ⚠️ 取值必须存在于飞书表格"状态"单选字段选项中
   const statusMap = {
-    'pending': '待处理',
-    'responded': '处理中',
-    'completed': '已完成',
-    'closed': '已关闭',
+    pending: '待响应', in_progress: '处理中', completed: '已完成',
   };
 
   // Convert ISO date string to Unix timestamp (ms), or null if empty
@@ -162,10 +161,10 @@ function formatDuration(seconds) {
   if (isNaN(s)) return null;
   if (s < 60) return '<1分钟';
   const m = Math.round(s / 60);
-  if (m < 60) return m + '分钟';
+  if (m < 60) return `${m  }分钟`;
   const h = Math.floor(m / 60);
   const rm = m % 60;
-  return rm > 0 ? h + '时' + rm + '分' : h + '小时';
+  return rm > 0 ? `${h  }时${  rm  }分` : `${h  }小时`;
 }
 
 // Plain number in minutes (for Feishu number field — sum/average friendly)
@@ -184,11 +183,14 @@ const recordIdMap = {}; // tech_support_id → feishu_record_id
 // ==================== SYNC FUNCTIONS ====================
 
 let _initialized = false;
+let _initPromise = null; // 共享初始化 promise，避免并发重复初始化
 async function ensureInit() {
-  if (!_initialized) {
-    _initialized = true;
-    await initFeishuSync();
+  if (_initialized) return;
+  // 并发保护：多个调用共享同一个初始化 promise，避免各自重跑 initFeishuSync
+  if (!_initPromise) {
+    _initPromise = initFeishuSync().then(ok => { _initialized = ok; return ok; });
   }
+  await _initPromise;
 }
 
 /**
@@ -205,12 +207,38 @@ function cleanFields(fields) {
 }
 
 /**
+ * 按请求ID精确查询飞书表格中的记录ID（替代全量初始化依赖）
+ * 使用 Bitable filter：CurrentValue.[请求ID]="xxx"
+ */
+async function findRecordIdByRequestId(techSupportId) {
+  try {
+    const filter = encodeURIComponent(`CurrentValue.[请求ID]="${techSupportId}"`);
+    const path = `/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.tableId}/records?page_size=1&filter=${filter}`;
+    const res = await feishuAuthRequest('GET', path);
+    if (res.code === 0 && res.data?.items?.length > 0) {
+      return res.data.items[0].record_id;
+    }
+    return null;
+  } catch (e) {
+    console.error('[Feishu] Find record error:', e.message);
+    return null;
+  }
+}
+
+/**
  * Sync a tech_support record to Feishu (real-time, async, non-blocking)
  */
 async function syncToFeishu(item) {
   try {
-    await ensureInit();
-    const existingRecordId = recordIdMap[item.id];
+    // 后台预热全量映射（不阻塞本次同步）；失败时由按需查询兜底
+    ensureInit().catch(() => {});
+    let existingRecordId = recordIdMap[item.id];
+    if (!existingRecordId) {
+      // 映射缺失（如服务器刚重启、全量初始化未完成）时按请求ID精确查询，
+      // 避免把"更新"误做成"新建"导致重复记录
+      existingRecordId = await findRecordIdByRequestId(item.id);
+      if (existingRecordId) recordIdMap[item.id] = existingRecordId;
+    }
 
     if (existingRecordId) {
       const fields = cleanFields(mapToFeishuFields(item));
@@ -268,7 +296,7 @@ async function deleteFromFeishu(techSupportId) {
 async function initFeishuSync() {
   console.log('[Feishu] Initializing sync...');
   console.log('[Feishu] App ID:', FEISHU_CONFIG.appId);
-  console.log('[Feishu] Table:', FEISHU_CONFIG.appToken + '/' + FEISHU_CONFIG.tableId);
+  console.log('[Feishu] Table:', `${FEISHU_CONFIG.appToken  }/${  FEISHU_CONFIG.tableId}`);
 
   try {
     // Verify token
@@ -281,7 +309,7 @@ async function initFeishuSync() {
 
     do {
       let path = `/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.tableId}/records?page_size=500`;
-      if (pageToken) path += '&page_token=' + pageToken;
+      if (pageToken) path += `&page_token=${  pageToken}`;
 
       const res = await feishuAuthRequest('GET', path);
 

@@ -6,6 +6,13 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "lint": "eslint . --ext .js --max-warnings 1000",
+    "lint:fix": "eslint . --ext .js --fix",
+    "lint:strict": "eslint . --ext .js --max-warnings 50",
+    "test": "node --test tests/unit/",
+    "test:unit": "node tests/run-unit-tests.js",
+    "test:integration": "node test_functional.js",
+    "test:stress": "node test_concurrent.js",
     "cluster": "pm2 start ecosystem.config.js",
     "stress": "node test_500users.js",
     "docker:up": "docker-compose up -d",
@@ -27,9 +34,16 @@
   "license": "MIT",
   "dependencies": {
     "adm-zip": "^0.5.17",
+    "dotenv": "^17.4.2",
     "mysql2": "^3.22.5",
+    "qrcode": "^1.5.4",
     "redis": "^4.6.0",
+    "web-push": "^3.6.7",
     "ws": "^8.16.0",
     "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@bubblewrap/cli": "^1.25.0",
+    "eslint": "^8.57.1"
   }
 }

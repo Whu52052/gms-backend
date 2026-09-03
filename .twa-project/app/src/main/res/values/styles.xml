@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.GMS" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#3b82f6</item>
+        <item name="colorPrimaryDark">#2563eb</item>
+        <item name="colorAccent">#3b82f6</item>
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">#3b82f6</item>
+        <item name="android:navigationBarColor">#3b82f6</item>
+    </style>
+    
+    <style name="Theme.GMS.SplashScreen" parent="Theme.GMS">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+    </style>
+</resources>

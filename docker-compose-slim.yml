@@ -1,0 +1,65 @@
+services:
+ mysql:
+ image: mysql:8.0
+ container_name: yunwei-mysql
+ restart: always
+ environment:
+ MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD required (set in .env)}
+ MYSQL_DATABASE: gms
+ MYSQL_USER: Wuzhenyu
+ MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required (set in .env)}
+ volumes:
+ - mysql_data:/var/lib/mysql
+ ports:
+ - 127.0.0.1:3306:3306
+ command: >
+ --max_connections=800
+ --innodb_buffer_pool_size=2G
+ --character-set-server=utf8mb4
+ --collation-server=utf8mb4_unicode_ci
+ healthcheck:
+ test: [CMD, mysqladmin, ping, -h, localhost]
+ interval: 10s
+ timeout: 5s
+ retries: 5
+
+ redis:
+ image: redis:7-alpine
+ container_name: yunwei-redis
+ restart: always
+ command: redis-server --appendonly yes --maxmemory 4gb --maxmemory-policy allkeys-lru
+ volumes:
+ - redis_data:/data
+ ports:
+ - 127.0.0.1:6379:6379
+ healthcheck:
+ test: [CMD, redis-cli, ping]
+ interval: 10s
+ timeout: 3s
+ retries: 5
+
+ app:
+ build: .
+ container_name: yunwei-app
+ restart: always
+ environment:
+ NODE_ENV: production
+ PORT: 8765
+ DB_HOST: mysql
+ DB_PORT: 3306
+ DB_USER: Wuzhenyu
+ DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD required (set in .env)}
+ DB_NAME: gms
+ REDIS_HOST: redis
+ REDIS_PORT: 6379
+ ports:
+ - 8765:8765
+ depends_on:
+ mysql:
+ condition: service_healthy
+ redis:
+ condition: service_healthy
+
+volumes:
+ mysql_data:
+ redis_data:

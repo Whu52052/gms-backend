@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>送货单</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body { font-family:"SimSun","Songti SC","STSong","Microsoft YaHei",serif; background:#eef0f2; color:#111; font-size:14px; }
+  .print-area { width:210mm; min-height:297mm; margin:20px auto; background:#fff; padding:10mm 12mm 10mm; box-shadow:0 2px 12px rgba(0,0,0,.12); position:relative; }
+
+  /* 标题 */
+  .title-row { text-align:center; margin-bottom:6mm; }
+  .title-row .company { font-size:26px; font-weight:700; letter-spacing:4px; }
+  .title-row .doc-type { font-size:26px; font-weight:700; letter-spacing:12px; margin-left:16px; }
+
+  /* 头部信息 */
+  .info-table { width:100%; border-collapse:collapse; margin-bottom:4mm; font-size:14px; }
+  .info-table td { padding:3px 4px; vertical-align:middle; }
+  .info-table .label { white-space:nowrap; font-weight:600; width:72px; text-align:right; padding-right:6px; }
+  .info-table .value { border-bottom:1px solid #333; min-width:60px; padding-bottom:2px; outline:none; }
+
+  /* 主表格 */
+  table.main { width:100%; border-collapse:collapse; margin:0 0 6mm; table-layout:fixed; }
+  table.main th, table.main td { border:1px solid #111; padding:5px 6px; font-size:13px; text-align:center; vertical-align:middle; height:32px; }
+  table.main th { font-weight:700; background:#f5f5f5; }
+  table.main th:nth-child(1), table.main td:nth-child(1) { width:8%; }
+  table.main th:nth-child(2), table.main td:nth-child(2) { width:30%; }
+  table.main th:nth-child(3), table.main td:nth-child(3) { width:10%; }
+  table.main th:nth-child(4), table.main td:nth-child(4) { width:10%; }
+  table.main th:nth-child(5), table.main td:nth-child(5) { width:42%; }
+  table.main td.left { text-align:left; }
+  table.main td.sn-cell { font-family:'Courier New',monospace; font-size:12px; word-break:break-all; text-align:left; }
+  table.main td[contenteditable]:focus { background:#fffde7; outline:1px solid #1a73e8; outline-offset:-1px; }
+  table.main td[contenteditable]:hover { background:#f9f9f9; }
+  .total-row td { font-weight:700; }
+
+  /* 签字区 */
+  .sign-area { display:flex; justify-content:space-between; margin-top:18mm; padding:0 4mm; font-size:14px; }
+  .sign-block { text-align:center; width:42%; }
+  .sign-block .line { border-bottom:1px solid #111; height:40px; margin-bottom:6px; }
+
+  /* 可编辑区域高亮 */
+  [contenteditable]:focus { background:#fffde7; outline:1px solid #1a73e8; outline-offset:-1px; border-radius:2px; }
+  [contenteditable]:hover { background:#f5f5f5; }
+
+  /* 工具栏 */
+  .toolbar { position:fixed; top:16px; right:16px; z-index:1000; display:flex; gap:8px; }
+  .toolbar button { padding:10px 22px; font-size:14px; border:none; border-radius:6px; cursor:pointer; font-weight:600; box-shadow:0 2px 8px rgba(0,0,0,.2); }
+  .btn-print { background:#1a73e8; color:#fff; }
+  .btn-back { background:#fff; color:#333; border:1px solid #ccc !important; }
+
+  @media print {
+    @page { size:A4 portrait; margin:0; }
+    body { background:#fff; }
+    .print-area { margin:0; box-shadow:none; }
+    .toolbar { display:none !important; }
+  }
+  @media screen and (max-width: 600px) {
+    .print-area { width:100%; min-height:0; margin:0; padding:12px 8px 20px; box-shadow:none; overflow:hidden; }
+    .title-row .company { font-size:18px; }
+    .title-row .doc-type { font-size:18px; letter-spacing:6px; }
+    .info-table { font-size:12px; }
+    .info-table .label { width:56px; font-size:11px; }
+    table.main th, table.main td { padding:4px 3px; font-size:11px; }
+    table.main th:nth-child(1), table.main td:nth-child(1) { width:9%; }
+    table.main th:nth-child(2), table.main td:nth-child(2) { width:28%; }
+    table.main th:nth-child(3), table.main td:nth-child(3) { width:12%; }
+    table.main th:nth-child(5), table.main td:nth-child(5) { width:40%; }
+    .sign-area { font-size:12px; margin-top:36px; }
+    .stamp { display:none; }
+    .toolbar { top:auto; bottom:12px; right:12px; left:12px; justify-content:center; }
+    .toolbar button { flex:1; padding:10px 8px; }
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <button class="btn-print" onclick="window.print()">打印送货单</button>
+    <button class="btn-back" onclick="window.close()">关闭</button>
+  </div>
+  <div class="print-area" id="print-area"></div>
+
+<script>
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var itemsRaw = params.get('items') || '[]';
+  var items = [];
+  try { items = JSON.parse(decodeURIComponent(itemsRaw)); } catch(e) { items = []; }
+  var tracking = params.get('tracking') || '';
+  var orderNo = params.get('orderNo') || '';
+  var operator = params.get('operator') || '';
+  var shipDate = params.get('date') || new Date().toLocaleDateString('zh-CN');
+  var company = params.get('company') || '万达智慧手套';
+  var manufacturer = params.get('manufacturer') || '';
+  var customerPhone = params.get('customerPhone') || '';
+  var creator = params.get('creator') || operator || '';
+  var customerAddress = params.get('customerAddress') || '';
+  var contactPerson = params.get('contactPerson') || '';
+
+  var totalQty = items.length;
+
+  // 每行一个 SN
+  var rows = items.map(function(it, i) {
+    var eqLabel = it.eqLabel || it.equipmentType || '手套';
+    var hand = it.handLabel || '';
+    var reason = it.reason || '';
+    // 产品名称：手套-左手-售后
+    var nameStr = eqLabel;
+    if (hand && hand !== '-') nameStr += '-' + hand;
+    if (reason) nameStr += '-' + reason;
+    // 产品编码：SN 码
+    var codeStr = it.snCode || it.sn || '';
+
+    return '<tr>' +
+      '<td>' + (i+1) + '</td>' +
+      '<td class="left" contenteditable="true">' + nameStr + '</td>' +
+      '<td contenteditable="true">pcs</td>' +
+      '<td contenteditable="true">1</td>' +
+      '<td class="left sn-cell" contenteditable="true">' + codeStr + '</td>' +
+      '</tr>';
+  }).join('');
+
+  var html =
+    // 标题
+    '<div class="title-row">' +
+      '<span class="company" contenteditable="true">' + company + '</span>' +
+      '<span class="doc-type" contenteditable="true">送货单</span>' +
+    '</div>' +
+
+    // 头部信息
+    '<table class="info-table">' +
+      '<tr>' +
+        '<td class="label">收货方：</td><td class="value" contenteditable="true">' + manufacturer + '</td>' +
+        '<td class="label">电话：</td><td class="value" contenteditable="true">' + customerPhone + '</td>' +
+        '<td class="label">制单人员：</td><td class="value" contenteditable="true">' + creator + '</td>' +
+      '</tr>' +
+      '<tr>' +
+        '<td class="label">地址：</td><td class="value" contenteditable="true" colspan="2">' + customerAddress + '</td>' +
+        '<td class="label">联系人：</td><td class="value" contenteditable="true">' + contactPerson + '</td>' +
+        '<td class="label">送货日期：</td><td class="value" contenteditable="true">' + shipDate + '</td>' +
+      '</tr>' +
+    '</table>' +
+
+    // 主表格
+    '<table class="main">' +
+      '<thead><tr>' +
+        '<th>序号</th>' +
+        '<th>物品名称</th>' +
+        '<th>单位</th>' +
+        '<th>数量</th>' +
+        '<th>SN</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rows +
+        '<tr class="total-row"><td colspan="3">合计</td><td>' + totalQty + '</td><td></td></tr>' +
+      '</tbody>' +
+    '</table>' +
+
+    // 签字区
+    '<div class="sign-area">' +
+      '<div class="sign-block"><div class="line"></div>送货方签字</div>' +
+      '<div class="sign-block"><div class="line"></div>收货方签字</div>' +
+    '</div>';
+
+  document.getElementById('print-area').innerHTML = html;
+})();
+</script>
+</body>
+</html>

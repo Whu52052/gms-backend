@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GMS 手套管理系统</string>
+    <string name="gms_description">手套/灵巧手/夹爪库存与机器管理系统</string>
+    <string name="shortcut_dashboard">仪表盘</string>
+    <string name="shortcut_dashboard_short">仪表盘</string>
+    <string name="shortcut_profile">个人中心</string>
+    <string name="shortcut_profile_short">个人</string>
+    <string name="shortcut_support">技术支持</string>
+    <string name="shortcut_support_short">工单</string>
+    <style name="Theme.GMS" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#3b82f6</item>
+        <item name="colorPrimaryDark">#2563eb</item>
+        <item name="colorAccent">#3b82f6</item>
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">#3b82f6</item>
+        <item name="android:navigationBarColor">#3b82f6</item>
+    </style>
+    <style name="Theme.GMS.SplashScreen" parent="Theme.GMS">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+    </style>
+</resources>

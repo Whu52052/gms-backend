@@ -1,0 +1,25 @@
+# 依赖和构建产物
+node_modules/
+dist/
+build/
+assets/
+web/dist/
+.twa-project/
+.apk-build/
+
+# 第三方库
+public/lib/
+
+# 测试产物
+coverage/
+
+# 日志和临时文件
+*.log
+*.min.js
+
+# 调试/测试脚本（用于开发调试，不纳入生产代码质量检查）
+debug_*.js
+test_*.js
+repro_*.js
+simulate_*.js
+smoke_test*.js

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_dashboard">仪表盘</string>
+    <string name="shortcut_dashboard_short">仪表盘</string>
+    <string name="shortcut_support">技术支持</string>
+    <string name="shortcut_support_short">工单</string>
+    <string name="shortcut_profile">个人中心</string>
+    <string name="shortcut_profile_short">个人</string>
+</resources>

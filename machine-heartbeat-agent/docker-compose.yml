@@ -1,0 +1,38 @@
+services:
+  heartbeat-agent:
+    build: .
+    container_name: gms-heartbeat-agent
+    restart: unless-stopped
+    # 必须用 host 网络：agent 需要直连设备网段 192.168.1.x（手套/灵巧手/机械臂）
+    network_mode: host
+    environment:
+      # GMS 中心地址
+      - GMS_BACKEND_URL=http://10.5.51.216:8765
+      # 边缘接入令牌（必填，与服务端 .env 的 EDGE_TOKEN 一致；建议写在同目录 .env 中）
+      - EDGE_TOKEN=${EDGE_TOKEN}
+      # 机器编号（留空则从 hostname we-xxx 自动检测）
+      # - MACHINE_NUMBER=we-100
+      # 心跳间隔（秒）
+      - HEARTBEAT_INTERVAL=30
+    volumes:
+      # SN 识别方式1：WUJI 标定目录（只读）
+      - /var/.rdc2:/var/.rdc2:ro
+      # SN 识别方式2：读取采集器容器 importer-staging 的 /exchange/machine.jsonc
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Quest 走 ADB over network（TCP 5555）无需透传 USB；若用 USB 调试再放开：
+    # devices:
+    #   - /dev/bus/usb:/dev/bus/usb
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 48M

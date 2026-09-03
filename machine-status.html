@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>机器状态</title>
+  <link rel="stylesheet" href="css/status-pages.css?v=2">
+  <style>
+    .machine-code {
+      font-family: var(--mono);
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.02em;
+      word-break: break-all;
+    }
+
+    /* Status */
+    .status-block { text-align: center; padding: 12px 0; }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 24px;
+      border-radius: 50px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .status-online { background: #ecfdf5; color: #047857; }
+    .status-online .status-dot { background: #10b981; }
+    .status-partial { background: #fffbeb; color: #92400e; }
+    .status-partial .status-dot { background: #f59e0b; }
+    .status-offline { background: #f0f0f0; color: #525252; }
+    .status-offline .status-dot { background: #737373; }
+    .status-waiting_repair, .status-repairing { background: #fff1f2; color: #be123c; }
+    .status-waiting_repair .status-dot, .status-repairing .status-dot { background: #f43f5e; animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+
+    /* Ticket card */
+    .ticket-card {
+      background: #fff1f2;
+      border: 1px solid #fecaca;
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      margin-bottom: 12px;
+    }
+    .ticket-card .card-label { color: #be123c; }
+    .ticket-card .info-cell { background: rgba(255,255,255,0.6); }
+    .ticket-fault { font-size: 0.95rem; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+    .ticket-desc { font-size: 0.8rem; color: var(--text2); margin-top: 6px; line-height: 1.55; }
+    .ticket-actions { margin-top: 14px; display: flex; gap: 8px; }
+    .ticket-actions .btn { margin-bottom: 0; flex: 1; }
+
+    /* Realtime popup */
+    .popup {
+      position: fixed;
+      top: calc(12px + env(safe-area-inset-top));
+      left: 12px; right: 12px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      z-index: 2000;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+      transform: translateY(-160%);
+      transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      line-height: 1.5;
+    }
+    .popup.show { transform: translateY(0); }
+    .popup-icon { font-size: 1.1rem; flex-shrink: 0; line-height: 1.3; }
+    .popup-body { flex: 1; min-width: 0; }
+    .popup-title { font-weight: 700; margin-bottom: 2px; }
+    .popup-sub { font-size: 0.76rem; opacity: 0.85; word-break: break-all; }
+    .popup-close {
+      background: none; border: none; color: inherit;
+      font-size: 1.1rem; line-height: 1; cursor: pointer;
+      opacity: 0.6; padding: 0 0 0 6px; flex-shrink: 0;
+    }
+    .popup-close:hover { opacity: 1; }
+    .popup.new { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+    .popup.in_progress, .popup.assigned { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+    .popup.resolved, .popup.completed { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+    .popup.deleted { background: #f3f4f6; color: #4b5563; border: 1px solid #d1d5db; }
+
+    /* Checklist */
+    .ck-list { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-bottom: 4px; }
+    .ck-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 0.88rem; }
+    .ck-row:last-child { border-bottom: none; }
+    .ck-label { color: var(--text); flex: 1; font-weight: 500; }
+    .ck-select { width: 108px; flex-shrink: 0; padding: 7px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.82rem; font-family: var(--sans); background: var(--bg); color: var(--text); }
+    .ck-select:focus { outline: none; border-color: #0a0a0a; }
+
+    /* User bar */
+    .user-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 14px; background: var(--surface);
+      border-radius: var(--radius-sm); margin-bottom: 12px;
+      font-size: 0.75rem; color: var(--text2);
+    }
+    .user-bar .user-name { color: var(--text); font-weight: 600; }
+    .link-btn { background: none; border: none; color: var(--text3); font-size: 0.72rem; cursor: pointer; padding: 2px 6px; font-weight: 500; font-family: var(--mono); }
+    .link-btn:hover { color: var(--text2); }
+
+    /* machine-status overlay z-index override */
+    .overlay { z-index: 3000; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-label">machine status</div>
+    <div class="header-title">机器状态</div>
+  </div>
+
+  <div class="container">
+    <div id="main-content">
+      <div class="loading"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- 实时弹窗 -->
+  <div id="ticket-popup" class="popup" style="display:none;">
+    <div class="popup-icon" id="popup-icon"></div>
+    <div class="popup-body">
+      <div class="popup-title" id="popup-title"></div>
+      <div class="popup-sub" id="popup-sub"></div>
+    </div>
+    <button class="popup-close" onclick="hideTicketPopup()" aria-label="关闭">×</button>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <div id="conn-indicator" class="conn-indicator" title="实时连接"></div>
+
+  <!-- 用户验证弹窗 -->
+  <div id="auth-overlay" class="overlay" style="display:none;">
+    <div class="sheet">
+      <h2 class="sheet-title">用户验证</h2>
+      <p class="sheet-desc">响应/完成维修需先验证运维账号</p>
+      <div class="form-error" id="auth-error"></div>
+      <input type="text" class="input" id="auth-username" placeholder="用户名" autocomplete="off">
+      <input type="password" class="input" id="auth-password" placeholder="密码" autocomplete="off">
+      <button class="btn btn-primary" onclick="doAuth()">验证登录</button>
+      <button class="btn btn-outline" onclick="hideAuthDialog()">取消</button>
+    </div>
+  </div>
+
+  <!-- 维修完成弹窗 -->
+  <div id="complete-overlay" class="overlay" style="display:none;">
+    <div class="sheet">
+      <h2 class="sheet-title"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>维修完成</h2>
+      <p class="sheet-desc">请确认设备状态后填写维修结果</p>
+      <div class="form-error" id="complete-error"></div>
+      <div class="ck-list" id="complete-checklist">
+        <div class="ck-row"><div class="ck-label">Quest 是否连接</div><select class="ck-select" data-ck="questConnected"><option value="yes">已连接</option><option value="no">未连接</option></select></div>
+        <div class="ck-row"><div class="ck-label">左手腕相机是否连接</div><select class="ck-select" data-ck="wristCamLConnected"><option value="yes">已连接</option><option value="no">未连接</option></select></div>
+        <div class="ck-row"><div class="ck-label">右手腕相机是否连接</div><select class="ck-select" data-ck="wristCamRConnected"><option value="yes">已连接</option><option value="no">未连接</option></select></div>
+        <div class="ck-row"><div class="ck-label">左手腕相机页面是否匹配</div><select class="ck-select" data-ck="wristPageLMatched"><option value="yes">匹配</option><option value="no">不匹配</option></select></div>
+        <div class="ck-row"><div class="ck-label">右手腕相机页面是否匹配</div><select class="ck-select" data-ck="wristPageRMatched"><option value="yes">匹配</option><option value="no">不匹配</option></select></div>
+        <div class="ck-row"><div class="ck-label">左手套是否连接</div><select class="ck-select" data-ck="gloveLConnected"><option value="yes">已连接</option><option value="no">未连接</option></select></div>
+        <div class="ck-row"><div class="ck-label">右手套是否连接</div><select class="ck-select" data-ck="gloveRConnected"><option value="yes">已连接</option><option value="no">未连接</option></select></div>
+        <div class="ck-row"><div class="ck-label">是否能正常生产</div><select class="ck-select" data-ck="canProduce"><option value="yes">可以</option><option value="no">不可以</option></select></div>
+      </div>
+      <textarea class="input" id="complete-result" placeholder="维修结果说明（必填）" style="margin-top:14px;"></textarea>
+      <button class="btn btn-success" onclick="submitComplete()">确认完成</button>
+      <button class="btn btn-outline" onclick="hideCompleteDialog()">取消</button>
+    </div>
+  </div>
+
+  <!-- 班次首检弹窗 -->
+  <div id="inspection-overlay" class="overlay" style="display:none;">
+    <div class="sheet">
+      <h2 class="sheet-title"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>班次首检</h2>
+      <p class="sheet-desc" id="inspection-desc">请检查设备状态，确认无误后提交</p>
+      <div class="form-error" id="inspection-error"></div>
+      <div class="ck-list" id="inspection-checklist">
+        <div class="ck-row"><div class="ck-label">Quest 是否连接</div><select class="ck-select" data-ck="questConnected"><option value="yes">已连接</option><option value="no">未连接</option></select></div>
+        <div class="ck-row"><div class="ck-label">左手腕相机是否连接</div><select class="ck-select" data-ck="wristCamLConnected"><option value="yes">已连接</option><option value="no">未连接</option></select></div>
+        <div class="ck-row"><div class="ck-label">右手腕相机是否连接</div><select class="ck-select" data-ck="wristCamRConnected"><option value="yes">已连接</option><option value="no">未连接</option></select></div>
+        <div class="ck-row"><div class="ck-label">左手腕相机页面是否匹配</div><select class="ck-select" data-ck="wristPageLMatched"><option value="yes">匹配</option><option value="no">不匹配</option></select></div>
+        <div class="ck-row"><div class="ck-label">右手腕相机页面是否匹配</div><select class="ck-select" data-ck="wristPageRMatched"><option value="yes">匹配</option><option value="no">不匹配</option></select></div>
+        <div class="ck-row"><div class="ck-label">左手套是否连接</div><select class="ck-select" data-ck="gloveLConnected"><option value="yes">已连接</option><option value="no">未连接</option></select></div>
+        <div class="ck-row"><div class="ck-label">右手套是否连接</div><select class="ck-select" data-ck="gloveRConnected"><option value="yes">已连接</option><option value="no">未连接</option></select></div>
+        <div class="ck-row"><div class="ck-label">手柄电池电量</div><select class="ck-select" data-ck="controllerBatteryOk"><option value="yes">正常</option><option value="no">低电量</option></select></div>
+        <div class="ck-row"><div class="ck-label">overlay 是否可用</div><select class="ck-select" data-ck="overlayAvailable"><option value="yes">可用</option><option value="no">不可用</option></select></div>
+        <div class="ck-row"><div class="ck-label">是否能正常生产</div><select class="ck-select" data-ck="canProduce"><option value="yes">可以</option><option value="no">不可以</option></select></div>
+      </div>
+      <textarea class="input" id="inspection-note" placeholder="备注（可选）" style="margin-top:14px;"></textarea>
+      <button class="btn btn-success" onclick="submitShiftInspection()">确认首检</button>
+      <button class="btn btn-outline" onclick="hideInspectionDialog()">取消</button>
+    </div>
+  </div>
+
+  <script src="js/status-pages-common.js?v=1"></script>
+  <script>
+    var escapeHtml = StatusPageUtils.escapeHtml;
+    var formatTime = StatusPageUtils.formatTime;
+    var showToast = StatusPageUtils.showToast;
+    const API_BASE = window.location.origin;
+    let machineData = null;
+    let machineCode = null;
+    let currentUser = null;
+    let lastActiveTicketId = null;
+    let lastActiveTicketStatus = null;
+    let evtSource = null;
+    let popupTimer = null;
+    let refreshTimer = null;
+
+    // ---------- SVG 图标（弹窗用） ----------
+    const redDotSvg = '<svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="#ef4444"/></svg>';
+    const yellowDotSvg = '<svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="#f59e0b"/></svg>';
+    const greenDotSvg = '<svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="#22c55e"/></svg>';
+    const grayDotSvg = '<svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="#9ca3af"/></svg>';
+    const wrenchSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
+    const bellSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
+
+    // ---------- 工具 ----------
+    // escapeHtml, formatTime, showToast — provided by StatusPageUtils (status-pages-common.js)
+
+    // ---------- 本地存储 ----------
+    function getStoredUser() {
+      try {
+        const stored = localStorage.getItem('gms_machine_user');
+        if (stored) {
+          const data = JSON.parse(stored);
+          if (data.token && data.user && data.expiresAt && data.expiresAt > Date.now()) return data;
+        }
+      } catch (e) {}
+      return null;
+    }
+    function storeUser(token, user) {
+      try { localStorage.setItem('gms_machine_user', JSON.stringify({ token, user, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 })); } catch (e) {}
+    }
+    function clearStoredUser() { try { localStorage.removeItem('gms_machine_user'); } catch (e) {} }
+
+    // ---------- 认证 UI ----------
+    function showAuthDialog() {
+      document.getElementById('auth-overlay').style.display = 'flex';
+      setTimeout(() => document.getElementById('auth-username').focus(), 100);
+    }
+    function hideAuthDialog() { document.getElementById('auth-overlay').style.display = 'none'; }
+    function hideCompleteDialog() { document.getElementById('complete-overlay').style.display = 'none'; }
+    function hideInspectionDialog() { document.getElementById('inspection-overlay').style.display = 'none'; }
+
+    // ---------- 班次首检 ----------
+    function showShiftInspection() {
+      if (!currentUser && !getStoredUser()) { showAuthDialog(); return; }
+      document.getElementById('inspection-error').textContent = '';
+      document.getElementById('inspection-note').value = '';
+      document.getElementById('inspection-desc').textContent = `机器：${machineCode}`;
+      // 重置所有检查项为默认"是"
+      document.querySelectorAll('#inspection-checklist .ck-select').forEach(sel => { sel.value = 'yes'; });
+      document.getElementById('inspection-overlay').style.display = 'flex';
+    }
+
+    async function submitShiftInspection() {
+      if (!machineCode) { showToast('机器编号缺失', 3000); return; }
+      const errorEl = document.getElementById('inspection-error');
+      errorEl.textContent = '';
+      // 收集检查清单
+      const checklist = {};
+      document.querySelectorAll('#inspection-checklist .ck-select').forEach(sel => {
+        checklist[sel.dataset.ck] = sel.value === 'yes';
+      });
+      const note = document.getElementById('inspection-note').value.trim();
+      const stored = getStoredUser();
+      if (!stored) { showAuthDialog(); return; }
+      try {
+        // 计算当前班次：17:00‑次日02:00 为 night，其余为 morning
+        const now = new Date();
+        const hour = now.getHours();
+        const shift = (hour >= 17 || hour < 2) ? 'night' : 'morning';
+        const res = await fetch(`${API_BASE}/api/machines/${encodeURIComponent(machineCode)}/shift-inspection`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${stored.token}` },
+          body: JSON.stringify({ checklist, note, shift })
+        });
+        const data = await res.json();
+        if (data.success) {
+          hideInspectionDialog();
+          showToast('✅ 班次首检已提交');
+          await loadMachineStatus(false);
+        } else {
+          errorEl.textContent = data.error || '提交失败';
+        }
+      } catch (e) { errorEl.textContent = '网络错误，请重试'; }
+    }
+
+    async function doAuth() {
+      const username = document.getElementById('auth-username').value.trim();
+      const password = document.getElementById('auth-password').value.trim();
+      const errorEl = document.getElementById('auth-error');
+      if (!username || !password) { errorEl.textContent = '请输入用户名和密码'; return; }
+      errorEl.textContent = '';
+      try {
+        const res = await fetch(`${API_BASE}/api/mobile/auth`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+        if (data.success) {
+          currentUser = data.user;
+          storeUser(data.token, data.user);
+          hideAuthDialog();
+          showToast('验证成功');
+          await loadMachineStatus(false);
+        } else {
+          errorEl.textContent = data.error || '登录失败';
+        }
+      } catch (e) { errorEl.textContent = '网络错误，请重试'; }
+    }
+
+    function logout() {
+      clearStoredUser();
+      currentUser = null;
+      showToast('已退出登录');
+      loadMachineStatus(false);
+    }
+
+    // ---------- 带认证的请求 ----------
+    async function authFetch(url, options = {}) {
+      const stored = getStoredUser();
+      if (!stored) { showAuthDialog(); return { error: '请先登录' }; }
+      const headers = { 'Content-Type': 'application/json', ...options.headers };
+      if (stored.token) headers['Authorization'] = `Bearer ${stored.token}`;
+      try {
+        const res = await fetch(`${API_BASE}${url}`, { ...options, headers });
+        return await res.json();
+      } catch (e) { return { error: '网络错误' }; }
+    }
+
+    // ---------- 响应 / 完成维修 ----------
+    async function respondTicket(ticketId) {
+      if (!currentUser && !getStoredUser()) { showAuthDialog(); return; }
+      showToast('正在响应...');
+      const data = await authFetch(`/api/tech-support/${encodeURIComponent(ticketId)}/respond`, { method: 'POST' });
+      if (data.success) {
+        showToast('✅ 已响应，开始维修');
+        await loadMachineStatus(false);
+      } else {
+        showToast(data.error || '操作失败', 3000);
+      }
+    }
+
+    let _pendingCompleteTicketId = null;
+    function completeTicket(ticketId, faultType) {
+      if (!currentUser && !getStoredUser()) { showAuthDialog(); return; }
+      _pendingCompleteTicketId = ticketId;
+      document.getElementById('complete-result').value = '';
+      document.getElementById('complete-error').textContent = '';
+      document.getElementById('complete-overlay').style.display = 'flex';
+      setTimeout(() => document.getElementById('complete-result').focus(), 100);
+    }
+
+    async function submitComplete() {
+      if (!_pendingCompleteTicketId) return;
+      const result = document.getElementById('complete-result').value.trim();
+      const errorEl = document.getElementById('complete-error');
+      if (!result) { errorEl.textContent = '请填写维修结果'; return; }
+      errorEl.textContent = '';
+      // 收集设备检查清单
+      const checklist = {};
+      document.querySelectorAll('#complete-checklist .ck-select').forEach(sel => {
+        checklist[sel.dataset.ck] = sel.value === 'yes';
+      });
+      const data = await authFetch(`/api/tech-support/${encodeURIComponent(_pendingCompleteTicketId)}/complete`, {
+        method: 'POST', body: JSON.stringify({ result, checklist })
+      });
+      if (data.success) {
+        hideCompleteDialog();
+        showToast('✅ 维修完成');
+        _pendingCompleteTicketId = null;
+        await loadMachineStatus(false);
+      } else {
+        errorEl.textContent = data.error || '操作失败';
+      }
+    }
+
+    // ---------- 数据请求 ----------
+    async function fetchData(url) {
+      try {
+        const res = await fetch(`${API_BASE}${url}`);
+        return await res.json();
+      } catch (e) { return { error: '网络错误' }; }
+    }
+
+    async function loadMachineStatus(silent) {
+      if (!machineCode) {
+        document.getElementById('main-content').innerHTML = `<div class="empty-state"><div class="empty-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div><p style="font-size:0.85rem;">无效的链接</p></div>`;
+        return null;
+      }
+      const data = await fetchData(`/api/machines/${encodeURIComponent(machineCode)}/status`);
+      if (!data.success) {
+        if (!silent) {
+          document.getElementById('main-content').innerHTML = `<div class="empty-state"><div class="empty-icon">—</div><p style="font-size:0.85rem;">${escapeHtml(data.error || '未找到该机器')}</p></div>`;
+        }
+        return null;
+      }
+      machineData = data;
+      if (!silent) {
+        lastActiveTicketId = data.activeTicket ? data.activeTicket.id : null;
+        lastActiveTicketStatus = data.activeTicket ? data.activeTicket.status : null;
+        renderStatus(data);
+        loadShiftInspections(); // 加载最近班次首检记录
+      }
+      return data;
+    }
+
+    // ---------- 班次首检记录 ----------
+    let lastInspections = [];
+    async function loadShiftInspections() {
+      try {
+        const stored = getStoredUser();
+        if (!stored) { lastInspections = []; renderInspections(); return; }
+        const res = await fetch(`${API_BASE}/api/machines/${encodeURIComponent(machineCode)}/shift-inspections`, {
+          headers: { 'Authorization': `Bearer ${stored.token}` }
+        });
+        const data = await res.json();
+        lastInspections = (data && data.success && data.list) || [];
+        renderInspections();
+      } catch (e) { lastInspections = []; renderInspections(); }
+    }
+    function renderInspections() {
+      const wrap = document.getElementById('inspection-list');
+      if (!wrap) return;
+      if (!lastInspections.length) {
+        wrap.innerHTML = '<div class="empty-state" style="padding:16px 0;"><p style="font-size:0.82rem;color:var(--text3);">暂无首检记录</p></div>';
+        return;
+      }
+      wrap.innerHTML = lastInspections.map(it => {
+        const cl = it.checklist || {};
+        const allOk = ['questConnected','wristCamLConnected','wristCamRConnected','wristPageLMatched','wristPageRMatched','gloveLConnected','gloveRConnected','controllerBatteryOk','overlayAvailable','canProduce']
+          .every(k => cl[k] !== false && cl[k] !== 'no' && cl[k] !== 'false');
+        const badge = allOk
+          ? '<span class="status-badge" style="background:#ecfdf5;color:#047857;"><span class="status-dot" style="background:#10b981;"></span>正常</span>'
+          : '<span class="status-badge" style="background:#fef2f2;color:#be123c;"><span class="status-dot" style="background:#ef4444;"></span>异常</span>';
+        return `<div class="ticket-card">
+          <div class="ticket-fault" style="display:flex;align-items:center;justify-content:space-between;">首检 · ${escapeHtml(it.operator || '—')} ${badge}</div>
+          <div class="ticket-desc">${escapeHtml(formatTime(it.createdAt))}${it.note ? ' · ' + escapeHtml(it.note) : ''}</div>
+        </div>`;
+      }).join('');
+    }
+
+    // ---------- 渲染 ----------
+    function renderStatus(data) {
+      const deviceLabel = data.deviceType === 'glove' ? '手套机' : data.deviceType || '设备';
+      const statusBadge = `<span class="status-badge status-${data.status}"><span class="status-dot"></span>${escapeHtml(data.statusLabel)}</span>`;
+      const updatedAt = data.updatedAt ? formatTime(data.updatedAt) : '—';
+
+      // 绑定信息
+      const leftCell = data.leftSN
+        ? `<div class="info-cell"><div class="info-label">left glove</div><div class="info-value mono">${escapeHtml(data.leftSN)}</div></div>`
+        : `<div class="info-cell"><div class="info-label">left glove</div><div class="info-value muted">未绑定</div></div>`;
+      const rightCell = data.rightSN
+        ? `<div class="info-cell"><div class="info-label">right glove</div><div class="info-value mono">${escapeHtml(data.rightSN)}</div></div>`
+        : `<div class="info-cell"><div class="info-label">right glove</div><div class="info-value muted">未绑定</div></div>`;
+
+      // 活跃工单卡
+      let ticketHtml = '';
+      if (data.activeTicket) {
+        const t = data.activeTicket;
+        const ticketStatusLabel = {
+          open: '待响应', assigned: '已派单', in_progress: '处理中', reopened: '已重开'
+        }[t.status] || t.status;
+
+        // 操作按钮：根据工单状态显示
+        const canRespond = ['open', 'assigned', 'reopened'].includes(t.status);
+        const canComplete = ['in_progress', 'reopened'].includes(t.status);
+        const escapedId = escapeHtml(t.id);
+        const escapedFault = escapeHtml(t.faultType || '');
+        let actionsHtml = '';
+        if (canRespond) {
+          actionsHtml += `<button class="btn btn-primary" onclick="respondTicket('${escapedId}')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>响应维修</button>`;
+        }
+        if (canComplete) {
+          actionsHtml += `<button class="btn btn-success" onclick="completeTicket('${escapedId}','${escapedFault}')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><polyline points="20 6 9 17 4 12"/></svg>维修完成</button>`;
+        }
+
+        ticketHtml = `
+          <div class="ticket-card">
+            <div class="card-label"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>active ticket</div>
+            <div class="ticket-fault">${escapeHtml(t.faultType || '未填写')}</div>
+            ${t.faultDescription ? `<div class="ticket-desc">${escapeHtml(t.faultDescription)}</div>` : ''}
+            <div class="info-grid">
+              <div class="info-cell"><div class="info-label">ticket id</div><div class="info-value mono" style="font-size:0.72rem;">${escapeHtml(t.id)}</div></div>
+              <div class="info-cell"><div class="info-label">ticket status</div><div class="info-value">${escapeHtml(ticketStatusLabel)}</div></div>
+              <div class="info-cell"><div class="info-label">submitter</div><div class="info-value">${escapeHtml(t.submitterName || '—')}</div></div>
+              <div class="info-cell"><div class="info-label">submitted at</div><div class="info-value">${formatTime(t.submittedAt)}</div></div>
+              ${t.responderName ? `<div class="info-cell full"><div class="info-label">responder</div><div class="info-value">${escapeHtml(t.responderName)} · ${formatTime(t.respondedAt)}</div></div>` : ''}
+            </div>
+            ${actionsHtml ? `<div class="ticket-actions">${actionsHtml}</div>` : ''}
+          </div>`;
+      }
+
+      // 用户栏（登录状态）
+      const stored = getStoredUser();
+      const userBarHtml = stored
+        ? `<div class="user-bar"><span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span class="user-name">${escapeHtml(stored.user.username || stored.user.displayName || '用户')}</span></span><button class="link-btn" onclick="logout()">退出</button></div>`
+        : `<div class="user-bar"><span style="color:var(--text3);">响应/完成维修需登录</span><button class="link-btn" onclick="showAuthDialog()">登录</button></div>`;
+
+      document.getElementById('main-content').innerHTML = `
+        ${userBarHtml}
+        <div class="card">
+          <div class="card-label">machine code</div>
+          <div class="machine-code">${escapeHtml(data.machineNumber)}</div>
+          <div class="meta-row">
+            <span class="meta-tag">${escapeHtml(deviceLabel)}</span>
+            <span class="meta-tag">更新于 ${escapeHtml(updatedAt)}</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">status</div>
+          <div class="status-block">${statusBadge}</div>
+          <div class="info-grid">
+            <div class="info-cell"><div class="info-label">online time</div><div class="info-value">${formatTime(data.onlineTime)}</div></div>
+            <div class="info-cell"><div class="info-label">offline time</div><div class="info-value">${formatTime(data.offlineTime)}</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">glove bindings</div>
+          <div class="info-grid">${leftCell}${rightCell}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">shift inspection · 班次首检</div>
+          <button class="btn btn-primary" style="width:100%;margin-bottom:12px;" onclick="showShiftInspection()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>班次首检</button>
+          <div id="inspection-list"><div class="empty-state" style="padding:16px 0;"><p style="font-size:0.82rem;color:var(--text3);">加载中...</p></div></div>
+        </div>
+        ${ticketHtml}
+      `;
+    }
+
+    // ---------- 实时弹窗 ----------
+    function showTicketPopup(kind, ticket) {
+      const popup = document.getElementById('ticket-popup');
+      const iconEl = document.getElementById('popup-icon');
+      const titleEl = document.getElementById('popup-title');
+      const subEl = document.getElementById('popup-sub');
+
+      const cfg = {
+        new:           { icon: redDotSvg, title: '新技术支持请求',   sub: ticket ? `${ticket.faultType || ''}${ticket.submitterName ? ' · 提交人 ' + ticket.submitterName : ''}` : '' },
+        assigned:      { icon: yellowDotSvg, title: '工单已派单',       sub: ticket && ticket.responderName ? '维修人员：' + ticket.responderName : '' },
+        in_progress:   { icon: wrenchSvg, title: '维修人员已响应',    sub: ticket && ticket.responderName ? '维修人员：' + ticket.responderName : '' },
+        resolved:      { icon: greenDotSvg, title: '维修已完成',       sub: ticket && ticket.faultType ? '故障：' + ticket.faultType : '' },
+        completed:     { icon: greenDotSvg, title: '维修已完成',       sub: ticket && ticket.faultType ? '故障：' + ticket.faultType : '' },
+        deleted:       { icon: grayDotSvg, title: '工单已撤销',       sub: '' },
+      }[kind] || { icon: bellSvg, title: '工单状态更新', sub: '' };
+
+      iconEl.innerHTML = cfg.icon;
+      titleEl.textContent = cfg.title;
+      subEl.textContent = cfg.sub;
+      popup.className = `popup ${kind} show`;
+      popup.style.display = 'flex';
+
+      if (popupTimer) clearTimeout(popupTimer);
+      popupTimer = setTimeout(hideTicketPopup, 8000);
+    }
+    function hideTicketPopup() {
+      const popup = document.getElementById('ticket-popup');
+      popup.classList.remove('show');
+      if (popupTimer) { clearTimeout(popupTimer); popupTimer = null; }
+      // 等动画结束后隐藏
+      setTimeout(() => { if (!popup.classList.contains('show')) popup.style.display = 'none'; }, 400);
+    }
+
+    // ---------- SSE 实时订阅 ----------
+    function initSSE() {
+      try {
+        evtSource = new EventSource(API_BASE + '/api/events');
+      } catch (e) {
+        console.warn('[SSE] 不支持，回退轮询');
+        startPolling();
+        return;
+      }
+      const indicator = document.getElementById('conn-indicator');
+
+      evtSource.addEventListener('connected', () => {
+        indicator.classList.remove('offline');
+        indicator.title = '实时连接已建立';
+      });
+      // 统一 data_changed 事件
+      evtSource.addEventListener('data_changed', (e) => {
+        let p = {}; try { p = JSON.parse(e.data || '{}'); } catch {}
+        // 仅技术支持相关事件触发重拉+diff
+        if (p.main !== 'tech_support' && !(p.sideEffects || []).includes('tech_support')) return;
+        onTechSupportEvent();
+      });
+      // 机器状态变更也刷新（绑手套/上下线）
+      evtSource.addEventListener('machines_updated', () => { refreshSilent(); });
+
+      evtSource.onopen = () => { indicator.classList.remove('offline'); indicator.title = '实时连接已建立'; };
+      evtSource.onerror = () => {
+        indicator.classList.add('offline');
+        indicator.title = '实时连接断开，浏览器将自动重连';
+      };
+    }
+
+    // 兜底轮询（SSE 不可用时）
+    function startPolling() {
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(() => { refreshSilent(); }, 15000);
+    }
+
+    async function refreshSilent() {
+      const data = await loadMachineStatus(true);
+      if (!data) return;
+      renderStatus(data);
+    }
+
+    // 技术支持事件：重拉单机器状态，diff activeTicket
+    async function onTechSupportEvent() {
+      const data = await loadMachineStatus(true);
+      if (!data) return;
+
+      const newTicket = data.activeTicket;
+      const newId = newTicket ? newTicket.id : null;
+      const newStatus = newTicket ? newTicket.status : null;
+
+      if (newId && newId !== lastActiveTicketId) {
+        // 新工单（或替换为另一条活跃工单）
+        showTicketPopup('new', newTicket);
+      } else if (newId === lastActiveTicketId && newStatus && newStatus !== lastActiveTicketStatus) {
+        // 同一工单状态变化
+        showTicketPopup(newStatus, newTicket);
+      } else if (!newId && lastActiveTicketId) {
+        // 工单消失（完成/删除）
+        showTicketPopup('resolved', { faultType: newTicket ? newTicket.faultType : '' });
+      }
+      // else: 无变化（其他机器的事件）→ 不弹
+
+      lastActiveTicketId = newId;
+      lastActiveTicketStatus = newStatus;
+      renderStatus(data);
+    }
+
+    // ---------- 初始化 ----------
+    async function init() {
+      // 恢复已登录用户
+      const stored = getStoredUser();
+      if (stored) currentUser = stored.user;
+
+      const params = new URLSearchParams(window.location.search);
+      machineCode = params.get('code');
+      if (!machineCode) {
+        document.getElementById('main-content').innerHTML = `<div class="empty-state"><div class="empty-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div><p style="font-size:0.85rem;">无效的链接</p><p style="font-size:0.72rem;color:var(--text3);margin-top:6px;">链接需包含 ?code=机器编号</p></div>`;
+        return;
+      }
+      await loadMachineStatus(false);
+      initSSE();
+    }
+
+    // 回车键提交
+    document.addEventListener('keypress', e => {
+      if (e.key === 'Enter') {
+        if (document.getElementById('auth-overlay').style.display === 'flex' && e.target.tagName === 'INPUT') doAuth();
+      }
+    });
+    window.addEventListener('load', init);
+  </script>
+</body>
+</html>
