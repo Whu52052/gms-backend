@@ -1,9 +1,5 @@
 'use strict';
 
-// Read-only adapters for the Importer (5025) and RDC2 Hermes (5006) APIs.
-// The adapter deliberately keeps high-frequency joint/pose samples out of the
-// heartbeat payload; those belong in a dedicated streaming path later.
-
 function joinUrl(base, path) {
   return `${String(base || '').replace(/\/+$/, '')}${path}`;
 }
@@ -161,7 +157,7 @@ function normalizeState(payload) {
     isRecording: boolOrNull(value('is_recording')),
     emergencyStopped: boolOrNull(value('is_emergency_stopped')),
     teleopAligned: boolOrNull(value('teleop_aligned')),
-    // 遥操作链路延迟（毫秒，数值单位由采集程序定义）：灵巧手左/右
+
     teleopDelay: {
       left: numberOrNull(value('teleop/hand_left/delay')),
       right: numberOrNull(value('teleop/hand_right/delay')),
@@ -206,7 +202,7 @@ class CollectorApiPoller {
     const [machineResult, taskResult, coreResult] = await Promise.allSettled([
       this.request(joinUrl(this.importerUrl, '/api/config/machine'), { timeout: this.timeout, includeEdgeAuth: false }),
       this.request(joinUrl(this.importerUrl, '/api/config/task'), { timeout: this.timeout, includeEdgeAuth: false }),
-      // 综合健康端点：提取 importer 版本 / 频道 / activity / 容器存活，供 GMS 采集器状态页展示
+
       this.request(joinUrl(this.importerUrl, '/api/core/health'), { timeout: this.timeout, includeEdgeAuth: false }),
     ]);
     const machineOk = machineResult.status === 'fulfilled';

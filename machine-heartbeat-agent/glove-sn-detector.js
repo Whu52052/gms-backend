@@ -1,19 +1,3 @@
-#!/usr/bin/env node
-/**
- * 手套 SN 码自动识别模块
- *
- * 功能：
- * 1. 自动检测机器上连接的手套设备
- * 2. 通过多种方式获取手套 SN 码
- * 3. 上报到 GMS 后端自动绑定
- *
- * 识别方式：
- * - 方式1: 读取 /var/.rdc2/wuji_calib/ 配置文件
- * - 方式2: 通过手套设备 API 查询
- * - 方式3: 从采集器容器配置读取
- * - 方式4: 查询 GMS 后端已绑定记录
- */
-
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs').promises;
@@ -27,29 +11,23 @@ class GloveSNDetector {
     this.machineNumber = options.machineNumber;
     this.gmsBackend = options.gmsBackend || 'http://10.5.51.216:8765';
 
-    // 配置路径
     this.rdc2Path = '/var/.rdc2';
     this.wujiCalibPath = '/var/.rdc2/wuji_calib';
     this.containerName = options.containerName || 'importer-staging';
-    // 采集程序容器（mono-staging / exodus-staging），日志里含设备 SN 解析记录
+
     this.collectorContainer = options.collectorContainer || process.env.COLLECTOR_CONTAINER || 'mono-staging';
 
-    // 手套 IP
-    // 注意：灵巧手是 192.168.1.110:7447 / 192.168.1.111:7447
-    //       手套是 192.168.1.100:50001 (左) / 192.168.1.101:50001 (右)
     this.gloveIPs = {
-      left: '192.168.1.100:50001',   // 左手手套
-      right: '192.168.1.101:50001',  // 右手手套
+      left: '192.168.1.100:50001',
+      right: '192.168.1.101:50001',
     };
 
-    // 检测到的 SN 码
     this.detectedSN = {
       left: null,
       right: null,
     };
   }
 
-  // ==================== HTTP 请求辅助 ====================
   async httpRequest(url, options = {}) {
     return new Promise((resolve, reject) => {
       const urlObj = new URL(url);
@@ -91,12 +69,10 @@ class GloveSNDetector {
     });
   }
 
-  // ==================== 方式1: 读取 wuji_calib 配置 ====================
   async detectFromCalibration() {
     try {
       const calibPath = this.wujiCalibPath;
 
-      // 检查目录是否存在
       try {
         await fs.access(calibPath);
       } catch {
@@ -106,16 +82,14 @@ class GloveSNDetector {
 
       const result = { left: null, right: null };
 
-      // 读取左手配置
       const leftPath = path.join(calibPath, 'left');
       try {
         const files = await fs.readdir(leftPath);
-        // 查找包含 SN 信息的文件
+
         for (const file of files) {
           if (file.includes('sn') || file.includes('serial') || file.endsWith('.json')) {
             const content = await fs.readFile(path.join(leftPath, file), 'utf8');
-            // 真实 SN 格式：WG1JA03260524029（手套）/ WH2JA01260722006（灵巧手），
-            // J/K 在第 4 位（code[3]），与 import-wuji-sn.js 解析规则一致
+
             const snMatch = content.match(/W[GH][0-9A-Z][JK][A-Z0-9]{6,}/i);
             if (snMatch) {
               result.left = snMatch[0].toUpperCase();
@@ -124,10 +98,9 @@ class GloveSNDetector {
           }
         }
       } catch (e) {
-        // 左手配置不存在
+
       }
 
-      // 读取右手配置
       const rightPath = path.join(calibPath, 'right');
       try {
         const files = await fs.readdir(rightPath);
@@ -142,7 +115,7 @@ class GloveSNDetector {
           }
         }
       } catch (e) {
-        // 右手配置不存在
+
       }
 
       if (result.left || result.right) {
@@ -159,7 +132,6 @@ class GloveSNDetector {
     }
   }
 
-  // ==================== 方式2: 从手套设备 API 查询 ====================
   async detectFromGloveAPI(hand) {
     try {
       const ip = this.gloveIPs[hand];
@@ -167,8 +139,6 @@ class GloveSNDetector {
 
       const [host, port] = ip.split(':');
 
-      // 尝试查询手套设备信息接口（假设存在）
-      // 实际API需要根据手套设备文档调整
       const url = `http://${host}:${port}/api/device/info`;
 
       try {
@@ -177,7 +147,7 @@ class GloveSNDetector {
           return response.body.serialNumber.toUpperCase();
         }
       } catch (e) {
-        // API不存在或不支持
+
       }
 
       return null;
@@ -186,10 +156,9 @@ class GloveSNDetector {
     }
   }
 
-  // ==================== 方式3: 从采集器容器配置读取 ====================
   async detectFromContainer() {
     try {
-      // 读取容器内的 machine.jsonc 配置
+
       const { stdout } = await execAsync(
         `docker exec ${this.containerName} cat /exchange/machine.jsonc 2>/dev/null || echo ""`,
         { timeout: 5000 }
@@ -199,15 +168,12 @@ class GloveSNDetector {
 
       const result = { left: null, right: null };
 
-      // 解析配置文件，查找 SN 信息
-      // 可能的字段: glove_sn, serial_number, device_id 等
       const leftMatch = stdout.match(/wuji_glove_l.*?sn[^:]*:\s*["']?([A-Z0-9]+)["']?/i);
       const rightMatch = stdout.match(/wuji_glove_r.*?sn[^:]*:\s*["']?([A-Z0-9]+)["']?/i);
 
       if (leftMatch) result.left = leftMatch[1].toUpperCase();
       if (rightMatch) result.right = rightMatch[1].toUpperCase();
 
-      // 也可以从注释或其他字段查找（真实格式 WG1JA... / WH2JA...，J/K 在第 4 位）
       if (!result.left) {
         const snMatch = stdout.match(/left.*?(W[GH][0-9A-Z][JK][A-Z0-9]{6,})/i);
         if (snMatch) result.left = snMatch[1].toUpperCase();
@@ -231,12 +197,10 @@ class GloveSNDetector {
     }
   }
 
-  // ==================== 方式4: 查询 GMS 后端已绑定记录 ====================
   async detectFromGMS() {
     try {
       if (!this.machineNumber) return null;
 
-      // 查询 GMS 后端，获取该机器上绑定的手套
       const url = `${this.gmsBackend}/api/sn-registry?machineNumber=${this.machineNumber}&status=in_use`;
 
       const response = await this.httpRequest(url);
@@ -268,7 +232,6 @@ class GloveSNDetector {
     }
   }
 
-  // ==================== 综合检测 ====================
   async detectAll() {
     console.log('[SN Detector] 开始检测手套 SN 码...');
     console.log(`  机器编号: ${this.machineNumber}`);
@@ -288,7 +251,7 @@ class GloveSNDetector {
       const result = await method.fn();
 
       if (result) {
-        // 合并结果（优先使用先检测到的；日志方式额外提供灵巧手 SN）
+
         if (result.left && !finalResult.left) {
           finalResult.left = result.left;
         }
@@ -302,7 +265,6 @@ class GloveSNDetector {
           finalResult.handRight = result.handRight;
         }
 
-        // 如果两个都找到了，提前结束
         if (finalResult.left && finalResult.right && finalResult.handLeft && finalResult.handRight) {
           break;
         }
@@ -320,10 +282,6 @@ class GloveSNDetector {
     return finalResult;
   }
 
-  // ==================== 方式4: 从采集程序容器日志提取 ====================
-  // 采集程序连接手套/灵巧手时会打印解析到的 SN，例如：
-  //   WujiGlove (wuji_glove_l): ... using the directly-reachable WG1JA06260610005 ...
-  // 这是设备真实上报的 SN，最权威；灵巧手同理（WH2 开头）。
   async detectFromCollectorLogs() {
     try {
       const cmd = `docker logs --tail 200000 ${this.collectorContainer} 2>&1 | grep -aE "WujiGlove|WujiHand"`;
@@ -332,14 +290,14 @@ class GloveSNDetector {
         const r = await execAsync(cmd, { timeout: 9000, maxBuffer: 20 * 1024 * 1024 });
         stdout = r.stdout || '';
       } catch (e) {
-        // 容器不存在或无日志——静默失败（grep 无匹配退出码 1 也走这里）
+
         if (e.stdout) stdout = e.stdout;
         if (!stdout) return null;
       }
 
       const result = { left: null, right: null, handLeft: null, handRight: null };
       const snRe = /W(?:G|H)[0-9A-Z][JK][A-Z0-9]{6,}/;
-      // 逐行扫描，后出现的覆盖先出现的——日志尾部是最近一次连接解析结果
+
       for (const line of stdout.split('\n')) {
         const isLeft = /wuji_glove_l|hand_left|wuji_hand_l/.test(line);
         const isRight = /wuji_glove_r|hand_right|wuji_hand_r/.test(line);
@@ -368,15 +326,10 @@ class GloveSNDetector {
     }
   }
 
-  // ==================== 上报到 GMS 后端 ====================
-  // v1.1.0：SN 已随心跳 payload（devices.gloves.*.snCode）上报，
-  // 服务端 /api/edge/heartbeat 负责与 sn_registry 比对。此方法保留为空操作，
-  // 避免外部调用方报错。
   async reportToGMS() {
     return true;
   }
 
-  // ==================== 获取结果 ====================
   getDetectedSN() {
     return this.detectedSN;
   }
@@ -384,7 +337,6 @@ class GloveSNDetector {
 
 module.exports = GloveSNDetector;
 
-// ==================== 独立运行测试 ====================
 if (require.main === module) {
   const detector = new GloveSNDetector({
     machineNumber: 'we-105',

@@ -54,8 +54,9 @@ export const getProductionHistory = (machineNumber?: string) =>
     `/api/machines/production-history${machineNumber ? `?machineNumber=${encodeURIComponent(machineNumber)}` : ''}`
   ).then(r => r.items || []);
 // 采集器综合状态（机器状态信息：任务/操作员/灵巧手/手套/Quest/摄像头/系统程序/容器）
-export const getMachineInfo = (machineNumber: string) =>
-  get<any>(`/api/machines/${encodeURIComponent(machineNumber)}/info`, 12000);
+// opts.refresh=true 时服务端强制直连采集器实时抓取（绕过心跳快照缓存）
+export const getMachineInfo = (machineNumber: string, opts?: { refresh?: boolean }) =>
+  get<any>(`/api/machines/${encodeURIComponent(machineNumber)}/info${opts?.refresh ? '?refresh=1' : ''}`, 12000);
 
 // ==================== 流水 ====================
 export const getTransactions = (limit = 2000) => get<any[]>(`/api/transactions?limit=${limit}`);

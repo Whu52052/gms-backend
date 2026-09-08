@@ -1,12 +1,10 @@
-// 机器状态页：生产状态可视化（可生产/在生产/待维修/在测试）
-// 待维修由维修工单自动驱动：运营提交工单→待维修，运维完成维修→可生产；人工可标记 在生产/在测试/可生产。
 import { useMemo, useState, type ReactNode } from 'react';
 import {
   Alert, Button, Card, Col, Descriptions, Dropdown, Empty, Flex, Input, Modal, Progress, Radio,
   Row, Select, Spin, Statistic, Table, Tag, Tooltip, Typography, message,
 } from 'antd';
 import { DownOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageContainer } from '@common/components/PageContainer';
 import { useMachines, useEquipmentConfig } from '@common/hooks/useData';
 import * as api from '@common/api';
@@ -42,7 +40,6 @@ export default function MachineStatusPage() {
   const latestMachines = useMemo(() => numbers.map(n => latestMap[n]), [numbers, latestMap]);
   const effectiveMap = useMemo(() => buildEffectiveStatusMap(latestMachines, registry), [latestMachines, registry]);
 
-  // 按设备类型筛选后的机器编号（统计卡片和Radio数量跟随设备类型联动）
   const deviceFiltered = useMemo(() => {
     if (deviceTypeFilter === 'all') return numbers;
     return numbers.filter(n => (latestMap[n]?.deviceType || '') === deviceTypeFilter);
@@ -64,23 +61,26 @@ export default function MachineStatusPage() {
     return list;
   }, [deviceFiltered, prodFilter, search, latestMap]);
 
-  // 全量变更记录（机器状态变更频率低，一次拉取，前端筛选）
   const history = useQuery({
     queryKey: ['production-history'],
     queryFn: () => api.getProductionHistory(),
   });
-  // 单台机器的全部历史（弹窗用，独立拉取避免被全局 limit 截断）
+
   const machineHistory = useQuery({
     queryKey: ['production-history', histMachine],
     queryFn: () => api.getProductionHistory(histMachine!),
     enabled: !!histMachine,
   });
-  // 采集器综合状态（机器状态信息弹窗，10s 轮询保持新鲜）
+
   const machineInfo = useQuery({
     queryKey: ['machine-info', infoMachine],
     queryFn: () => api.getMachineInfo(infoMachine!),
     enabled: !!infoMachine,
     refetchInterval: 10_000,
+  });
+  const liveInfo = useMutation({
+    mutationFn: (m: string) => api.getMachineInfo(m, { refresh: true }),
+    onSuccess: (data) => qc.setQueryData(['machine-info', infoMachine], data),
   });
   const histItems = useMemo(() => {
     let list = history.data || [];
@@ -152,13 +152,11 @@ export default function MachineStatusPage() {
     );
   };
 
-  // 采集器机器判定（与后端 collectorIpOf 同规则）：we-1xx / szx3-N
-  const isCollectorMachine = (n: string) => /^(?:we|szx3)-(\d+)$/.test(n) && parseInt(n.replace(/^[^-]+-/, ''), 10) >= 100;
+  const isCollectorMachine = (n: string) => /^(?:we|szx3)-\d+$/.test(n);
 
-  // 设备部件状态标签：connected + 传输新鲜度（ageS 秒前有数据 = 传输速率状态）
   const devTag = (d: any) => {
     if (!d) return <Tag style={{ margin: 0, opacity: 0.5 }}>无</Tag>;
-    const age = d.ageS ?? d.age_s;           // 兼容快照/直连两种字段命名
+    const age = d.ageS ?? d.age_s;
     const seen = d.everSeen ?? d.ever_seen;
     if (d.status === 'connected') {
       if (seen === false) return <Tag color="orange" style={{ margin: 0 }}>已连接·无数据</Tag>;
@@ -254,7 +252,7 @@ export default function MachineStatusPage() {
         }}>刷新</Button>
       }
     >
-      {/* 统计卡片 */}
+      
       <Row gutter={12} style={{ marginBottom: 12 }}>
         <Col span={Math.floor(24 / (PRODUCTION_STATUS_ORDER.length + 1))}><Card size="small"><Statistic title={deviceTypeFilter === 'all' ? '机器总数' : `${eqLabel(deviceTypeFilter)} 数量`} value={deviceFiltered.length} /></Card></Col>
         {PRODUCTION_STATUS_ORDER.map(s => (
@@ -270,7 +268,7 @@ export default function MachineStatusPage() {
         ))}
       </Row>
 
-      {/* 筛选栏 */}
+      
       <Flex wrap gap={8} align="center" style={{ marginBottom: 12 }}>
         <Radio.Group value={prodFilter} onChange={e => setProdFilter(e.target.value)} optionType="button" buttonStyle="solid">
           <Radio.Button value="all">全部 ({deviceFiltered.length})</Radio.Button>
@@ -310,7 +308,7 @@ export default function MachineStatusPage() {
         />
       )}
 
-      {/* 变更记录 */}
+      
       <Card size="small" style={{ marginTop: 20 }} title="生产状态变更记录" extra={
         <Input.Search
           placeholder="按机器编号筛选..." allowClear style={{ width: 200 }} size="small"
@@ -352,7 +350,7 @@ export default function MachineStatusPage() {
         />
       </Card>
 
-      {/* 单台机器历史弹窗 */}
+      
       <Modal
         title={histMachine ? `${histMachine} · 生产状态变更历史` : ''}
         open={!!histMachine}
@@ -375,12 +373,23 @@ export default function MachineStatusPage() {
         )}
       </Modal>
 
-      {/* 采集器综合状态弹窗（机器状态信息） */}
+      
       <Modal
         title={infoMachine ? `${infoMachine} · 机器状态信息` : ''}
         open={!!infoMachine}
         onCancel={() => setInfoMachine(null)}
-        footer={<Button onClick={() => setInfoMachine(null)}>关闭</Button>}
+        footer={
+          <Flex gap={8} justify="flex-end">
+            <Button
+              icon={<ReloadOutlined spin={liveInfo.isPending} />}
+              loading={liveInfo.isPending}
+              onClick={() => infoMachine && liveInfo.mutate(infoMachine)}
+            >
+              实时刷新
+            </Button>
+            <Button type="primary" onClick={() => setInfoMachine(null)}>关闭</Button>
+          </Flex>
+        }
         width={720}
       >
         {machineInfo.isLoading ? (
@@ -399,7 +408,12 @@ export default function MachineStatusPage() {
             ALIGN: { l: '对齐中', c: 'orange' }, INIT: { l: '准备中', c: 'orange' },
             BOOT: { l: '启动中', c: 'orange' }, STOPPED: { l: '已停止' },
           };
-          const cs = csMeta[sys.controlState] || { l: sys.controlState || '未知' };
+
+          const stale = !!sys.stateStale;
+          const csRaw = stale ? sys.lastControlState : sys.controlState;
+          const cs = stale
+            ? { l: '已停止' }
+            : (csMeta[sys.controlState] || { l: sys.controlState || '未知' });
           const camName = (n: string) => ({
             ego_camera: '前置相机', wrist_left: '左手腕相机', wrist_right: '右手腕相机',
             vst_left: '头显左眼', vst_right: '头显右眼', overlay: '合成画面',
@@ -411,25 +425,38 @@ export default function MachineStatusPage() {
               {!!detail && <div style={{ fontSize: 11, opacity: 0.65, marginTop: 4 }}>{detail}</div>}
             </div>
           );
+
+          const netTag = (d: any) => {
+            if (!d || d.connected === undefined) return <Tag style={{ margin: 0, opacity: 0.5 }}>无</Tag>;
+            return d.connected
+              ? <Tag color="blue" style={{ margin: 0 }}>网络在线</Tag>
+              : <Tag color="red" style={{ margin: 0 }}>网络不可达</Tag>;
+          };
+          const tagFor = (stream: any, net: any) => (stream ? devTag(stream) : netTag(net));
           return (
             <div>
-              {(machineInfo.data as any)?.partial?.importer && <Alert type="warning" showIcon style={{ marginBottom: 8 }} message="Importer(5025) 暂不可达，任务/容器信息缺失" />}
+              {(machineInfo.data as any)?.partial?.importer && <Alert type="warning" showIcon style={{ marginBottom: 8 }} message="Importer(5025) 暂不可达" />}
               {(machineInfo.data as any)?.partial?.hermesOffline && (
                 <div style={{ background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 8, padding: '6px 12px', fontSize: 13, color: '#8c8c8c', marginBottom: 8 }}>
-                  采集程序未运行（未在采集或标定中）——工作阶段与摄像头传输数据暂缺，属正常现象
+                  采集程序未运行
                 </div>
               )}
-              {(machineInfo.data as any)?.partial?.hermesFailed && <Alert type="warning" showIcon style={{ marginBottom: 8 }} message="采集程序(5006) 暂不可达，工作阶段/传输状态缺失" />}
+              {(machineInfo.data as any)?.partial?.hermesFailed && <Alert type="warning" showIcon style={{ marginBottom: 8 }} message="采集程序(5006) 暂不可达" />}
 
-              {/* 系统程序状态 */}
+              
               <Descriptions size="small" column={2} bordered style={{ marginBottom: 12 }}
                 items={[
                   { key: 'act', label: '系统程序', children: (
-                    <Flex gap={4} wrap="wrap">
+                    <Flex gap={4} wrap="wrap" align="center">
                       <Tag color={sys.activity === 'running' ? 'green' : 'default'} style={{ margin: 0 }}>{sys.activity === 'running' ? '运行中' : sys.activity === 'idle' ? '空闲' : (sys.activity || '未知')}</Tag>
                       <Tag color={cs.c || 'default'} style={{ margin: 0 }}>{cs.l}</Tag>
-                      {sys.isRecording && <Tag color="red" style={{ margin: 0 }}>● 录制中</Tag>}
+                      {!stale && sys.isRecording && <Tag color="red" style={{ margin: 0 }}>● 录制中</Tag>}
                       {sys.emergencyStopped && <Tag color="red" style={{ margin: 0 }}>急停</Tag>}
+                      {stale && csRaw && (
+                        <span style={{ fontSize: 11, opacity: 0.65 }}>
+                          停止前: {csMeta[csRaw]?.l || csRaw}{sys.lastIsRecording ? '·录制中' : ''}（{sys.lastStateAgeSec ? `${Math.round(sys.lastStateAgeSec / 60)} 分钟前` : '时间未知'}）
+                        </span>
+                      )}
                     </Flex>
                   ) },
                   { key: 'err', label: '错误数', children: (sys.errorCount ?? 0) > 0 ? <Tag color="red" style={{ margin: 0 }}>{sys.errorCount}</Tag> : <Tag color="green" style={{ margin: 0 }}>0</Tag> },
@@ -438,7 +465,7 @@ export default function MachineStatusPage() {
                 ]}
               />
 
-              {/* 当前任务 */}
+              
               <Card size="small" title="当前任务" style={{ marginBottom: 12 }}>
                 {task ? (
                   <>
@@ -461,35 +488,45 @@ export default function MachineStatusPage() {
                 ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有任务" />}
               </Card>
 
-              {/* 设备状态 */}
+              
               <Card size="small" title="设备状态" style={{ marginBottom: 12 }}>
-                {!dev.dexterousHands?.left && !dev.dexterousHands?.right && !dev.quest && !dev.gloves?.left && !dev.gloves?.right && !dev.cameras?.length && !dev.other?.length && !info.questInfo ? (
+                {!dev.dexterousHands?.left && !dev.dexterousHands?.right && !dev.quest && !dev.gloves?.left && !dev.gloves?.right && !dev.cameras?.length && !dev.other?.length && !info.questInfo && !info.devicesNet ? (
                   <div style={{ color: '#8c8c8c', fontSize: 13, padding: '4px 0' }}>
-                    采集程序未运行，组件状态不可读取——程序启动后这里会显示灵巧手 / 手套 / Quest / 摄像头的连接与传输状态
+                    采集程序未运行
                   </div>
                 ) : (
                   <>
                     <Flex wrap="wrap" gap={8}>
                       {(() => {
-                        const handDetail = (side: string, net: any) => (
-                          <>
-                            {net?.snCode && <span style={{ fontFamily: 'monospace' }}>SN: {net.snCode}　</span>}
-                            {info.teleopDelay && info.teleopDelay[side] != null && <span>延迟 {Math.round(Number(info.teleopDelay[side]))}ms　</span>}
-                            {net?.connected === false && <span style={{ color: '#cf1322' }}>网络不可达</span>}
-                          </>
-                        );
+                        const handDetail = (side: string, net: any) => {
+                          const hs = info.handStream?.[side === 'left' ? 'left' : 'right'];
+                          const hsLive = hs && hs.ageSec != null && hs.ageSec <= 90 && hs.hz != null;
+                          return (
+                            <>
+                              {net?.snCode && <span style={{ fontFamily: 'monospace' }}>SN: {net.snCode}　</span>}
+                              {info.teleopDelay && info.teleopDelay[side] != null && <span>延迟 {Math.round(Number(info.teleopDelay[side]))}ms　</span>}
+                              {hsLive && (
+                                <span style={{ fontFamily: 'monospace' }}>
+                                  {hs.hz} Hz{hs.target != null ? `/${hs.target}` : ''}
+                                  {hs.lateTicks != null && hs.totalTicks != null ? ` 迟到${hs.lateTicks}/${hs.totalTicks}` : ''}　
+                                </span>
+                              )}
+                              {net?.connected === false && <span style={{ color: '#cf1322' }}>网络不可达</span>}
+                            </>
+                          );
+                        };
                         const lNet = info.devicesNet?.dexterousHands?.left, rNet = info.devicesNet?.dexterousHands?.right;
                         return (
                           <>
-                            {cell('灵巧手（左）', devTag(dev.dexterousHands?.left ?? (lNet?.connected ? { status: 'connected' } : null)), handDetail('left', lNet))}
-                            {cell('灵巧手（右）', devTag(dev.dexterousHands?.right ?? (rNet?.connected ? { status: 'connected' } : null)), handDetail('right', rNet))}
+                            {cell('灵巧手（左）', tagFor(dev.dexterousHands?.left, lNet), handDetail('left', lNet))}
+                            {cell('灵巧手（右）', tagFor(dev.dexterousHands?.right, rNet), handDetail('right', rNet))}
                           </>
                         );
                       })()}
                       {(() => {
                         const qi = info.questInfo;
                         const netOff = qi && qi.netConnected === false;
-                        return cell('Quest', devTag(dev.quest ?? (qi && qi.netConnected ? { status: 'connected' } : null)),
+                        return cell('Quest', tagFor(dev.quest, qi ? { connected: qi.netConnected } : null),
                           <span>
                             {qi?.serialNumber && <span style={{ fontFamily: 'monospace' }}>SN: {qi.serialNumber}　</span>}
                             {qi && !qi.serialNumber && qi.adbStatus === 'unauthorized' && <span style={{ color: '#d46b08' }}>USB 调试未授权　</span>}
@@ -497,28 +534,37 @@ export default function MachineStatusPage() {
                             {!qi?.serialNumber && !qi?.batteryLevel && netOff && <span style={{ color: '#cf1322' }}>网络不可达</span>}
                           </span>);
                       })()}
-                      {cell('手套（左）', devTag(dev.gloves?.left),
+                      {cell('手套（左）', tagFor(dev.gloves?.left, info.devicesNet?.gloves?.left),
                         info.devicesNet?.gloves?.left ? <span style={{ fontFamily: 'monospace' }}>SN: {info.devicesNet.gloves.left.snCode || '未读取'}</span> : null)}
-                      {cell('手套（右）', devTag(dev.gloves?.right),
+                      {cell('手套（右）', tagFor(dev.gloves?.right, info.devicesNet?.gloves?.right),
                         info.devicesNet?.gloves?.right ? <span style={{ fontFamily: 'monospace' }}>SN: {info.devicesNet.gloves.right.snCode || '未读取'}</span> : null)}
                       {(dev.marvin || dev.other?.some((o: any) => o.key === 'robot/marvin') || info.devicesNet?.roboticArm) && cell('机械臂 Marvin',
-                        devTag(dev.marvin ?? (info.devicesNet?.roboticArm?.connected ? { status: 'connected' } : null)),
+                        tagFor(dev.marvin, info.devicesNet?.roboticArm ? { connected: info.devicesNet.roboticArm.connected } : null),
                         info.devicesNet?.roboticArm && info.devicesNet.roboticArm.connected === false ? <span style={{ color: '#cf1322' }}>网络不可达</span> : null)}
                       {(dev.cameras || []).map((c: any) => {
                         const res = (info.sensors || []).find((s: any) => s.id === c.name);
                         return cell(camName(c.name), devTag(c), res && res.width ? `${res.width}×${res.height}` : null);
                       })}
                     </Flex>
-                    {!!info.vstFps && (
-                      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 8 }}>
-                        头显透视配置帧率 {info.vstFps} fps——采集接口未提供摄像头实时帧率，实际传输状况以各路「实时/延迟/断流」为准
-                      </div>
-                    )}
+                    {(info.cameraFps?.fps != null || !!info.vstFps) && (() => {
+                      const cf = info.cameraFps;
+                      const age: number | null = cf?.ageSec ?? null;
+                      const ageTxt = age == null ? ''
+                        : age <= 60 ? '（录制中·实时）'
+                        : age < 3600 ? `（${Math.round(age / 60)} 分钟前日志）`
+                        : `（${Math.round(age / 3600)} 小时前日志）`;
+                      return (
+                        <div style={{ fontSize: 11, opacity: 0.65, marginTop: 8 }}>
+                          {cf?.fps != null && <span>编码输出 <b>{Number(cf.fps).toFixed(1)}</b> fps{ageTxt}　·　</span>}
+                          {!!info.vstFps && <span>透视配置 {info.vstFps} fps</span>}
+                        </div>
+                      );
+                    })()}
                   </>
                 )}
               </Card>
 
-              {/* 容器 + 告警 */}
+              
               <Card size="small" title="采集器容器">
                 <Flex gap={4} wrap="wrap" style={{ marginBottom: (info.degraded?.length || info.errors?.length) ? 8 : 0 }}>
                   {(info.containers || []).map((c: any) => (
@@ -541,7 +587,7 @@ export default function MachineStatusPage() {
         })()}
       </Modal>
 
-      {/* 状态切换弹窗 */}
+      
       <Modal
         title={target ? `${target.number} 标记为「${PRODUCTION_STATUS_META[target.status]?.label || ''}」` : ''}
         open={!!target}

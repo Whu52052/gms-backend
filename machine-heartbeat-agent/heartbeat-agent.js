@@ -1,24 +1,3 @@
-#!/usr/bin/env node
-/**
- * GMS Machine Heartbeat Agent v1.2.0
- *
- * 职责（只观测、不决策）：
- * 1. 自动检测主机名/IP，识别机器编号（hostname we-xxx → we-xxx）
- * 2. TCP 探测设备连通性：手套 192.168.1.100/101:50001、灵巧手 .110/.111:7447、
- *    机械臂 .190:30003、Quest 头显（ADB）
- * 3. 自动识别手套 SN：WUJI 标定目录 /var/.rdc2/wuji_calib、
- *    importer-staging 容器 /exchange/machine.jsonc
- * 4. 每 30 秒向 GMS 中心 POST /api/edge/heartbeat（Bearer EDGE_TOKEN），
- *    上报"观测到的事实"；绑定/解绑等业务决策由服务端比对 sn_registry 完成
- * 5. 停机时 POST /api/edge/offline
- *
- * 环境变量：
- * - GMS_BACKEND_URL:    GMS 中心地址（默认 http://10.5.51.216:8765）
- * - EDGE_TOKEN:         边缘接入令牌（必填，与服务端 .env 的 EDGE_TOKEN 一致）
- * - MACHINE_NUMBER:     机器编号（默认从 hostname/IP 自动检测）
- * - HEARTBEAT_INTERVAL: 心跳间隔秒（默认 30）
- */
-
 const http = require('http');
 const https = require('https');
 const os = require('os');
@@ -28,7 +7,6 @@ const { CollectorApiPoller } = require('./collector-api');
 
 const AGENT_VERSION = '1.2.0';
 
-// ==================== CONFIG ====================
 const CONFIG = {
   backendUrl: process.env.GMS_BACKEND_URL || 'http://10.5.51.216:8765',
   edgeToken: process.env.EDGE_TOKEN || '',
@@ -36,8 +14,8 @@ const CONFIG = {
   importerUrl: process.env.IMPORTER_API_URL || process.env.IMPORTER_URL || 'http://127.0.0.1:5025',
   hermesUrl: process.env.HERMES_API_URL || process.env.HERMES_URL || 'http://127.0.0.1:5006',
   heartbeatInterval: parseInt(process.env.HEARTBEAT_INTERVAL || '30', 10) * 1000,
-  deviceScanInterval: 120 * 1000,   // 设备 TCP/ADB 探测周期
-  snRescanInterval: 10 * 60 * 1000, // SN 重新识别周期
+  deviceScanInterval: 120 * 1000,
+  snRescanInterval: 10 * 60 * 1000,
   retryInterval: 10 * 1000,
   timeout: 8000,
   collectorTimeout: parseInt(process.env.COLLECTOR_API_TIMEOUT || '3000', 10),
@@ -48,12 +26,14 @@ const machineInfo = {
   hostname: os.hostname(),
   ipAddress: null,
   startTime: new Date().toISOString(),
-  // 手套观测状态：默认未连接，必须经探测确认
+
   gloves: {
     left: { connected: false, lastCheck: null, snCode: null },
     right: { connected: false, lastCheck: null, snCode: null },
   },
-  devices: null, // deviceDetector.getDeviceSummary() 输出
+  devices: null,
+  cameraFps: null,
+  handStream: null,
   importer: null,
   hermes: null,
 };
@@ -61,10 +41,9 @@ const machineInfo = {
 let deviceDetector = null;
 let snDetector = null;
 
-// ==================== MACHINE NUMBER DETECTION ====================
 function detectMachineNumber() {
   if (CONFIG.machineNumber) {
-    // 系统机器编号约定小写（与 machines 表 we-xxx 一致；服务端也会归一化）
+
     const num = CONFIG.machineNumber.trim().toLowerCase();
     console.log(`[Config] 使用环境变量指定的机器编号: ${num}`);
     return num;
@@ -109,7 +88,6 @@ function getPrimaryIPAddress() {
   return '127.0.0.1';
 }
 
-// ==================== HTTP REQUEST HELPER ====================
 function httpRequest(url, options = {}) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
@@ -131,7 +109,7 @@ function httpRequest(url, options = {}) {
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
         let body = data;
-        try { body = JSON.parse(data); } catch { /* 非 JSON 响应原样返回 */ }
+        try { body = JSON.parse(data); } catch {                     }
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve({ statusCode: res.statusCode, body });
         } else {
@@ -175,8 +153,7 @@ async function pollCollectorApis(force = false) {
       return snapshot;
     })
     .catch(error => {
-      // The adapter preserves the last successful endpoint snapshot. An
-      // unexpected adapter error must not block the host heartbeat.
+
       console.error('[Collector] API 轮询异常:', error.message);
       collectorPollAt = Date.now();
       return null;
@@ -185,7 +162,88 @@ async function pollCollectorApis(force = false) {
   return collectorPollPromise;
 }
 
-// ==================== PAYLOAD ====================
+function _execAsync(cmd, opts) {
+  return new Promise((resolve, reject) => {
+    require('child_process').exec(cmd, opts, (err, stdout) => {
+      if (err && !stdout) return reject(err);
+      resolve({ stdout: stdout || '' });
+    });
+  });
+}
+
+async function scanEncoderFps() {
+  const container = process.env.COLLECTOR_CONTAINER || 'mono-staging';
+  try {
+    const { stdout } = await _execAsync(
+      `docker logs --tail 4000 ${container} 2>&1 | grep -aE "Video encoder output" | tail -1`,
+      { timeout: 8000, maxBuffer: 8 * 1024 * 1024 }
+    );
+    const line = (stdout || '').trim().split('\n').filter(Boolean).pop() || '';
+    const m = line.match(/Video encoder output\s+(\d+(?:\.\d+)?)\s*fps/i);
+    if (!m) { machineInfo.cameraFps = null; return; }
+    const fps = parseFloat(m[1]);
+
+    let logTimeUnix = null, ageSec = null;
+    const ts = line.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/);
+    if (ts) {
+      const ms = ts[7] ? parseInt(String(ts[7]).slice(0, 3).padEnd(3, '0'), 10) : 0;
+      logTimeUnix = Math.floor(Date.UTC(+ts[1], +ts[2] - 1, +ts[3], +ts[4], +ts[5], +ts[6], ms) / 1000);
+      const age = Math.round(Date.now() / 1000) - logTimeUnix;
+
+      if (age >= -120 && age < 7 * 86400) ageSec = Math.max(0, age);
+    }
+    machineInfo.cameraFps = { fps, logTimeUnix, ageSec, container };
+    console.log(`[CameraFps] 编码器输出 ${fps} fps${ageSec != null ? `（${ageSec} 秒前日志）` : ''}`);
+  } catch (e) {
+    console.error('[CameraFps] 日志提取失败:', e.message);
+  }
+}
+
+async function scanHandStream() {
+  const numMatch = /^(?:we|szx3)-(\d+)$/.exec(String(machineInfo.machineNumber || ''));
+  if (numMatch && parseInt(numMatch[1], 10) < 100) { machineInfo.handStream = null; return; }
+  const container = process.env.COLLECTOR_CONTAINER || 'mono-staging';
+  try {
+    const { stdout } = await _execAsync(
+      `docker logs --tail 2000 ${container} 2>&1 | grep -aE "WujiHand2.*command stream" | tail -4`,
+      { timeout: 8000, maxBuffer: 8 * 1024 * 1024 }
+    );
+    const out = {};
+    for (const line of (stdout || '').trim().split('\n').filter(Boolean)) {
+      const sideM = line.match(/wuji_hand_(l|r)/);
+      if (!sideM) continue;
+      const side = sideM[1] === 'l' ? 'left' : 'right';
+
+      const hzM = line.match(/command stream(?:er)?\s+(?:at\s+)?([\d.]+)\s*Hz/i);
+      const targetM = line.match(/\(target\s+([\d.]+)\)/i);
+      const lateM = line.match(/(\d+)\s+of\s+(\d+)\s+ticks late/i);
+      let logTimeUnix = null, ageSec = null;
+      const ts = line.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/);
+      if (ts) {
+        const ms = ts[7] ? parseInt(String(ts[7]).slice(0, 3).padEnd(3, '0'), 10) : 0;
+        logTimeUnix = Math.floor(Date.UTC(+ts[1], +ts[2] - 1, +ts[3], +ts[4], +ts[5], +ts[6], ms) / 1000);
+        const age = Math.round(Date.now() / 1000) - logTimeUnix;
+        if (age >= -120 && age < 7 * 86400) ageSec = Math.max(0, age);
+      }
+
+      const prev = out[side];
+      const isStats = !!(lateM || targetM);
+      if (prev && !isStats && prev.logTimeUnix && logTimeUnix && prev.logTimeUnix >= logTimeUnix) continue;
+      out[side] = {
+        hz: hzM ? parseFloat(hzM[1]) : (prev && prev.hz) || null,
+        target: targetM ? parseFloat(targetM[1]) : (isStats ? null : (prev && prev.target) || null),
+        lateTicks: lateM ? parseInt(lateM[1], 10) : null,
+        totalTicks: lateM ? parseInt(lateM[2], 10) : null,
+        logTimeUnix, ageSec,
+      };
+    }
+    machineInfo.handStream = (out.left || out.right) ? out : null;
+    if (out.left || out.right) console.log(`[HandStream] ${JSON.stringify(machineInfo.handStream)}`);
+  } catch (e) {
+    console.error('[HandStream] 日志提取失败:', e.message);
+  }
+}
+
 function buildPayload() {
   const summary = machineInfo.devices;
   return {
@@ -203,6 +261,8 @@ function buildPayload() {
       freeMemory: os.freemem(),
     },
     machineType: (summary && summary.machineType) || null,
+    cameraFps: machineInfo.cameraFps || null,
+    handStream: machineInfo.handStream || null,
     devices: {
       gloves: {
         left: {
@@ -236,7 +296,6 @@ function buildPayload() {
   };
 }
 
-// ==================== HEARTBEAT ====================
 async function sendHeartbeat() {
   if (!machineInfo.machineNumber) {
     console.error('[Heartbeat] ❌ 机器编号未设置，跳过心跳');
@@ -244,6 +303,8 @@ async function sendHeartbeat() {
   }
   try {
     await pollCollectorApis();
+    await scanEncoderFps();
+    await scanHandStream();
     const payload = buildPayload();
     console.log('[Heartbeat] 发送数据:', JSON.stringify(payload, null, 2));
     const res = await httpRequest(`${CONFIG.backendUrl}/api/edge/heartbeat`, {
@@ -287,7 +348,6 @@ function heartbeatLoop() {
   });
 }
 
-// ==================== 设备 / SN 周期探测 ====================
 async function scanDevices() {
   try {
     await deviceDetector.detectAll();
@@ -310,7 +370,6 @@ async function scanSN() {
   }
 }
 
-// ==================== HEALTH SERVER ====================
 const healthServer = http.createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -341,7 +400,6 @@ const healthServer = http.createServer((req, res) => {
   }
 });
 
-// ==================== GRACEFUL SHUTDOWN ====================
 function gracefulShutdown(signal) {
   console.log(`\n[Shutdown] 收到信号 ${signal}，正在优雅关闭...`);
   if (heartbeatTimer) clearTimeout(heartbeatTimer);
@@ -362,7 +420,6 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// ==================== STARTUP ====================
 async function main() {
   console.log('==========================================');
   console.log(`   GMS Machine Heartbeat Agent v${AGENT_VERSION}`);
@@ -388,16 +445,15 @@ async function main() {
 
   healthServer.listen(3000, () => console.log('[Health] http://localhost:3000/health'));
 
-  // SN 识别（标定目录 / docker exec，失败不阻塞）
   snDetector = new GloveSNDetector({
     machineNumber: machineInfo.machineNumber,
     gmsBackend: CONFIG.backendUrl,
-    containerName: 'importer-staging',
+    containerName: process.env.IMPORTER_CONTAINER || 'importer-staging',
+    collectorContainer: process.env.COLLECTOR_CONTAINER || 'mono-staging',
   });
   await scanSN();
   setInterval(scanSN, CONFIG.snRescanInterval);
 
-  // 设备连通性探测
   deviceDetector = new DeviceStatusDetector({ machineNumber: machineInfo.machineNumber });
   await scanDevices();
   setInterval(scanDevices, CONFIG.deviceScanInterval);

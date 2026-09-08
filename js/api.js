@@ -872,8 +872,9 @@ const API = {
   },
 
   // 采集器综合状态（机器状态信息：任务/操作员/灵巧手/手套/Quest/摄像头/系统程序/容器）
-  async getMachineInfo(machineNumber) {
-    return await this._fetch('GET', '/api/machines/' + encodeURIComponent(machineNumber) + '/info');
+  // opts.refresh=true 时服务端跳过心跳快照，强制直连采集器实时抓取
+  async getMachineInfo(machineNumber, opts) {
+    return await this._fetch('GET', '/api/machines/' + encodeURIComponent(machineNumber) + '/info' + (opts && opts.refresh ? '?refresh=1' : ''));
   },
 
   // Transactions

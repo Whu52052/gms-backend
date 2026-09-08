@@ -9,7 +9,7 @@
  * 版本：v1.0.0
  */
 
-const SW_VERSION = 'v2.202609080649';
+const SW_VERSION = 'v2.202609081400';
 const APP_SHELL_CACHE = `gms-shell-${SW_VERSION}`;
 const RUNTIME_CACHE = `gms-runtime-${SW_VERSION}`;
 
@@ -32,7 +32,7 @@ const APP_SHELL = [
   '/assets/InventoryConfigPage-DE_12oyS.js',
   '/assets/InventoryPage-BFIye6ig.js',
   '/assets/MachineLinksPage-BuR5HTCD.js',
-  '/assets/MachineStatusPage-BY0OS_3-.js',
+  '/assets/MachineStatusPage-Bvw1yT1g.js',
   '/assets/MachinesPage-Bn8szXs7.js',
   '/assets/MyActivityPage-DjedFDa1.js',
   '/assets/NotificationsPage-r3VW-H9j.js',
@@ -65,9 +65,9 @@ const APP_SHELL = [
   '/assets/format-CYlUgkqq.js',
   '/assets/global-BE0m_MgC.css',
   '/assets/global-vNmFW5Os.js',
-  '/assets/index-CVOqwoCE.js',
+  '/assets/index-D0a-Sx0K.js',
   '/assets/inventoryModals-BLOfA7AP.js',
-  '/assets/operations-CxkY2FCK.js',
+  '/assets/operations-IdwOzS4X.js',
   '/assets/opsLocalData-BMAuBu-s.js',
   '/assets/react-B7Pwy4PW.js',
   '/assets/txActions-re2Fce9u.js',

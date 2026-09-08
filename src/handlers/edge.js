@@ -1,36 +1,12 @@
-/**
- * src/handlers/edge.js
- * Edge-agent domain HTTP handlers.
- *
- * 部署在每台机器（工控机）上的 machine-heartbeat-agent 容器通过本域上报：
- *   - 主机心跳（30s）：在线状态、IP、agent 版本、主机资源
- *   - 观测到的设备事实：手套 TCP 连通性（192.168.1.100/101:50001）、
- *     自动识别的手套 SN（WUJI 标定目录 / importer-staging machine.jsonc）、
- *     Quest 头显（ADB）等
- *
- * 设计原则：agent 只上报"观测到的事实"，绑定/解绑等业务决策一律在服务端；
- * 服务端将观测 SN 与 sn_registry 比对，产生告警（未登记/状态不可用/绑在别的
- * 机器/左右手接反/系统记录绑定但设备未连接），不自动改写业务数据。
- *
- * Handlers (URL → handler):
- *   POST /api/edge/heartbeat  → handleHeartbeat  (Bearer EDGE_TOKEN, CSRF 豁免)
- *   POST /api/edge/offline    → handleOffline    (Bearer EDGE_TOKEN, CSRF 豁免)
- *   GET  /api/edge/hosts      → handleListHosts  (登录用户)
- *
- * Deps: pool, redisClient(可选), sendJSON, broadcastSSE.
- */
 'use strict';
 
 const crypto = require('crypto');
 
-const PRESENCE_FRESH_MS = 120 * 1000; // 心跳周期 30s，容忍 4 次丢失
+const PRESENCE_FRESH_MS = 120 * 1000;
 const SWEEP_INTERVAL_MS = 30 * 1000;
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 
-// 告警 → 自动工单策略。默认只对"确定性故障/违规"建单；
-// bound_but_disconnected（下班关机误报多）、glove_no_sn（可能仅缺标定文件）
-// 默认只告警不建单，需在 .env 设置 EDGE_AUTO_TICKET_EXTRA 显式开启。
 const TICKET_RULES = {
   hand_mismatch:        { faultType: '手套接线错误（左右手接反）', priority: 'P2' },
   sn_unusable:          { faultType: '设备状态异常（不可投入使用）', priority: 'P1' },
@@ -45,16 +21,13 @@ const TICKET_RULES = {
   recorder_not_ready:   { faultType: '录制器未就绪', priority: 'P2' },
   hermes_errors:        { faultType: 'Hermes 采集程序报错', priority: 'P1' },
 };
-// 自动建单告警白名单：4 个手套 SN 类 + collector_degraded（采集组件断连：
-// 灵巧手/摄像头/Quest/录制器任一降级即建单，用户决策 2026-09-08；立即建单无防抖）。
-// hermes_unreachable 故意不开启：空闲机器采集程序本来就没跑，开启会造成大量误报。
+
 const DEFAULT_TICKET_CODES = ['hand_mismatch', 'sn_unusable', 'sn_bound_elsewhere', 'unregistered_sn', 'collector_degraded'];
-const TICKET_RETRY_MS = 10 * 60 * 1000; // already_open 跳过后 10 分钟再试（人工单完成后可补建）
+const TICKET_RETRY_MS = 10 * 60 * 1000;
 
 module.exports = function createEdgeHandlers(deps) {
   const { pool, redisClient, sendJSON, broadcastSSE } = deps;
 
-  // 由 server.js 在 tech-support 工厂创建后注入（edge 先于 techSupport 创建）
   let _createSystemTicket = null;
   function setTicketCreator(fn) {
     _createSystemTicket = typeof fn === 'function' ? fn : null;
@@ -68,8 +41,6 @@ module.exports = function createEdgeHandlers(deps) {
     }
     return codes;
   }
-
-  // ==================== 认证 ====================
 
   function authenticate(req, res) {
     if (!process.env.EDGE_TOKEN) {
@@ -88,21 +59,17 @@ module.exports = function createEdgeHandlers(deps) {
     return true;
   }
 
-  // ==================== Redis presence（快速通道，可选） ====================
-
   async function _setRedisPresence(machineNumber, payload) {
     if (!redisClient || typeof redisClient.set !== 'function') return;
     try {
       await redisClient.set(`edge:presence:${machineNumber}`, JSON.stringify(payload), 'EX', 120);
-    } catch { /* redis 不可用时以 edge_hosts 表为准 */ }
+    } catch {                                  }
   }
 
   async function _clearRedisPresence(machineNumber) {
     if (!redisClient || typeof redisClient.del !== 'function') return;
     try { await redisClient.del(`edge:presence:${machineNumber}`); } catch {}
   }
-
-  // ==================== 观测事实 vs 注册表 比对 ====================
 
   async function reconcile(machineNumber, devices, collector) {
     const alerts = [];
@@ -120,7 +87,6 @@ module.exports = function createEdgeHandlers(deps) {
       },
     };
 
-    // 系统记录：该机器当前 in_use 的手套
     const [dbRows] = await pool.execute(
       "SELECT snCode, handType FROM sn_registry WHERE machineNumber = ? AND status = 'in_use'",
       [machineNumber]
@@ -130,7 +96,6 @@ module.exports = function createEdgeHandlers(deps) {
       if (r.handType === 'left' || r.handType === 'right') dbByHand[r.handType] = r.snCode;
     }
 
-    // 观测到的 SN 在注册表中的状态
     const observedSNs = [observed.left.snCode, observed.right.snCode].filter(Boolean);
     const snMap = Object.create(null);
     if (observedSNs.length) {
@@ -168,15 +133,11 @@ module.exports = function createEdgeHandlers(deps) {
         }
       }
 
-      // 系统记录绑定中，但边缘代理观测不到设备（拔线/断电/断网）
       if (dbByHand[hand] && !obs.connected) {
         alerts.push({ level: 'warn', code: 'bound_but_disconnected', hand, snCode: dbByHand[hand], message: `系统记录 ${handLabel}套 ${dbByHand[hand]} 绑定中，但未检测到设备连接` });
       }
     }
 
-    // Importer/Hermes are optional fields so older agents continue to work.
-    // A machine-level alert is emitted only when the new collector snapshot is
-    // present; missing fields are not treated as an outage.
     if (collector && hasOwn(collector, 'importer') && collector.importer) {
       const importer = collector.importer;
       if (importer.reachable === false || (importer.endpointStatus && importer.endpointStatus.machine === false)) {
@@ -210,12 +171,6 @@ module.exports = function createEdgeHandlers(deps) {
     return { observed, alerts };
   }
 
-  // ==================== 告警 → 自动技术支持工单 ====================
-  // 防刷屏/防抖：
-  //   - 同一告警（code:hand:snCode）已建单 → 不重复建；
-  //   - 机器已有未完成工单（人工或自动）→ 跳过，10 分钟后才重试；
-  //   - 告警恢复（本次心跳不再出现）→ 清除标记（复发可再建）；
-  //   - 不自动关单：维修完成必须人工确认。
   async function _autoTicket(machineNumber, alerts, prevData, heartbeatPayload) {
     const ticketed = (prevData && prevData.ticketedAlerts) || {};
     if (String(process.env.EDGE_AUTO_TICKET || 'on').toLowerCase() === 'off') {
@@ -227,7 +182,6 @@ module.exports = function createEdgeHandlers(deps) {
     const now = Date.now();
     const activeKeys = new Set();
 
-    // 从心跳 payload 提取环境信息
     const environmentInfo = heartbeatPayload ? {
       hostname: heartbeatPayload.hostname || null,
       ipAddress: heartbeatPayload.ipAddress || null,
@@ -239,7 +193,6 @@ module.exports = function createEdgeHandlers(deps) {
       platform: (heartbeatPayload.host && heartbeatPayload.host.platform) || null,
     } : null;
 
-    // 从心跳 payload 提取设备快照
     const devices = (heartbeatPayload && heartbeatPayload.devices) || {};
     const deviceSnapshot = {
       leftGlove: !!(devices.gloves && devices.gloves.left && devices.gloves.left.connected),
@@ -261,10 +214,9 @@ module.exports = function createEdgeHandlers(deps) {
       activeKeys.add(key);
 
       const prev = ticketed[key];
-      if (prev && prev.ticketId) continue; // 已建单，等人工处理
+      if (prev && prev.ticketId) continue;
       if (prev && prev.skippedAt && now - new Date(prev.skippedAt).getTime() < TICKET_RETRY_MS) continue;
 
-      // 构建详细的诊断信息
       const diagnostics = {};
       const collectorAlert = new Set([
         'importer_unreachable', 'hermes_unreachable', 'collector_degraded',
@@ -301,32 +253,31 @@ module.exports = function createEdgeHandlers(deps) {
         };
       }
 
-      // 根据告警类型添加特定诊断信息
       if (a.code === 'hand_mismatch') {
-        // 左右手接反
+
         diagnostics.expectedHand = a.hand === 'left' ? 'right' : 'left';
         diagnostics.possibleCause = '手套网线接错端口，或标定文件中左右手标记错误';
         diagnostics.suggestedAction = '检查192.168.1.100(左手)和192.168.1.101(右手)的网线连接是否正确';
       } else if (a.code === 'sn_unusable') {
-        // 设备状态异常
+
         diagnostics.deviceStatus = '不可用（damaged/transferred/shipped/repairing等）';
         diagnostics.possibleCause = '设备在系统中标记为不可用状态';
         diagnostics.suggestedAction = '检查设备实际状态，必要时在系统中更新设备状态';
       } else if (a.code === 'sn_bound_elsewhere') {
-        // 设备串用
+
         diagnostics.possibleCause = '设备可能从其他机器移动过来，但系统中未更新绑定关系';
         diagnostics.suggestedAction = '确认设备实际位置，在系统中解绑原机器并重新绑定';
       } else if (a.code === 'unregistered_sn') {
-        // 未登记
+
         diagnostics.possibleCause = '新设备尚未入库登记，或SN码识别错误';
         diagnostics.suggestedAction = '在"SN码管理"中登记该设备，或检查标定文件中的SN是否正确';
       } else if (a.code === 'bound_but_disconnected') {
-        // 绑定但未连接
+
         diagnostics.registeredSN = a.snCode;
         diagnostics.possibleCause = '设备断电、网线松动、或设备故障';
         diagnostics.suggestedAction = '检查设备电源和网线连接，尝试重启设备';
       } else if (a.code === 'glove_no_sn') {
-        // 无法识别SN
+
         diagnostics.possibleCause = '标定文件缺失、格式错误、或采集器容器未运行';
         diagnostics.suggestedAction = '检查/var/.rdc2/wuji_calib/目录是否存在标定文件，或检查importer-staging容器状态';
       } else if (a.code === 'importer_unreachable') {
@@ -349,7 +300,6 @@ module.exports = function createEdgeHandlers(deps) {
         diagnostics.suggestedAction = '查看 Hermes 错误列表和对应组件状态';
       }
 
-      // 告警上下文
       const alertContext = {
         firstDetected: new Date().toISOString(),
         occurrenceCount: 1,
@@ -374,7 +324,7 @@ module.exports = function createEdgeHandlers(deps) {
         if (r && r.ok) {
           ticketed[key] = { ticketId: r.item.id, at: ts };
         } else {
-          // already_open / missing_fields：记录跳过时间，避免每 30s 重试刷屏
+
           ticketed[key] = { skipped: true, reason: (r && r.reason) || 'unknown', existingId: (r && r.existingId) || null, skippedAt: ts };
         }
       } catch (e) {
@@ -382,7 +332,6 @@ module.exports = function createEdgeHandlers(deps) {
       }
     }
 
-    // 告警恢复：清除已消失告警的建单标记
     for (const key of Object.keys(ticketed)) {
       if (!activeKeys.has(key)) {
         console.log(`[EDGE] ${machineNumber} 告警恢复: ${key}（对应工单需人工确认完成）`);
@@ -392,13 +341,10 @@ module.exports = function createEdgeHandlers(deps) {
     return ticketed;
   }
 
-  // ==================== Handlers ====================
-
   async function handleHeartbeat(req, res, body) {
     if (!authenticate(req, res)) return;
     const b = body || {};
-    // 系统机器编号约定为小写（hostname we-xxx，machines 表存 we-xxx），
-    // 统一 toLowerCase 保证 presence map 与 /api/machines 的 machineNumber 键匹配
+
     const machineNumber = String(b.machineNumber || '').trim().toLowerCase();
     if (!machineNumber) return sendJSON(res, { error: 'machineNumber 为必填' }, 400);
 
@@ -418,16 +364,14 @@ module.exports = function createEdgeHandlers(deps) {
 
     const now = new Date().toISOString();
 
-    // 上一次心跳记录（变更广播 + 自动工单防抖状态都依赖它）
     let prev = null;
     try {
       const [rows] = await pool.execute('SELECT status, data FROM edge_hosts WHERE machineNumber = ?', [machineNumber]);
       prev = rows[0] || null;
-    } catch { /* 表可能尚未建 */ }
+    } catch {              }
     let prevData = {};
     try { prevData = JSON.parse((prev && prev.data) || '{}'); } catch {}
 
-    // 故障类告警 → 自动创建技术支持工单（内部调用，失败不影响心跳）
     let ticketedAlerts = {};
     try {
       ticketedAlerts = await _autoTicket(machineNumber, alerts, prevData, b);
@@ -442,6 +386,8 @@ module.exports = function createEdgeHandlers(deps) {
       devices: b.devices || {},
       quest: b.quest || null,
       machineType: b.machineType || null,
+      cameraFps: b.cameraFps || null,
+      handStream: b.handStream || null,
       host: b.host || {},
       importer: b.importer || null,
       hermes: b.hermes || null,
@@ -541,8 +487,6 @@ module.exports = function createEdgeHandlers(deps) {
     sendJSON(res, hosts);
   }
 
-  // ==================== 供 machines handler 合并 presence 字段 ====================
-
   async function loadEdgePresence() {
     const map = Object.create(null);
     try {
@@ -565,15 +509,15 @@ module.exports = function createEdgeHandlers(deps) {
           edgeAlerts: Array.isArray(d.alerts) ? d.alerts : [],
           edgeQuest: d.quest || null,
           edgeDevices: d.devices || null,
+          edgeCameraFps: d.cameraFps || null,
+          edgeHandStream: d.handStream || null,
           importer: d.importer || null,
           hermes: d.hermes || null,
         };
       }
-    } catch { /* edge_hosts 未建表 / 查询失败时静默降级，不影响机器列表 */ }
+    } catch {                                          }
     return map;
   }
-
-  // ==================== 超时扫描 ====================
 
   function startSweeper() {
     const timer = setInterval(async () => {
