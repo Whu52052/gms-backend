@@ -46,6 +46,16 @@ export const addMachine = (machine: any) => post('/api/machines', machine);
 export const deleteMachine = (id: string | number) => del(`/api/machines/${encodeURIComponent(String(id))}`);
 export const syncMachineState = (machineNumber: string, payload: any) =>
   post(`/api/machines/${encodeURIComponent(machineNumber)}/sync-state`, payload);
+// 机器生产状态（可生产/在生产/待维修/在测试）
+export const setProductionStatus = (machineNumber: string, status: string, reason?: string) =>
+  post('/api/machines/production-status', { machineNumber, status, reason: reason || '' });
+export const getProductionHistory = (machineNumber?: string) =>
+  get<{ success: boolean; items: any[] }>(
+    `/api/machines/production-history${machineNumber ? `?machineNumber=${encodeURIComponent(machineNumber)}` : ''}`
+  ).then(r => r.items || []);
+// 采集器综合状态（机器状态信息：任务/操作员/灵巧手/手套/Quest/摄像头/系统程序/容器）
+export const getMachineInfo = (machineNumber: string) =>
+  get<any>(`/api/machines/${encodeURIComponent(machineNumber)}/info`, 12000);
 
 // ==================== 流水 ====================
 export const getTransactions = (limit = 2000) => get<any[]>(`/api/transactions?limit=${limit}`);
@@ -105,6 +115,11 @@ export const completeTechSupport = (id: string | number, result: string, extra?:
   post(`/api/tech-support/${encodeURIComponent(String(id))}/complete`, { result, ...(extra || {}) });
 export const deleteTechSupport = (id: string | number) => del(`/api/tech-support/${encodeURIComponent(String(id))}`);
 export const getMyTechSupportHistory = () => get<any[]>('/api/tech-support/my-history');
+// 常见故障模板（运营共享：任何运营账户可添加，全运营账户可见）
+export const getCommonFaults = () => get<{ success: boolean; faults: any[] }>('/api/tech-support/common-faults').then(r => r.faults || []).catch(() => [] as any[]);
+export const addCommonFault = (payload: { faultType: string; faultDescription: string }) =>
+  post<{ success: boolean; faults: any[] }>('/api/tech-support/common-faults', payload);
+export const deleteCommonFault = (id: string) => del(`/api/tech-support/common-faults/${encodeURIComponent(id)}`);
 export const getMemoryList = (category: string) => get<any[]>(`/api/tech-support/memory/${encodeURIComponent(category)}`);
 export const addMemory = (category: string, text: string) => post(`/api/tech-support/memory/${encodeURIComponent(category)}`, { text });
 

@@ -26,6 +26,8 @@ const crypto = require('crypto');
 const PRESENCE_FRESH_MS = 120 * 1000; // 心跳周期 30s，容忍 4 次丢失
 const SWEEP_INTERVAL_MS = 30 * 1000;
 
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+
 // 告警 → 自动工单策略。默认只对"确定性故障/违规"建单；
 // bound_but_disconnected（下班关机误报多）、glove_no_sn（可能仅缺标定文件）
 // 默认只告警不建单，需在 .env 设置 EDGE_AUTO_TICKET_EXTRA 显式开启。
@@ -36,8 +38,17 @@ const TICKET_RULES = {
   unregistered_sn:      { faultType: '设备未登记入库', priority: 'P3' },
   bound_but_disconnected: { faultType: '绑定设备未连接', priority: 'P3' },
   glove_no_sn:          { faultType: '手套 SN 无法识别', priority: 'P3' },
+  importer_unreachable: { faultType: 'Importer 采集服务不可达', priority: 'P2' },
+  hermes_unreachable:   { faultType: 'Hermes 采集程序不可达', priority: 'P1' },
+  collector_degraded:   { faultType: '采集组件降级', priority: 'P1' },
+  emergency_stopped:    { faultType: '采集机处于急停状态', priority: 'P1' },
+  recorder_not_ready:   { faultType: '录制器未就绪', priority: 'P2' },
+  hermes_errors:        { faultType: 'Hermes 采集程序报错', priority: 'P1' },
 };
-const DEFAULT_TICKET_CODES = ['hand_mismatch', 'sn_unusable', 'sn_bound_elsewhere', 'unregistered_sn'];
+// 自动建单告警白名单：4 个手套 SN 类 + collector_degraded（采集组件断连：
+// 灵巧手/摄像头/Quest/录制器任一降级即建单，用户决策 2026-09-08；立即建单无防抖）。
+// hermes_unreachable 故意不开启：空闲机器采集程序本来就没跑，开启会造成大量误报。
+const DEFAULT_TICKET_CODES = ['hand_mismatch', 'sn_unusable', 'sn_bound_elsewhere', 'unregistered_sn', 'collector_degraded'];
 const TICKET_RETRY_MS = 10 * 60 * 1000; // already_open 跳过后 10 分钟再试（人工单完成后可补建）
 
 module.exports = function createEdgeHandlers(deps) {
@@ -93,7 +104,7 @@ module.exports = function createEdgeHandlers(deps) {
 
   // ==================== 观测事实 vs 注册表 比对 ====================
 
-  async function reconcile(machineNumber, devices) {
+  async function reconcile(machineNumber, devices, collector) {
     const alerts = [];
     const gloves = (devices && devices.gloves) || {};
     const observed = {
@@ -163,6 +174,39 @@ module.exports = function createEdgeHandlers(deps) {
       }
     }
 
+    // Importer/Hermes are optional fields so older agents continue to work.
+    // A machine-level alert is emitted only when the new collector snapshot is
+    // present; missing fields are not treated as an outage.
+    if (collector && hasOwn(collector, 'importer') && collector.importer) {
+      const importer = collector.importer;
+      if (importer.reachable === false || (importer.endpointStatus && importer.endpointStatus.machine === false)) {
+        alerts.push({ level: 'warn', code: 'importer_unreachable', message: `Importer API 不可达${importer.error ? `：${importer.error}` : ''}` });
+      }
+    }
+    if (collector && hasOwn(collector, 'hermes') && collector.hermes) {
+      const hermes = collector.hermes;
+      if (hermes.reachable === false) {
+        alerts.push({ level: 'error', code: 'hermes_unreachable', message: `Hermes API 不可达${hermes.error ? `：${hermes.error}` : ''}` });
+      }
+      const health = hermes.health || {};
+      const degraded = Array.isArray(health.degraded) ? health.degraded : [];
+      const healthFresh = !hermes.endpointStatus || hermes.endpointStatus.health !== false;
+      if (hermes.reachable !== false && healthFresh && (degraded.length || health.allConnected === false)) {
+        alerts.push({ level: 'error', code: 'collector_degraded', components: degraded, message: `采集组件处于降级状态${degraded.length ? `：${degraded.join('、')}` : ''}` });
+      }
+      const state = hermes.state || {};
+      const stateFresh = !hermes.endpointStatus || hermes.endpointStatus.state !== false;
+      if (hermes.reachable !== false && stateFresh && state.emergencyStopped === true) {
+        alerts.push({ level: 'error', code: 'emergency_stopped', message: '采集机处于急停状态，请现场确认' });
+      }
+      if (hermes.reachable !== false && stateFresh && state.healthSummary && state.healthSummary.recorder && state.healthSummary.recorder !== 'ready') {
+        alerts.push({ level: 'warn', code: 'recorder_not_ready', message: `录制器状态为 ${state.healthSummary.recorder}` });
+      }
+      if (hermes.reachable !== false && stateFresh && ((Number(state.errorCount) || 0) > 0 || (Array.isArray(state.errors) && state.errors.length > 0))) {
+        alerts.push({ level: 'error', code: 'hermes_errors', message: `Hermes 当前有 ${Number(state.errorCount) || state.errors.length} 个错误` });
+      }
+    }
+
     return { observed, alerts };
   }
 
@@ -222,8 +266,40 @@ module.exports = function createEdgeHandlers(deps) {
 
       // 构建详细的诊断信息
       const diagnostics = {};
+      const collectorAlert = new Set([
+        'importer_unreachable', 'hermes_unreachable', 'collector_degraded',
+        'emergency_stopped', 'recorder_not_ready', 'hermes_errors',
+      ]).has(a.code);
       if (a.snCode) diagnostics.observedSN = a.snCode;
       if (a.hand) diagnostics.actualHand = a.hand;
+      if (collectorAlert) {
+        const importer = heartbeatPayload && heartbeatPayload.importer;
+        const hermes = heartbeatPayload && heartbeatPayload.hermes;
+        diagnostics.collector = {
+          importer: importer ? {
+            reachable: importer.reachable,
+            endpointStatus: importer.endpointStatus || null,
+            error: importer.error || null,
+          } : null,
+          hermes: hermes ? {
+            reachable: hermes.reachable,
+            version: hermes.version || null,
+            endpointStatus: hermes.endpointStatus || null,
+            health: hermes.health ? {
+              allConnected: hermes.health.allConnected,
+              degraded: hermes.health.degraded || [],
+              errors: hermes.health.errors || [],
+            } : null,
+            state: hermes.state ? {
+              controlState: hermes.state.controlState,
+              isRecording: hermes.state.isRecording,
+              emergencyStopped: hermes.state.emergencyStopped,
+              errorCount: hermes.state.errorCount,
+              errors: hermes.state.errors || [],
+            } : null,
+          } : null,
+        };
+      }
 
       // 根据告警类型添加特定诊断信息
       if (a.code === 'hand_mismatch') {
@@ -253,6 +329,24 @@ module.exports = function createEdgeHandlers(deps) {
         // 无法识别SN
         diagnostics.possibleCause = '标定文件缺失、格式错误、或采集器容器未运行';
         diagnostics.suggestedAction = '检查/var/.rdc2/wuji_calib/目录是否存在标定文件，或检查importer-staging容器状态';
+      } else if (a.code === 'importer_unreachable') {
+        diagnostics.possibleCause = 'Importer 进程未运行、端口被占用、或本机服务网络异常';
+        diagnostics.suggestedAction = '检查采集机 5025 端口和 Importer 服务日志';
+      } else if (a.code === 'hermes_unreachable') {
+        diagnostics.possibleCause = 'Hermes 进程未运行或 5006 端口暂不可用';
+        diagnostics.suggestedAction = '检查 Hermes 主程序状态和 5006 端口';
+      } else if (a.code === 'collector_degraded') {
+        diagnostics.possibleCause = '摄像头、手套、Quest 或录制器组件未连接';
+        diagnostics.suggestedAction = '根据降级组件名称检查对应设备连接和采集程序日志';
+      } else if (a.code === 'emergency_stopped') {
+        diagnostics.possibleCause = '现场触发急停或采集程序检测到急停信号';
+        diagnostics.suggestedAction = '现场确认安全后按流程解除急停，不要远程绕过安全机制';
+      } else if (a.code === 'recorder_not_ready') {
+        diagnostics.possibleCause = '录制器仍在预热或初始化失败';
+        diagnostics.suggestedAction = '等待录制器就绪，若持续异常则检查磁盘和 Hermes 日志';
+      } else if (a.code === 'hermes_errors') {
+        diagnostics.possibleCause = 'Hermes 当前报告一个或多个运行错误';
+        diagnostics.suggestedAction = '查看 Hermes 错误列表和对应组件状态';
       }
 
       // 告警上下文
@@ -265,8 +359,8 @@ module.exports = function createEdgeHandlers(deps) {
       try {
         const r = await _createSystemTicket({
           machineNumber,
-          equipmentType: 'glove',
-          equipmentTypeName: '手套',
+          equipmentType: collectorAlert ? 'collector' : 'glove',
+          equipmentTypeName: collectorAlert ? '采集程序' : '手套',
           faultType: rule.faultType,
           faultDescription: a.message,
           priority: rule.priority,
@@ -300,7 +394,7 @@ module.exports = function createEdgeHandlers(deps) {
 
   // ==================== Handlers ====================
 
-  async function handleHeartbeat(req, res, authUser, captures, body) {
+  async function handleHeartbeat(req, res, body) {
     if (!authenticate(req, res)) return;
     const b = body || {};
     // 系统机器编号约定为小写（hostname we-xxx，machines 表存 we-xxx），
@@ -314,7 +408,7 @@ module.exports = function createEdgeHandlers(deps) {
     };
     let alerts = [];
     try {
-      const r = await reconcile(machineNumber, b.devices || {});
+      const r = await reconcile(machineNumber, b.devices || {}, b);
       observed = r.observed;
       alerts = r.alerts;
     } catch (e) {
@@ -349,6 +443,8 @@ module.exports = function createEdgeHandlers(deps) {
       quest: b.quest || null,
       machineType: b.machineType || null,
       host: b.host || {},
+      importer: b.importer || null,
+      hermes: b.hermes || null,
     };
 
     try {
@@ -373,7 +469,14 @@ module.exports = function createEdgeHandlers(deps) {
       return sendJSON(res, { error: '心跳落库失败' }, 500);
     }
 
-    await _setRedisPresence(machineNumber, { machineNumber, ts: now, observed, alerts });
+    await _setRedisPresence(machineNumber, {
+      machineNumber,
+      ts: now,
+      observed,
+      alerts,
+      importer: b.importer || null,
+      hermes: b.hermes || null,
+    });
 
     let prevAlertCodes = [];
     try { prevAlertCodes = (JSON.parse((prev && prev.data) || '{}').alerts || []).map(a => a.code); } catch {}
@@ -386,7 +489,7 @@ module.exports = function createEdgeHandlers(deps) {
     sendJSON(res, { success: true, machineNumber, serverTime: now, observed, alerts });
   }
 
-  async function handleOffline(req, res, authUser, captures, body) {
+  async function handleOffline(req, res, body) {
     if (!authenticate(req, res)) return;
     const b = body || {};
     const machineNumber = String(b.machineNumber || '').trim().toLowerCase();
@@ -430,6 +533,8 @@ module.exports = function createEdgeHandlers(deps) {
         quest: d.quest || null,
         machineType: d.machineType || null,
         host: d.host || {},
+        importer: d.importer || null,
+        hermes: d.hermes || null,
         updatedAt: r.updatedAt || null,
       };
     });
@@ -459,6 +564,9 @@ module.exports = function createEdgeHandlers(deps) {
           observedGloves: d.observed || null,
           edgeAlerts: Array.isArray(d.alerts) ? d.alerts : [],
           edgeQuest: d.quest || null,
+          edgeDevices: d.devices || null,
+          importer: d.importer || null,
+          hermes: d.hermes || null,
         };
       }
     } catch { /* edge_hosts 未建表 / 查询失败时静默降级，不影响机器列表 */ }

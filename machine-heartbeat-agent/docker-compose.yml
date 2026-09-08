@@ -14,6 +14,10 @@ services:
       # - MACHINE_NUMBER=we-100
       # 心跳间隔（秒）
       - HEARTBEAT_INTERVAL=30
+      # 采集机本地只读 API（host 网络下 127.0.0.1 指向宿主机）
+      - IMPORTER_API_URL=${IMPORTER_API_URL:-http://127.0.0.1:5025}
+      - HERMES_API_URL=${HERMES_API_URL:-http://127.0.0.1:5006}
+      - COLLECTOR_API_TIMEOUT=${COLLECTOR_API_TIMEOUT:-3000}
     volumes:
       # SN 识别方式1：WUJI 标定目录（只读）
       - /var/.rdc2:/var/.rdc2:ro

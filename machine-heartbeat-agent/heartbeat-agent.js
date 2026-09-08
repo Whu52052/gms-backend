@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * GMS Machine Heartbeat Agent v1.1.0
+ * GMS Machine Heartbeat Agent v1.2.0
  *
  * 职责（只观测、不决策）：
  * 1. 自动检测主机名/IP，识别机器编号（hostname we-xxx → we-xxx）
@@ -24,19 +24,23 @@ const https = require('https');
 const os = require('os');
 const GloveSNDetector = require('./glove-sn-detector');
 const DeviceStatusDetector = require('./device-detector');
+const { CollectorApiPoller } = require('./collector-api');
 
-const AGENT_VERSION = '1.1.0';
+const AGENT_VERSION = '1.2.0';
 
 // ==================== CONFIG ====================
 const CONFIG = {
   backendUrl: process.env.GMS_BACKEND_URL || 'http://10.5.51.216:8765',
   edgeToken: process.env.EDGE_TOKEN || '',
   machineNumber: process.env.MACHINE_NUMBER || null,
+  importerUrl: process.env.IMPORTER_API_URL || process.env.IMPORTER_URL || 'http://127.0.0.1:5025',
+  hermesUrl: process.env.HERMES_API_URL || process.env.HERMES_URL || 'http://127.0.0.1:5006',
   heartbeatInterval: parseInt(process.env.HEARTBEAT_INTERVAL || '30', 10) * 1000,
   deviceScanInterval: 120 * 1000,   // 设备 TCP/ADB 探测周期
   snRescanInterval: 10 * 60 * 1000, // SN 重新识别周期
   retryInterval: 10 * 1000,
   timeout: 8000,
+  collectorTimeout: parseInt(process.env.COLLECTOR_API_TIMEOUT || '3000', 10),
 };
 
 const machineInfo = {
@@ -50,6 +54,8 @@ const machineInfo = {
     right: { connected: false, lastCheck: null, snCode: null },
   },
   devices: null, // deviceDetector.getDeviceSummary() 输出
+  importer: null,
+  hermes: null,
 };
 
 let deviceDetector = null;
@@ -109,7 +115,7 @@ function httpRequest(url, options = {}) {
     const urlObj = new URL(url);
     const protocol = urlObj.protocol === 'https:' ? https : http;
     const headers = Object.assign({}, options.headers || {});
-    if (CONFIG.edgeToken && !headers.Authorization) {
+    if (CONFIG.edgeToken && options.includeEdgeAuth !== false && !headers.Authorization) {
       headers.Authorization = `Bearer ${CONFIG.edgeToken}`;
     }
 
@@ -119,7 +125,7 @@ function httpRequest(url, options = {}) {
       path: urlObj.pathname + urlObj.search,
       method: options.method || 'GET',
       headers,
-      timeout: CONFIG.timeout,
+      timeout: options.timeout || CONFIG.timeout,
     }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
@@ -145,6 +151,38 @@ function httpRequest(url, options = {}) {
     }
     req.end();
   });
+}
+
+const collectorApi = new CollectorApiPoller({
+  importerUrl: CONFIG.importerUrl,
+  hermesUrl: CONFIG.hermesUrl,
+  timeout: CONFIG.collectorTimeout,
+  request: httpRequest,
+});
+
+let collectorPollAt = 0;
+let collectorPollPromise = null;
+
+async function pollCollectorApis(force = false) {
+  const now = Date.now();
+  if (!force && collectorPollAt && now - collectorPollAt < CONFIG.heartbeatInterval) return;
+  if (collectorPollPromise) return collectorPollPromise;
+  collectorPollPromise = collectorApi.poll()
+    .then(snapshot => {
+      machineInfo.importer = snapshot.importer;
+      machineInfo.hermes = snapshot.hermes;
+      collectorPollAt = Date.now();
+      return snapshot;
+    })
+    .catch(error => {
+      // The adapter preserves the last successful endpoint snapshot. An
+      // unexpected adapter error must not block the host heartbeat.
+      console.error('[Collector] API 轮询异常:', error.message);
+      collectorPollAt = Date.now();
+      return null;
+    })
+    .finally(() => { collectorPollPromise = null; });
+  return collectorPollPromise;
 }
 
 // ==================== PAYLOAD ====================
@@ -179,8 +217,8 @@ function buildPayload() {
         },
       },
       dexterousHands: summary && summary.dexterousHands ? {
-        left: { connected: !!summary.dexterousHands.left, ip: '192.168.1.110' },
-        right: { connected: !!summary.dexterousHands.right, ip: '192.168.1.111' },
+        left: { connected: !!summary.dexterousHands.left, ip: '192.168.1.110', snCode: (machineInfo.handsSN && machineInfo.handsSN.left) || null },
+        right: { connected: !!summary.dexterousHands.right, ip: '192.168.1.111', snCode: (machineInfo.handsSN && machineInfo.handsSN.right) || null },
       } : null,
       roboticArm: summary && summary.roboticArm ? {
         connected: !!summary.roboticArm.connected, ip: '192.168.1.190',
@@ -188,9 +226,13 @@ function buildPayload() {
     },
     quest: summary && summary.quest ? {
       connected: !!summary.quest.connected,
+      serialNumber: summary.quest.serialNumber || null,
+      adbStatus: summary.quest.error || (summary.quest.connected ? 'device' : null),
       battery: summary.quest.battery ?? null,
       controllers: summary.questControllers || null,
     } : null,
+    importer: machineInfo.importer,
+    hermes: machineInfo.hermes,
   };
 }
 
@@ -201,10 +243,13 @@ async function sendHeartbeat() {
     return false;
   }
   try {
+    await pollCollectorApis();
+    const payload = buildPayload();
+    console.log('[Heartbeat] 发送数据:', JSON.stringify(payload, null, 2));
     const res = await httpRequest(`${CONFIG.backendUrl}/api/edge/heartbeat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildPayload()),
+      body: JSON.stringify(payload),
     });
     const alerts = (res.body && res.body.alerts) || [];
     if (alerts.length) {
@@ -257,6 +302,9 @@ async function scanSN() {
     const result = await snDetector.detectAll();
     if (result.left) machineInfo.gloves.left.snCode = result.left;
     if (result.right) machineInfo.gloves.right.snCode = result.right;
+    if (result.handLeft || result.handRight) {
+      machineInfo.handsSN = { left: result.handLeft || null, right: result.handRight || null };
+    }
   } catch (e) {
     console.error('[SN] SN 识别异常:', e.message);
   }
@@ -273,6 +321,16 @@ const healthServer = http.createServer((req, res) => {
       uptime: process.uptime(),
       consecutiveFailures,
       gloves: machineInfo.gloves,
+      importer: machineInfo.importer ? {
+        reachable: machineInfo.importer.reachable,
+        checkedAt: machineInfo.importer.checkedAt,
+        error: machineInfo.importer.error || null,
+      } : null,
+      hermes: machineInfo.hermes ? {
+        reachable: machineInfo.hermes.reachable,
+        checkedAt: machineInfo.hermes.checkedAt,
+        error: machineInfo.hermes.error || null,
+      } : null,
     }));
   } else if (req.url === '/info') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -310,6 +368,8 @@ async function main() {
   console.log(`   GMS Machine Heartbeat Agent v${AGENT_VERSION}`);
   console.log('==========================================');
   console.log(`Backend URL: ${CONFIG.backendUrl}`);
+  console.log(`Importer API: ${CONFIG.importerUrl}`);
+  console.log(`Hermes API: ${CONFIG.hermesUrl}`);
   console.log(`Heartbeat Interval: ${CONFIG.heartbeatInterval / 1000}s`);
   console.log('------------------------------------------');
 
@@ -343,6 +403,7 @@ async function main() {
   setInterval(scanDevices, CONFIG.deviceScanInterval);
 
   console.log('------------------------------------------');
+  await pollCollectorApis(true);
   await sendHeartbeat();
   heartbeatLoop();
   console.log(`[Heartbeat] 心跳循环已启动（每 ${CONFIG.heartbeatInterval / 1000} 秒）\n`);

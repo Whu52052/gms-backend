@@ -646,6 +646,87 @@
     },
 
     // ==================== Submit Ticket ====================
+    // 常见故障快捷输入（内置模板，点击填充故障类型+描述，可再编辑）
+    _tsCommonList: [
+      { faultType: '连接失败', faultDescription: '设备使用中频繁断连/无法连接，已尝试重启软件和设备，问题仍存在。' },
+      { faultType: '传感器异常', faultDescription: '手套/灵巧手某根手指数据无响应或明显漂移，动作不跟手，影响正常使用。' },
+      { faultType: '闪退异常', faultDescription: '采集/操作软件运行中闪退，复现步骤：启动后进行常规操作即退出。' },
+      { faultType: '无法启动', faultDescription: '设备上电/软件启动无反应，指示灯状态异常，已检查供电与网线连接。' },
+      { faultType: '硬件损坏', faultDescription: '设备外观破损/线缆断裂/手指机构卡滞，需现场检修或更换。' },
+      { faultType: '校准异常', faultDescription: '标定后姿态仍偏移，动作与实际手势不一致，重新标定无效。' },
+    ],
+    _tsFillCommon(i) {
+      var e = (this._tsCommonList || [])[i];
+      if (!e) return;
+      var ft = document.getElementById('m-ts-faulttype');
+      var fd = document.getElementById('m-ts-faultdesc');
+      if (ft) ft.value = e.faultType;
+      if (fd) fd.value = e.faultDescription;
+    },
+    _tsFillShared(i) {
+      var e = (this._tsSharedFaults || [])[i];
+      if (!e) return;
+      var ft = document.getElementById('m-ts-faulttype');
+      var fd = document.getElementById('m-ts-faultdesc');
+      if (ft) ft.value = e.faultType;
+      if (fd) fd.value = e.faultDescription;
+    },
+    // 常见故障区（内置 + 运营共享）渲染为字符串，供弹窗初次渲染与增删后局部刷新
+    _tsRenderCommonHtml() {
+      var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'+
+        '<div style="font-size:0.75rem;font-weight:600;">📌 常见故障（点击填充，可再修改）</div>'+
+        '<span onclick="M._tsAddCommon()" style="font-size:0.7rem;color:#1677ff;cursor:pointer;">＋ 保存当前填写为常见</span></div>'+
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
+      for (var ci = 0; ci < this._tsCommonList.length; ci++) {
+        html += '<span onclick="M._tsFillCommon('+ci+')" style="padding:5px 10px;border-radius:14px;background:#e6f4ff;color:#1677ff;font-size:0.72rem;cursor:pointer;border:1px solid #91caff;">'+this._esc(this._tsCommonList[ci].faultType)+'</span>';
+      }
+      var shared = this._tsSharedFaults || [];
+      var me = this.currentUser || {};
+      var myId = me.userId || me.id;
+      for (var si = 0; si < shared.length; si++) {
+        var f = shared[si];
+        var canDel = me.role === 'superadmin' || !f.createdBy || f.createdBy === myId;
+        var tip = f.createdByName ? (' title="由 '+f.createdByName+' 添加"') : '';
+        html += '<span'+tip+' onclick="M._tsFillShared('+si+')" style="padding:5px 10px;border-radius:14px;background:#e6fffb;color:#08979c;font-size:0.72rem;cursor:pointer;border:1px solid #87e8de;">'+
+          this._esc(f.faultType)+
+          (canDel ? '<span onclick="event.stopPropagation();M._tsDelShared('+si+')" style="margin-left:5px;opacity:.55;">✕</span>' : '')+
+          '</span>';
+      }
+      html += '</div>';
+      return html;
+    },
+    async _tsAddCommon() {
+      var ft = ((document.getElementById('m-ts-faulttype')||{}).value||'').trim();
+      var fd = ((document.getElementById('m-ts-faultdesc')||{}).value||'').trim();
+      if (!ft || !fd) { this.toast('请先填写故障类型和故障描述'); return; }
+      try {
+        var r = await API.addCommonFault({ faultType: ft, faultDescription: fd });
+        if (r && r.success !== false && r.faults) {
+          this._tsSharedFaults = r.faults;
+          var wrap = document.getElementById('m-ts-common-wrap');
+          if (wrap) wrap.innerHTML = this._tsRenderCommonHtml();
+          this.toast('已保存，全运营账户可见','ok');
+        } else {
+          this.toast((r && (r.error || r.message)) || '保存失败','err');
+        }
+      } catch (e) { this.toast('保存失败，请稍后重试','err'); }
+    },
+    async _tsDelShared(i) {
+      var f = (this._tsSharedFaults || [])[i];
+      if (!f) return;
+      if (!confirm('删除常见故障「'+f.faultType+'」？')) return;
+      try {
+        var r = await API.deleteCommonFault(f.id);
+        if (r && r.success !== false && r.faults) {
+          this._tsSharedFaults = r.faults;
+          var wrap = document.getElementById('m-ts-common-wrap');
+          if (wrap) wrap.innerHTML = this._tsRenderCommonHtml();
+          this.toast('已删除','ok');
+        } else {
+          this.toast((r && (r.error || r.message)) || '删除失败','err');
+        }
+      } catch (e) { this.toast('删除失败，请稍后重试','err'); }
+    },
     // 历史提交跟随账户（服务端从本人历史工单提取，跨设备可见），点击直接填充
     _tsFillHistory(i) {
       var e = (this._tsHistoryList || [])[i];
@@ -664,7 +745,10 @@
       var tl = lt==='glove'?'手套':(lt||'');
       // 历史提交记录（服务端获取，最近20条，点击直接填充）
       this._tsHistoryList = [];
+      this._tsSharedFaults = [];
       try { this._tsHistoryList = (await API.getMyTechSupportHistory())||[]; } catch(e) {}
+      // 运营共享常见故障（全运营账户可见，运营账户可增删）
+      try { this._tsSharedFaults = (await API.getCommonFaults())||[]; } catch(e) {}
       var histHtml = '';
       if (this._tsHistoryList.length) {
         histHtml = '<div style="margin-top:4px;"><div style="font-size:0.75rem;font-weight:600;margin-bottom:6px;">🕘 历史提交（点击填充）</div>';
@@ -677,12 +761,15 @@
         }
         histHtml += '</div>';
       }
+      // 常见故障：内置模板（蓝）+ 运营共享模板（青，可增删），增删后局部刷新
+      var commonHtml = '<div id="m-ts-common-wrap" style="margin-top:4px;">'+this._tsRenderCommonHtml()+'</div>';
       this.openModal('<div class="m-modal-header"><div class="m-modal-title">提交技术支持</div><button class="m-modal-close" onclick="M.closeModal()">x</button></div>'+
         '<div class="m-form-section">'+
           '<div class="m-field"><label class="m-field-label">设备编号</label><input id="m-ts-machineno" class="m-input" value="'+this._esc(mc)+'" placeholder="请输入设备编号" '+(mc?'readonly':'')+'></div>'+
           '<div class="m-field"><label class="m-field-label">设备类型</label><input id="m-ts-equipmenttype" class="m-input" value="'+this._esc(tl)+'" placeholder="如：手套 / 灵巧手" '+(lt?'readonly':'')+'></div>'+
           '<div class="m-field"><label class="m-field-label">故障类型</label><input id="m-ts-faulttype" class="m-input" placeholder="如：传感器异常"></div>'+
           '<div class="m-field"><label class="m-field-label">故障描述</label><textarea id="m-ts-faultdesc" class="m-textarea" placeholder="请详细描述故障现象"></textarea></div>'+
+          commonHtml+
           histHtml+
         '</div>'+
         '<div class="m-btn-row"><button class="m-btn m-btn-outline" onclick="M.closeModal()">取消</button><button class="m-btn m-btn-primary" onclick="M._submitTicket()">提交</button></div>');
@@ -876,6 +963,7 @@
         {label:'库位',page:'storage-locations',desc:'库位管理与设备分配',icon:'K',sys:'mnt'},
         {label:'库存配置',page:'inventory-config',desc:'动态添加和管理物品库存',icon:'K',a:true,sys:'mnt'},
         {label:'机器管理',page:'machines',desc:'机器上线/下线与手套绑定',icon:'🖥',sys:'mnt'},
+        {label:'机器状态',page:'machine-status',desc:'生产状态可视化与变更',icon:'📈',sys:'both'},
         {label:'SN链接',page:'sn-links',desc:'SN状态查询链接管理',icon:'🔗',sys:'mnt'},
         {label:'机器链接',page:'machine-links',desc:'机器状态查询链接管理',icon:'🧭',sys:'mnt'},
         {label:'设备配置',page:'equipment-config',desc:'设备类型与消耗配置',icon:'🔧',a:true,sys:'mnt'},
@@ -905,7 +993,7 @@
         this.toast('无权限访问该功能', 'err');
         return;
       }
-      var titles = {transactions:'流水记录',audit:'审计日志','sn-registry':'SN注册表','after-sales':'售后记录',reports:'统计报表',settings:'系统设置',users:'用户管理',popup:'弹窗消息',sop:'SOP文档',solutions:'解决方案库',replacement:'置换库存','storage-locations':'库位管理','inventory-config':'库存配置','shift-inspection':'今日首检','delivery-notes':'发货单','server-status':'服务器看板',machines:'机器管理','sn-links':'SN链接管理','machine-links':'机器链接管理','equipment-config':'设备类型配置'};
+      var titles = {transactions:'流水记录',audit:'审计日志','sn-registry':'SN注册表','after-sales':'售后记录',reports:'统计报表',settings:'系统设置',users:'用户管理',popup:'弹窗消息',sop:'SOP文档',solutions:'解决方案库',replacement:'置换库存','storage-locations':'库位管理','inventory-config':'库存配置','shift-inspection':'今日首检','delivery-notes':'发货单','server-status':'服务器看板',machines:'机器管理','machine-status':'机器状态','sn-links':'SN链接管理','machine-links':'机器链接管理','equipment-config':'设备类型配置'};
       var view = document.getElementById('m-subpage-view');
       var content = document.getElementById('m-subpage-content');
       if (view) view.style.display = 'flex';
@@ -932,6 +1020,7 @@
           case 'delivery-notes': await this._renderDeliveryNotes(content); break;
           case 'server-status': await this._renderServerDashboard(content); break;
           case 'machines': await this._renderMachinesPage(content); break;
+          case 'machine-status': await this._renderMachineStatusPage(content); break;
           case 'sn-links': await this._renderSNLinks(content); break;
           case 'machine-links': await this._renderMachineLinks(content); break;
           case 'equipment-config': await this._renderEquipmentConfig(content); break;
@@ -3563,6 +3652,17 @@
           return '<span style="color:#52c41a;">'+label+' ✅已连接</span><span style="opacity:.45;">(SN未识别)</span>';
         }
         var obsLine = obs ? '<div class="m-device-info" style="font-size:12px;">实测：'+obsHand('left', left && left.snCode)+' · '+obsHand('right', right && right.snCode)+'</div>' : '';
+        // 生产状态行（可生产/在生产/待维修/在测试；待维修由维修工单自动驱动，无记录默认可生产）
+        var PS_META = {
+          ready: { l: '可生产', c: '#389e0d', bg: '#f6ffed' },
+          in_production: { l: '在生产', c: '#0958d9', bg: '#e6f4ff' },
+          waiting_repair: { l: '待维修', c: '#cf1322', bg: '#fff1f0' },
+          testing: { l: '在测试', c: '#d46b08', bg: '#fff7e6' },
+        };
+        var psKey = (rec && rec.productionStatus) || 'ready';
+        var psMeta = PS_META[psKey] || PS_META.ready;
+        var prodLine = '<div class="m-device-info">生产：<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:'+psMeta.bg+';color:'+psMeta.c+';font-weight:600;">'+psMeta.l+'</span>'+
+          ((rec && rec.productionReason) ? ' <span style="opacity:.6;font-size:12px;">'+self._esc(rec.productionReason)+'</span>' : '')+'</div>';
         // 告警示例行（服务端比对 sn_registry 产生）
         var alertsHtml = '';
         if (p && p.edgeAlerts && p.edgeAlerts.length) {
@@ -3574,6 +3674,7 @@
         return '<div class="m-device-card">'+
           '<div class="m-device-header"><div class="m-device-name" style="font-family:monospace;">'+self._esc(num)+(hasAgent ? ' <span style="font-size:12px;">'+(hostOnline ? '🟢' : '⚫')+'</span>' : '')+'</div><span class="m-badge '+si.c+'">'+si.l+'</span></div>'+
           '<div class="m-device-info">'+self._esc(typeLabel[rec ? rec.deviceType : ''] || (rec ? rec.equipmentType : '') || '设备')+'</div>'+
+          prodLine+
           hostLine+
           '<div class="m-device-info">绑定：左手 '+self._esc(left ? left.snCode : '未绑定')+' · 右手 '+self._esc(right ? right.snCode : '未绑定')+'</div>'+
           obsLine+
@@ -3588,6 +3689,349 @@
         '<div class="m-section-title">🟢/⚫ 为主机实时在线状态（边缘代理上报）；彩色标签为手套挂接状态：左右手都绑定=在线，仅一只=部分绑定</div>'+
         '<div class="m-btn-row"><button class="m-btn m-btn-primary m-btn-block" onclick="M._machOnline(\'\')">+ 新机器上线</button></div>'+
         '<div style="margin-top:10px;">'+(cards || '<div class="m-empty"><div class="m-empty-text">暂无机器</div></div>')+'</div></div>';
+    },
+    // ==================== 机器状态页（生产状态可视化） ====================
+    async _renderMachineStatusPage(wrap) {
+      var self = this;
+      var machines = [], eqcfg = [], history = [];
+      try { machines = (await API.getMachines()) || []; } catch(e) {}
+      try { eqcfg = (await API.getEquipmentConfig()) || []; } catch(e) {}
+      try { history = (await API.getProductionHistory()) || []; } catch(e) {}
+      // 取每台机器最新一条记录
+      var latestMap = {};
+      machines.forEach(function(m){
+        var num = m.machineNumber;
+        if (!num) return;
+        if (!latestMap[num] || String(m.timestamp||m.createdAt||'') > String(latestMap[num].timestamp||latestMap[num].createdAt||'')) {
+          latestMap[num] = m;
+        }
+      });
+      var numbers = Object.keys(latestMap).sort();
+      // 设备类型标签
+      var typeLabel = {};
+      (eqcfg||[]).forEach(function(c){ if (c && c.id) typeLabel[c.id] = (c.icon||'')+' '+c.name; });
+      var dtLabel = function(dt){ return typeLabel[dt] || dt || '-'; };
+      // 生产状态元信息
+      var PS_META = {
+        ready: { l: '可生产', c: '#389e0d', bg: '#f6ffed' },
+        in_production: { l: '在生产', c: '#0958d9', bg: '#e6f4ff' },
+        waiting_repair: { l: '待维修', c: '#cf1322', bg: '#fff1f0' },
+        testing: { l: '在测试', c: '#d46b08', bg: '#fff7e6' },
+      };
+      var PS_ORDER = ['ready','in_production','waiting_repair','testing'];
+      var psOf = function(rec){ return (rec && rec.productionStatus) || 'ready'; };
+      // 统计
+      var counts = { ready:0, in_production:0, waiting_repair:0, testing:0 };
+      numbers.forEach(function(n){ counts[psOf(latestMap[n])] = (counts[psOf(latestMap[n])]||0)+1; });
+      // 收集设备类型选项（仅展示实际存在的类型）
+      var dtSeen = {}, dtOptions = [{val:'all',label:'全部设备类型'}];
+      numbers.forEach(function(n){
+        var dt = latestMap[n].deviceType;
+        if (dt && !dtSeen[dt]) { dtSeen[dt]=1; dtOptions.push({val:dt,label:dtLabel(dt)}); }
+      });
+      this._msData = { latestMap:latestMap, numbers:numbers, history:history, PS_META:PS_META, PS_ORDER:PS_ORDER, dtLabel:dtLabel, dtOptions:dtOptions };
+      // 筛选状态初始化（首次进入）
+      if (this._msProdFilter === undefined) this._msProdFilter = 'all';
+      if (this._msDeviceType === undefined) this._msDeviceType = 'all';
+      if (this._msSearch === undefined) this._msSearch = '';
+      var dtSelOpts = dtOptions.map(function(o){
+        return '<option value="'+self._esc(o.val)+'"'+(self._msDeviceType===o.val?' selected':'')+'>'+self._esc(o.label)+'</option>';
+      }).join('');
+      wrap.innerHTML = '<div class="m-form-section">'+
+        '<div class="m-section-title">生产状态可视化：可生产 / 在生产 / 待维修 / 在测试（待维修由维修工单自动驱动）</div>'+
+        '<div id="m-ms-stats"></div>'+
+        '<div id="m-ms-prodtabs" style="margin:8px 0;"></div>'+
+        '<div style="display:flex;gap:8px;margin-bottom:8px;">'+
+          '<select class="m-select" style="flex:1;" onchange="M._msSetDt(this.value)">'+dtSelOpts+'</select>'+
+          '<input class="m-input" style="flex:1;" placeholder="搜索机器编号..." value="'+this._esc(this._msSearch)+'" oninput="M._msSetSearch(this.value)">'+
+        '</div>'+
+        '<div id="m-ms-list"></div>'+
+        '<div class="m-section-title" style="margin-top:16px;">生产状态变更记录</div>'+
+        '<div id="m-ms-history"></div>'+
+        '</div>';
+      this._msRenderStats();
+      this._msRenderList();
+      this._msRenderHistory();
+    },
+    _msSetProd(v) { this._msProdFilter = v; this._msRenderList(); },
+    _msSetDt(v) { this._msDeviceType = v; this._msRenderStats(); this._msRenderList(); },
+    _msSetSearch(v) { this._msSearch = v; this._msRenderList(); },
+    _msDeviceFiltered() {
+      var D = this._msData;
+      if (this._msDeviceType === 'all') return D.numbers.slice();
+      return D.numbers.filter(function(n){ return (D.latestMap[n].deviceType||'') === self._msDeviceType; });
+    },
+    _msRenderStats() {
+      var self = this;
+      var D = this._msData; if (!D) return;
+      var PS_META = D.PS_META, PS_ORDER = D.PS_ORDER;
+      // 按设备类型筛选后的机器
+      var filtered = D.numbers.filter(function(n){
+        if (self._msDeviceType === 'all') return true;
+        return (D.latestMap[n].deviceType||'') === self._msDeviceType;
+      });
+      // 统计
+      var counts = { ready:0, in_production:0, waiting_repair:0, testing:0 };
+      filtered.forEach(function(n){ var ps = (D.latestMap[n].productionStatus)||'ready'; counts[ps] = (counts[ps]||0)+1; });
+      var totalLabel = this._msDeviceType === 'all' ? '机器总数' : (D.dtLabel(this._msDeviceType)+' 数量');
+      // 统计卡片
+      var statsBox = document.getElementById('m-ms-stats');
+      if (statsBox) {
+        statsBox.innerHTML = '<div class="m-stat-row" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;">'+
+          '<div class="m-stat-card" style="flex:0 0 auto;min-width:80px;"><div class="m-stat-value">'+filtered.length+'</div><div class="m-stat-label">'+self._esc(totalLabel)+'</div></div>'+
+          PS_ORDER.map(function(s){
+            var meta = PS_META[s];
+            return '<div class="m-stat-card" style="flex:0 0 auto;min-width:80px;"><div class="m-stat-value" style="color:'+meta.c+';">'+(counts[s]||0)+'</div><div class="m-stat-label">'+meta.l+'</div></div>';
+          }).join('')+
+          '</div>';
+      }
+      // 筛选标签
+      var tabsBox = document.getElementById('m-ms-prodtabs');
+      if (tabsBox) {
+        tabsBox.innerHTML = '<div class="m-sub-tabs" style="display:flex;flex-wrap:wrap;">'+
+          '<button class="m-sub-tab'+(this._msProdFilter==='all'?' active':'')+'" onclick="M._msSetProd(\'all\')">全部('+filtered.length+')</button>'+
+          PS_ORDER.map(function(s){
+            return '<button class="m-sub-tab'+(self._msProdFilter===s?' active':'')+'" onclick="M._msSetProd(\''+s+'\')">'+PS_META[s].l+'('+(counts[s]||0)+')</button>';
+          }).join('')+
+          '</div>';
+      }
+    },
+    _msRenderList() {
+      var self = this;
+      var D = this._msData; if (!D) return;
+      var box = document.getElementById('m-ms-list'); if (!box) return;
+      var PS_META = D.PS_META, PS_ORDER = D.PS_ORDER;
+      var list = D.numbers.slice();
+      if (this._msProdFilter !== 'all') list = list.filter(function(n){ return ((D.latestMap[n].productionStatus)||'ready') === self._msProdFilter; });
+      if (this._msDeviceType !== 'all') list = list.filter(function(n){ return (D.latestMap[n].deviceType||'') === self._msDeviceType; });
+      var q = (this._msSearch||'').trim().toLowerCase();
+      if (q) list = list.filter(function(n){ return n.toLowerCase().indexOf(q) >= 0; });
+      if (!list.length) { box.innerHTML = '<div class="m-empty"><div class="m-empty-text">暂无符合条件的机器</div></div>'; return; }
+      var cards = list.map(function(num){
+        var rec = D.latestMap[num];
+        var psKey = (rec && rec.productionStatus) || 'ready';
+        var meta = PS_META[psKey] || PS_META.ready;
+        var reason = rec.productionReason ? '<div class="m-device-info" style="opacity:.7;font-size:12px;">原因：'+self._esc(rec.productionReason)+'</div>' : '';
+        var updater = rec.productionUpdatedByName || (rec.productionSource==='ticket'?'工单联动':'-');
+        var updTime = rec.productionUpdatedAt ? self._fmtTime(rec.productionUpdatedAt) : '-';
+        // 待维修由工单驱动，不允许人工切换；其余状态可点击切换
+        var switchBtn = '';
+        if (psKey !== 'waiting_repair') {
+          var otherOpts = PS_ORDER.filter(function(s){ return s !== 'waiting_repair' && s !== psKey; }).map(function(s){
+            return '<option value="'+s+'">标记为「'+PS_META[s].l+'」</option>';
+          }).join('');
+          switchBtn = '<div style="display:flex;gap:6px;margin-top:6px;" onclick="event.stopPropagation()">'+
+            '<select class="m-select" id="m-ms-sel-'+self._esc(num)+'" style="flex:1;">'+otherOpts+'</select>'+
+            '<button class="m-btn m-btn-sm m-btn-primary" onclick="M._msDoSwitch(\''+self._esc(num)+'\')">变更</button>'+
+            '</div>';
+        } else {
+          switchBtn = '<div style="margin-top:6px;font-size:12px;color:#cf1322;" onclick="event.stopPropagation()">待维修由维修工单驱动，工单完成后自动恢复可生产</div>';
+        }
+        // 采集器机器（we-1xx / szx3-*）显示"采集器状态"入口
+        var infoBtn = (/^(?:we-1\d\d|szx3-\d+)$/.test(num)) ?
+          '<button class="m-btn m-btn-sm" style="margin-top:6px;width:100%;" onclick="event.stopPropagation();M._msShowCollectorInfo(\''+self._esc(num)+'\')">📡 采集器状态</button>' : '';
+        return '<div class="m-device-card" onclick="M._msShowMachineHistory(\''+self._esc(num)+'\')" style="cursor:pointer;">'+
+          '<div class="m-device-header"><div class="m-device-name" style="font-family:monospace;">'+self._esc(num)+'</div>'+
+            '<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:'+meta.bg+';color:'+meta.c+';font-weight:600;">'+meta.l+'</span></div>'+
+          '<div class="m-device-info">设备类型：'+self._esc(D.dtLabel(rec.deviceType))+'</div>'+
+          reason+
+          '<div class="m-device-info" style="font-size:12px;opacity:.7;">更新人：'+self._esc(updater)+' · '+updTime+'</div>'+
+          '<div class="m-device-info" style="font-size:11px;color:#1677ff;">点击查看完整历史 →</div>'+
+          switchBtn+
+          infoBtn+
+          '</div>';
+      }).join('');
+      box.innerHTML = cards;
+    },
+    // 采集器综合状态（机器状态信息）：5025 Importer + 5006 RDC2 聚合，10s 自动刷新
+    async _msShowCollectorInfo(num) {
+      var self = this;
+      if (this._msInfoTimer) { clearInterval(this._msInfoTimer); this._msInfoTimer = null; }
+      var devTag = function(d) {
+        if (!d) return '<span style="opacity:.4;">无</span>';
+        var age = d.ageS != null ? d.ageS : d.age_s;
+        var seen = d.everSeen != null ? d.everSeen : d.ever_seen;
+        if (d.status === 'connected') {
+          if (seen === false) return '<span style="color:#d46b08;">已连接·无数据</span>';
+          if (typeof age === 'number') {
+            if (age <= 2) return '<span style="color:#389e0d;">实时 '+age+'s</span>';
+            if (age <= 10) return '<span style="color:#d46b08;">延迟 '+age+'s</span>';
+            return '<span style="color:#cf1322;">断流 '+age+'s</span>';
+          }
+          return '<span style="color:#389e0d;">已连接</span>';
+        }
+        return '<span style="color:#cf1322;">'+(d.status==='unknown'?'未知':'断开')+'</span>';
+      };
+      var camName = { ego_camera:'前置相机', wrist_left:'左手腕相机', wrist_right:'右手腕相机', vst_left:'头显左眼', vst_right:'头显右眼', overlay:'合成画面' };
+      var CS = { RECORD:['录制中','#cf1322'], ACTIVE:['就绪','#389e0d'], ALIGN:['对齐中','#d46b08'], INIT:['准备中','#d46b08'], BOOT:['启动中','#d46b08'], STOPPED:['已停止','#999'] };
+      var cell = function(label, valHtml, detail) {
+        return '<div style="flex:1 1 30%;min-width:120px;background:#f7f8fa;border-radius:8px;padding:7px 9px;">'+
+          '<div style="font-size:11px;opacity:.55;margin-bottom:2px;">'+label+'</div>'+
+          '<div style="font-size:13px;">'+valHtml+'</div>'+
+          (detail?'<div style="font-size:11px;opacity:.65;margin-top:3px;">'+detail+'</div>':'')+'</div>';
+      };
+      var netOff = function(x){ return x && x.connected === false ? '<span style="color:#cf1322;">网络不可达</span>' : ''; };
+      var delayTxt = function(v){ return v!=null ? '延迟 '+Math.round(Number(v))+'ms' : ''; };
+      var render = function(d, errMsg) {
+        var html = '';
+        if (errMsg) {
+          html = '<div class="m-empty"><div class="m-empty-text">'+self._esc(errMsg)+'</div></div>';
+        } else if (!d || !d.success) {
+          html = '<div class="m-empty"><div class="m-empty-text">'+self._esc((d && d.error) || '暂无数据')+'</div></div>';
+        } else {
+          var s = d.system || {}, dv = d.devices || {}, t = d.task;
+          html += (d.partial && d.partial.importer ? '<div style="background:#fff7e6;border-radius:8px;padding:6px 10px;font-size:12px;color:#d46b08;margin-bottom:6px;">Importer(5025) 暂不可达，任务/容器信息缺失</div>' : '');
+          html += (d.partial && d.partial.hermesOffline ? '<div style="background:#fafafa;border:1px solid #f0f0f0;border-radius:8px;padding:6px 10px;font-size:12px;color:#8c8c8c;margin-bottom:6px;">采集程序未运行（未在采集或标定中）——工作阶段与传输数据暂缺，属正常现象</div>' : '');
+          html += (d.partial && d.partial.hermesFailed ? '<div style="background:#fff7e6;border-radius:8px;padding:6px 10px;font-size:12px;color:#d46b08;margin-bottom:6px;">采集程序(5006) 暂不可达，工作阶段/传输状态缺失</div>' : '');
+          var cs = CS[s.controlState] || [s.controlState || '未知', '#999'];
+          html += '<div class="m-form-section-title">系统程序</div>';
+          html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">'+
+            cell('系统程序', '<span style="color:'+(s.activity==='running'?'#389e0d':'#999')+';font-weight:600;">'+(s.activity==='running'?'运行中':(s.activity==='idle'?'空闲':(s.activity||'未知')))+'</span>')+
+            cell('工作阶段', '<span style="color:'+cs[1]+';font-weight:600;">'+cs[0]+'</span>'+(s.isRecording?' <span style="color:#cf1322;">● 录制中</span>':''))+
+            cell('程序版本', 'I '+(d.importerVersion||'-')+' / C '+(d.collectorVersion||'-'))+
+            cell('错误数', (s.errorCount||0)>0?'<span style="color:#cf1322;font-weight:600;">'+s.errorCount+'</span>':'<span style="color:#389e0d;">0</span>')+
+            cell('采集器', self._esc(d.collectorName||'-'))+
+            cell('主机编号', self._esc(d.computerId||'-'))+
+            '</div>';
+          html += '<div class="m-form-section-title">当前任务</div>';
+          if (t) {
+            var pct = t.percent || 0;
+            html += '<div style="margin-bottom:6px;"><b>'+self._esc(t.name||'-')+'</b>'+(t.isTraining?' <span style="color:#722ed1;">[培训]</span>':'')+
+              ' <span style="opacity:.5;font-size:12px;">'+(t.state==='active'?'进行中':self._esc(t.state||''))+'</span></div>';
+            html += '<div style="font-size:12px;opacity:.7;margin-bottom:4px;">采集员：'+self._esc((t.operator&&t.operator.name)||'未知')+(t.operator&&t.operator.level!=null?'（等级 '+t.operator.level+'）':'')+'</div>';
+            html += '<div style="background:#f0f0f0;border-radius:6px;height:8px;overflow:hidden;"><div style="width:'+pct+'%;background:#1677ff;height:8px;"></div></div>';
+            var hc = t.hoursCompleted!=null ? Number(t.hoursCompleted).toFixed(2) : '0';
+            var hh = t.hours!=null ? Number(t.hours).toFixed(2) : '-';
+            html += '<div style="font-size:12px;opacity:.7;margin-top:3px;">'+hc+' / '+hh+' 小时（'+pct+'%）</div>';
+          } else {
+            html += '<div style="opacity:.45;font-size:13px;margin-bottom:8px;">当前没有任务</div>';
+          }
+          html += '<div class="m-form-section-title" style="margin-top:10px;">设备状态</div>';
+          var qi = d.questInfo || null, dnet = d.devicesNet || null;
+          var hasComponents = !!(dv.dexterousHands && (dv.dexterousHands.left || dv.dexterousHands.right)) || !!dv.quest || !!(dv.gloves && (dv.gloves.left || dv.gloves.right)) || (dv.cameras||[]).length || (dv.other||[]).length || !!qi;
+          if (!hasComponents) {
+            html += '<div style="color:#8c8c8c;font-size:13px;padding:4px 0;">采集程序未运行，组件状态不可读取——程序启动后这里会显示灵巧手 / 手套 / Quest / 摄像头的连接与传输状态</div>';
+          } else {
+            var handCell = function(side) {
+              var stream = dv.dexterousHands && dv.dexterousHands[side];
+              var net = dnet && dnet.dexterousHands && dnet.dexterousHands[side];
+              var tag = devTag(stream || (net && net.connected ? { status: 'connected' } : null));
+              var detail = [net && net.snCode ? '<span style="font-family:monospace;">SN: '+self._esc(net.snCode)+'</span>' : '', delayTxt(d.teleopDelay && d.teleopDelay[side]), netOff(net)].filter(Boolean).join('　');
+              return cell('灵巧手（'+(side==='left'?'左':'右')+'）', tag, detail);
+            };
+            var questCellHtml = (function(){
+              var tag = devTag(dv.quest || (qi && qi.netConnected ? { status: 'connected' } : null));
+              var parts = [];
+              if (qi && qi.serialNumber) parts.push('<span style="font-family:monospace;">SN: '+self._esc(qi.serialNumber)+'</span>');
+              else if (qi && qi.adbStatus==='unauthorized') parts.push('<span style="color:#d46b08;">USB 调试未授权</span>');
+              if (qi && qi.batteryLevel != null) parts.push('电量 '+qi.batteryLevel+'%'+(qi.batteryStatus==='charging'?'（充电中）':qi.batteryStatus==='full'?'（已充满）':'')+(qi.batteryTemp!=null?'　'+qi.batteryTemp+'℃':''));
+              else if (qi && !qi.serialNumber && qi.netConnected===false) parts.push('<span style="color:#cf1322;">网络不可达</span>');
+              return cell('Quest', tag, parts.join('　'));
+            })();
+            var gloveSn = function(side){
+              var g = dnet && dnet.gloves && dnet.gloves[side];
+              return g ? '<span style="font-family:monospace;">SN: '+self._esc(g.snCode||'未读取')+'</span>' : '';
+            };
+            var sensorRes = {};
+            (d.sensors||[]).forEach(function(x){ if(x.id && x.width) sensorRes[x.id]=x.width+'×'+x.height; });
+            html += '<div style="display:flex;flex-wrap:wrap;gap:6px;">'+
+              handCell('left')+
+              handCell('right')+
+              questCellHtml+
+              cell('手套（左）', devTag(dv.gloves && dv.gloves.left), [gloveSn('left'), netOff(dnet && dnet.gloves && dnet.gloves.left)].filter(Boolean).join('　'))+
+              cell('手套（右）', devTag(dv.gloves && dv.gloves.right), [gloveSn('right'), netOff(dnet && dnet.gloves && dnet.gloves.right)].filter(Boolean).join('　'))+
+              ((dv.marvin || (dnet && dnet.roboticArm))?cell('机械臂 Marvin', devTag(dv.marvin || (dnet && dnet.roboticArm && dnet.roboticArm.connected ? { status: 'connected' } : null)), netOff(dnet && dnet.roboticArm)):'')+
+              ((dv.cameras||[]).map(function(c){ return cell(camName[c.name]||c.name, devTag(c), sensorRes[c.name]||''); }).join(''))+
+              '</div>';
+            if (d.vstFps) html += '<div style="font-size:11px;opacity:.65;margin-top:6px;">头显透视配置帧率 '+d.vstFps+' fps——接口未提供实时帧率，传输状况以「实时/延迟/断流」为准</div>';
+          }
+          html += '<div class="m-form-section-title" style="margin-top:10px;">采集器容器</div>';
+          html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">'+
+            ((d.containers||[]).map(function(c){
+              var ok = c.status==='running';
+              return '<span style="padding:2px 8px;border-radius:10px;font-size:12px;background:'+(ok?'#f6ffed':'#fff1f0')+';color:'+(ok?'#389e0d':'#cf1322')+';">'+self._esc(c.name)+': '+(ok?'运行中':self._esc(c.status))+'</span>';
+            }).join('') || '<span style="opacity:.4;">-</span>')+'</div>';
+          if ((d.degraded||[]).length) html += '<div style="background:#fff7e6;border-radius:8px;padding:6px 10px;font-size:12px;color:#d46b08;">降级部件：'+self._esc(d.degraded.join('、'))+'</div>';
+          if ((d.errors||[]).length) html += '<div style="background:#fff1f0;border-radius:8px;padding:6px 10px;font-size:12px;color:#cf1322;margin-top:6px;">采集器错误 '+d.errors.length+' 条</div>';
+          html += '<div style="color:#8c8c8c;font-size:11px;text-align:right;margin-top:8px;">'+(d.source==='agent'
+            ? '数据来源：心跳快照（'+(d.dataAgeSec!=null?d.dataAgeSec:'?')+' 秒前上报，每 30 秒自动更新）'
+            : '数据来源：实时抓取')+'</div>';
+        }
+        return html;
+      };
+      this.openModal('<div class="m-modal-header"><div class="m-modal-title">'+self._esc(num)+' · 机器状态信息 <span style="font-size:11px;opacity:.5;font-weight:400;">(10s 自动刷新)</span></div><button class="m-modal-close" onclick="M.closeModal()">×</button></div>'+
+        '<div id="m-ms-info-body" style="max-height:70vh;overflow-y:auto;"><div class="m-empty"><div class="m-empty-text">正在从采集器读取状态...</div></div></div>');
+      var load = async function() {
+        var el = document.getElementById('m-ms-info-body');
+        if (!el) { if (self._msInfoTimer) { clearInterval(self._msInfoTimer); self._msInfoTimer = null; } return; }
+        var d = null, errMsg = null;
+        try {
+          d = await API.getMachineInfo(num);
+          if (d === null) errMsg = '无法连接服务器，请检查网络后重试'; // _fetch 网络失败/401 时返回 null
+        } catch(e) { errMsg = '无法连接采集器：'+(e && e.message ? e.message : '网络错误'); }
+        var cur = document.getElementById('m-ms-info-body');
+        if (cur) cur.innerHTML = render(d, errMsg);
+      };
+      await load();
+      this._msInfoTimer = setInterval(load, 10000);
+    },
+    async _msShowMachineHistory(num) {
+      var self = this;
+      var D = this._msData;
+      var PS_META = (D && D.PS_META) || {};
+      var list = [];
+      try { list = (await API.getProductionHistory(num)) || []; } catch(e) {}
+      var body;
+      if (!list.length) {
+        body = '<div class="m-empty"><div class="m-empty-text">暂无变更记录</div></div>';
+      } else {
+        body = list.map(function(h){
+          var oldL = h.oldStatus ? (PS_META[h.oldStatus]?PS_META[h.oldStatus].l:h.oldStatus) : '初始';
+          var newMeta = PS_META[h.newStatus] || {l:h.newStatus,c:'#999'};
+          var srcTag = h.source==='ticket' ? '<span style="color:#722ed1;">工单</span>' : '<span style="color:#999;">人工</span>';
+          return '<div class="m-data-row"><div class="m-card-row"><div>'+
+            '<div class="m-data-value" style="font-family:monospace;">'+self._esc(h.machineNumber||num)+'</div>'+
+            '<div class="m-data-label">'+self._esc(h.operatorName||(h.source==='ticket'?'工单联动':'-'))+' · '+self._fmtTime(h.createdAt)+'</div></div>'+
+            '<div style="text-align:right;font-size:12px;">'+self._esc(oldL)+' → <span style="color:'+newMeta.c+';font-weight:600;">'+newMeta.l+'</span><br>'+
+            (h.reason?'<span style="opacity:.6;">'+self._esc(h.reason)+'</span> · ':'')+srcTag+'</div></div></div>';
+        }).join('');
+      }
+      this.openModal('<div class="m-modal-header"><div class="m-modal-title">'+self._esc(num)+' · 生产状态变更历史</div><button class="m-modal-close" onclick="M.closeModal()">×</button></div>'+
+        '<div class="m-form-section" style="max-height:70vh;overflow-y:auto;">'+body+'</div>');
+    },
+    _msRenderHistory() {
+      var self = this;
+      var D = this._msData; if (!D) return;
+      var box = document.getElementById('m-ms-history'); if (!box) return;
+      var PS_META = D.PS_META;
+      var list = (D.history||[]).slice(0, 50);
+      if (!list.length) { box.innerHTML = '<div class="m-empty"><div class="m-empty-text">暂无变更记录</div></div>'; return; }
+      var rows = list.map(function(h){
+        var oldL = h.oldStatus ? (PS_META[h.oldStatus]?PS_META[h.oldStatus].l:h.oldStatus) : '初始';
+        var newMeta = PS_META[h.newStatus] || {l:h.newStatus,c:'#999',bg:'#f5f5f5'};
+        var srcTag = h.source==='ticket' ? '<span style="color:#722ed1;">工单</span>' : '<span style="color:#999;">人工</span>';
+        return '<div class="m-data-row"><div class="m-card-row"><div>'+
+          '<div class="m-data-value" style="font-family:monospace;">'+self._esc(h.machineNumber||'')+'</div>'+
+          '<div class="m-data-label">'+self._esc(h.operatorName||(h.source==='ticket'?'工单联动':'-'))+' · '+self._fmtTime(h.createdAt)+'</div></div>'+
+          '<div style="text-align:right;font-size:12px;">'+self._esc(oldL)+' → <span style="color:'+newMeta.c+';font-weight:600;">'+newMeta.l+'</span><br>'+
+          (h.reason?'<span style="opacity:.6;">'+self._esc(h.reason)+'</span> · ':'')+srcTag+'</div></div></div>';
+      }).join('');
+      box.innerHTML = rows;
+    },
+    async _msDoSwitch(num) {
+      var self = this;
+      var sel = document.getElementById('m-ms-sel-'+num);
+      var status = sel ? sel.value : '';
+      if (!status) return;
+      var reason = prompt('变更原因/备注（可选）','') || '';
+      try {
+        var r = await API.setProductionStatus(num, status, reason);
+        if (r && r.error) { this.toast('变更失败：'+r.error, 'err'); return; }
+        this.toast(num+' 已标记为「'+(this._msData.PS_META[status]||{}).l+'」', 'ok');
+        // 重新加载
+        var wrap = document.getElementById('m-subpage-content');
+        if (wrap) { await this._renderMachineStatusPage(wrap); }
+      } catch(e) { this.toast('网络错误，请稍后重试', 'err'); }
     },
     _machOnline(num) {
       var self = this;

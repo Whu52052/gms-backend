@@ -159,3 +159,14 @@ export const MACHINE_STATUS_META: Record<string, { label: string; color: string 
   waiting_repair: { label: '等待维修', color: 'orange' },
   repairing: { label: '维修中', color: 'blue' },
 };
+
+// 机器生产状态（独立于设备挂接状态的生产维度；待维修由维修工单自动驱动）
+export const PRODUCTION_STATUS_META: Record<string, { label: string; color: string }> = {
+  ready: { label: '可生产', color: 'green' },
+  in_production: { label: '在生产', color: 'blue' },
+  waiting_repair: { label: '待维修', color: 'red' },
+  testing: { label: '在测试', color: 'orange' },
+};
+export const PRODUCTION_STATUS_ORDER = ['ready', 'in_production', 'waiting_repair', 'testing'];
+/** 取机器生产状态，无记录默认可生产 */
+export const productionStatusOf = (m: any): string => m?.productionStatus || 'ready';

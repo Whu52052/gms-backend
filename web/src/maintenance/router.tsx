@@ -7,6 +7,7 @@ import { AppLayout, lastTab } from './layout/AppLayout';
 const DashboardPage = lazy(() => import('./modules/dashboard/DashboardPage'));
 const InventoryPage = lazy(() => import('./modules/inventory/InventoryPage'));
 const MachinesPage = lazy(() => import('./modules/machines/MachinesPage'));
+const MachineStatusPage = lazy(() => import('./modules/machine-status/MachineStatusPage'));
 const MachineLinksPage = lazy(() => import('./modules/machine-links/MachineLinksPage'));
 const StorageLocationsPage = lazy(() => import('./modules/storage-locations/StorageLocationsPage'));
 const TransactionsPage = lazy(() => import('./modules/transactions/TransactionsPage'));
@@ -46,6 +47,7 @@ export function AppRoutes() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/inventory/:type" element={<InventoryPage />} />
           <Route path="/machines" element={<MachinesPage />} />
+          <Route path="/machine-status" element={<MachineStatusPage />} />
           <Route path="/machine-links" element={<MachineLinksPage />} />
           <Route path="/storage-locations" element={<StorageLocationsPage />} />
           <Route path="/transactions" element={<TransactionsPage />} />

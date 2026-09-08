@@ -59,6 +59,7 @@ const createInventoryHandlers = require('./src/handlers/inventory');
 const createMachinesHandlers = require('./src/handlers/machines');
 const createSNRegistryHandlers = require('./src/handlers/sn-registry');
 const createTechSupportHandlers = require('./src/handlers/tech-support');
+const createEdgeHandlers = require('./src/handlers/edge');
 const createPushHandlers = require('./src/handlers/push');
 const createChatHandlers = require('./src/handlers/chat');
 const createSOPHandlers = require('./src/handlers/sop');
@@ -73,7 +74,7 @@ const createBatchHandlers = require('./src/handlers/batches');
 const createWarehouseTransferHandlers = require('./src/handlers/warehouse-transfers');
 const { createRbacEngine } = require('./lib/rbac');
 // const createAgentHandlers = require('./src/handlers/agent');
-let auth, users, transactions, inventory, machines, snRegistry, techSupport, push, chat, sop, solutions, configuration, replacement, storageLocations, stocktakes, warehousesDomain, rbacRoles, batchesDomain, warehouseTransfers; // , agent;
+let auth, users, transactions, inventory, machines, snRegistry, techSupport, edge, push, chat, sop, solutions, configuration, replacement, storageLocations, stocktakes, warehousesDomain, rbacRoles, batchesDomain, warehouseTransfers; // , agent;
 let rbacEngine; // lib/rbac.js 引擎（can/getRole/listRoles），startup 内创建
 // S3: sendJSON injected into router so validation errors return proper 400 JSON
 const publicRouter = createRouter({ sendJSON: (...args) => sendJSON(...args) });  // routes dispatched BEFORE requireAuth
@@ -360,6 +361,28 @@ function initDB() {
       updatedAt VARCHAR(64),
       INDEX idx_edge_status (status),
       INDEX idx_edge_lastseen (lastSeen)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    // 机器生产状态（可生产 ready / 在生产 in_production / 待维修 waiting_repair / 在测试 testing）
+    // 与 machines 表的设备挂接状态（online/offline）相互独立；waiting_repair 由工单驱动
+    `CREATE TABLE IF NOT EXISTS machine_production (
+      machineNumber VARCHAR(64) PRIMARY KEY,
+      status VARCHAR(32) NOT NULL DEFAULT 'ready',
+      reason VARCHAR(500) DEFAULT '',
+      source VARCHAR(16) DEFAULT 'manual',
+      ticketId VARCHAR(64) DEFAULT '',
+      updatedBy VARCHAR(64) DEFAULT '',
+      updatedByName VARCHAR(128) DEFAULT '',
+      updatedAt VARCHAR(64),
+      INDEX idx_prod_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    // 生产状态变更记录（审计流水）
+    `CREATE TABLE IF NOT EXISTS machine_production_history (
+      id VARCHAR(64) PRIMARY KEY,
+      machineNumber VARCHAR(64) DEFAULT '',
+      newStatus VARCHAR(32) DEFAULT '',
+      data MEDIUMTEXT,
+      createdAt VARCHAR(64),
+      INDEX idx_mph_machine (machineNumber, createdAt)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
     `CREATE TABLE IF NOT EXISTS stocktaking (
       id VARCHAR(64) PRIMARY KEY,
@@ -3467,6 +3490,8 @@ async function startup() {
       broadcastChange,
       realtime, feishu,
       fmtDuration: _fmtDuration,
+      // 工单联动机器生产状态：提交→待维修，完成/删除→可生产
+      setProductionStatus: (...args) => machines.setProductionStatus(...args),
     });
     // 边缘代理故障类告警 → 自动创建技术支持工单（edge 先于 techSupport 创建，此处回填）
     if (edge && typeof edge.setTicketCreator === 'function') {
@@ -3624,6 +3649,11 @@ async function startup() {
     authRouter.registerPattern(/^\/api\/machines\/([^/]+)\/bind$/,       'POST', machines.handleBindMachine,       { auth:'required', body:true });
     authRouter.registerPattern(/^\/api\/machines\/([^/]+)\/unbind$/,     'POST', machines.handleUnbindMachine,     { auth:'required' });
     authRouter.registerPattern(/^\/api\/machines\/([^/]+)\/sync-state$/,  'POST', machines.handleSyncMachineState,  { auth:'required', body:true });
+    // 机器生产状态：人工切换（可生产/在生产/在测试；待维修由工单驱动）+ 变更记录查询
+    authRouter.register('/api/machines/production-status',  'POST', machines.handleSetProductionStatus,  { auth:'required', body:true });
+    authRouter.register('/api/machines/production-history', 'GET',  machines.handleGetProductionHistory, { auth:'required' });
+    // 机器综合信息（采集器系统健康/任务/活动状态，szx3-* 机器）
+    authRouter.registerPattern(/^\/api\/machines\/([^/]+)\/info$/, 'GET', machines.handleGetMachineInfo, { auth:'required' });
     authRouter.register('/api/edge/hosts', 'GET', edge.handleListHosts, { auth:'required' });
     authRouter.registerPattern(/^\/api\/machines\/([^/]+)\/shift-inspection$/,   'POST', handleSaveShiftInspection,   { auth:'required', body:true });
     authRouter.registerPattern(/^\/api\/machines\/([^/]+)\/shift-inspections$/,  'GET',  handleGetShiftInspections,   { auth:'required' });
@@ -3687,6 +3717,10 @@ async function startup() {
     authRouter.register('/api/tech-support',            'POST', techSupport.handleSubmitTechSupport,  { auth:'required', body:true });
     authRouter.register('/api/tech-support/repair-results','GET',techSupport.handleGetRepairResults,   { auth:'required' });
     authRouter.register('/api/tech-support/my-history',   'GET',  techSupport.handleGetMySubmitHistory,{ auth:'required' });
+    // 常见故障模板（运营共享）：静态路由优先于下方 ([^/]+) 详情正则
+    authRouter.register('/api/tech-support/common-faults',        'GET',    techSupport.handleListCommonFaults,   { auth:'required' });
+    authRouter.register('/api/tech-support/common-faults',        'POST',   techSupport.handleAddCommonFault,    { auth:'required', body:true });
+    authRouter.registerPattern(/^\/api\/tech-support\/common-faults\/([^/]+)$/, 'DELETE', techSupport.handleDeleteCommonFault, { auth:'required' });
     authRouter.registerPattern(/^\/api\/tech-support\/([^/]+)$/,              'GET',    techSupport.handleGetTechSupportDetail,  { auth:'required' });
     authRouter.registerPattern(/^\/api\/tech-support\/([^/]+)\/respond$/,     'POST',   techSupport.handleRespondTechSupport,    { auth:'required' });
     authRouter.registerPattern(/^\/api\/tech-support\/([^/]+)\/complete$/,    'POST',   techSupport.handleCompleteTechSupport,   { auth:'required', body:true });

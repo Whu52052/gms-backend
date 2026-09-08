@@ -858,6 +858,24 @@ const API = {
     await this._fetch('DELETE', `/api/machines/${  id}`);
   },
 
+  // 机器生产状态：变更记录查询 + 人工切换（可生产/在生产/在测试；待维修由维修工单驱动）
+  async getProductionHistory(machineNumber) {
+    if (!this.online) return [];
+    const qs = machineNumber ? '?machineNumber=' + encodeURIComponent(machineNumber) : '';
+    const data = await this._fetch('GET', '/api/machines/production-history' + qs);
+    return Array.isArray(data?.items) ? data.items : [];
+  },
+
+  async setProductionStatus(machineNumber, status, reason) {
+    if (!this.online) return { success: false, error: '离线状态无法变更' };
+    return await this._fetch('POST', '/api/machines/production-status', { machineNumber, status, reason: reason || '' });
+  },
+
+  // 采集器综合状态（机器状态信息：任务/操作员/灵巧手/手套/Quest/摄像头/系统程序/容器）
+  async getMachineInfo(machineNumber) {
+    return await this._fetch('GET', '/api/machines/' + encodeURIComponent(machineNumber) + '/info');
+  },
+
   // Transactions
   async getTransactions(limit = 2000) {
     if (!this.online) return Storage._local.getTransactions();
@@ -1019,6 +1037,25 @@ const API = {
     if (!this.online) return [];
     const data = await this._fetch('GET', '/api/tech-support/my-history');
     return Array.isArray(data) ? data : [];
+  },
+
+  // 常见故障模板（运营共享：任何运营账户可添加，全运营账户可见）
+  async getCommonFaults() {
+    if (!this.online) return [];
+    const data = await this._fetch('GET', '/api/tech-support/common-faults');
+    return data && Array.isArray(data.faults) ? data.faults : [];
+  },
+
+  async addCommonFault(payload) {
+    if (!this.online) return { success: false, message: '离线模式不支持' };
+    const data = await this._fetch('POST', '/api/tech-support/common-faults', payload);
+    return data || { success: false, message: '请求失败' };
+  },
+
+  async deleteCommonFault(id) {
+    if (!this.online) return { success: false, message: '离线模式不支持' };
+    const data = await this._fetch('DELETE', `/api/tech-support/common-faults/${id}`);
+    return data || { success: false, message: '请求失败' };
   },
 
   async respondTechSupport(id) {

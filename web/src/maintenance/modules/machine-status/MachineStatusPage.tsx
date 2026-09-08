@@ -1,0 +1,565 @@
+// 机器状态页：生产状态可视化（可生产/在生产/待维修/在测试）
+// 待维修由维修工单自动驱动：运营提交工单→待维修，运维完成维修→可生产；人工可标记 在生产/在测试/可生产。
+import { useMemo, useState, type ReactNode } from 'react';
+import {
+  Alert, Button, Card, Col, Descriptions, Dropdown, Empty, Flex, Input, Modal, Progress, Radio,
+  Row, Select, Spin, Statistic, Table, Tag, Tooltip, Typography, message,
+} from 'antd';
+import { DownOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { PageContainer } from '@common/components/PageContainer';
+import { useMachines, useEquipmentConfig } from '@common/hooks/useData';
+import * as api from '@common/api';
+import {
+  latestMachineByNumber, buildEffectiveStatusMap, MACHINE_STATUS_META,
+  PRODUCTION_STATUS_META, PRODUCTION_STATUS_ORDER, productionStatusOf, deviceTypeLabel,
+} from '@common/utils/domain';
+import { useSNRegistry } from '@common/hooks/useData';
+import { formatTime, naturalCompare } from '@common/utils/format';
+
+export default function MachineStatusPage() {
+  const qc = useQueryClient();
+  const machines = useMachines();
+  const snRegistry = useSNRegistry();
+  const equipmentConfig = useEquipmentConfig();
+
+  const [prodFilter, setProdFilter] = useState('all');
+  const [deviceTypeFilter, setDeviceTypeFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [histSearch, setHistSearch] = useState('');
+  const [target, setTarget] = useState<{ number: string; status: string } | null>(null);
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [histMachine, setHistMachine] = useState<string | null>(null);
+  const [infoMachine, setInfoMachine] = useState<string | null>(null);
+
+  const machineList = machines.data || [];
+  const registry = snRegistry.data || [];
+  const eqConfigList = equipmentConfig.data || [];
+
+  const latestMap = useMemo(() => latestMachineByNumber(machineList), [machineList]);
+  const numbers = useMemo(() => Object.keys(latestMap).sort(naturalCompare), [latestMap]);
+  const latestMachines = useMemo(() => numbers.map(n => latestMap[n]), [numbers, latestMap]);
+  const effectiveMap = useMemo(() => buildEffectiveStatusMap(latestMachines, registry), [latestMachines, registry]);
+
+  // 按设备类型筛选后的机器编号（统计卡片和Radio数量跟随设备类型联动）
+  const deviceFiltered = useMemo(() => {
+    if (deviceTypeFilter === 'all') return numbers;
+    return numbers.filter(n => (latestMap[n]?.deviceType || '') === deviceTypeFilter);
+  }, [numbers, deviceTypeFilter, latestMap]);
+
+  const counts = useMemo(() => {
+    const c: Record<string, number> = { ready: 0, in_production: 0, waiting_repair: 0, testing: 0 };
+    for (const n of deviceFiltered) c[productionStatusOf(latestMap[n])]++;
+    return c;
+  }, [deviceFiltered, latestMap]);
+
+  const visible = useMemo(() => {
+    let list = deviceFiltered;
+    if (prodFilter !== 'all') list = list.filter(n => productionStatusOf(latestMap[n]) === prodFilter);
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter(n => n.toLowerCase().includes(q));
+    }
+    return list;
+  }, [deviceFiltered, prodFilter, search, latestMap]);
+
+  // 全量变更记录（机器状态变更频率低，一次拉取，前端筛选）
+  const history = useQuery({
+    queryKey: ['production-history'],
+    queryFn: () => api.getProductionHistory(),
+  });
+  // 单台机器的全部历史（弹窗用，独立拉取避免被全局 limit 截断）
+  const machineHistory = useQuery({
+    queryKey: ['production-history', histMachine],
+    queryFn: () => api.getProductionHistory(histMachine!),
+    enabled: !!histMachine,
+  });
+  // 采集器综合状态（机器状态信息弹窗，10s 轮询保持新鲜）
+  const machineInfo = useQuery({
+    queryKey: ['machine-info', infoMachine],
+    queryFn: () => api.getMachineInfo(infoMachine!),
+    enabled: !!infoMachine,
+    refetchInterval: 10_000,
+  });
+  const histItems = useMemo(() => {
+    let list = history.data || [];
+    const q = histSearch.trim().toLowerCase();
+    if (q) list = list.filter((h: any) => (h.machineNumber || '').toLowerCase().includes(q));
+    return list;
+  }, [history.data, histSearch]);
+
+  const eqLabel = (deviceType?: string) => {
+    const cfg = eqConfigList.find(c => c.id === deviceType);
+    return cfg ? `${cfg.icon || ''} ${cfg.name}` : deviceTypeLabel(deviceType);
+  };
+
+  const deviceTypeOptions = useMemo(() => {
+    const opts = [{ value: 'all', label: '全部设备类型' }];
+    const seen = new Set<string>();
+    for (const n of numbers) {
+      const dt = latestMap[n]?.deviceType;
+      if (!dt || seen.has(dt)) continue;
+      seen.add(dt);
+      opts.push({ value: dt, label: eqLabel(dt) });
+    }
+    return opts;
+  }, [numbers, latestMap, eqConfigList]);
+
+  const openSwitch = (number: string, status: string) => {
+    setTarget({ number, status });
+    setReason('');
+  };
+  const menuItems = (number: string) =>
+    PRODUCTION_STATUS_ORDER.filter(s => s !== 'waiting_repair').map(s => ({
+      key: s,
+      label: `标记为「${PRODUCTION_STATUS_META[s].label}」`,
+      onClick: () => openSwitch(number, s),
+    }));
+  const confirmSwitch = async () => {
+    if (!target) return;
+    setSaving(true);
+    try {
+      await api.setProductionStatus(target.number, target.status, reason.trim());
+      message.success(`${target.number} 已标记为「${PRODUCTION_STATUS_META[target.status].label}」`);
+      qc.invalidateQueries({ queryKey: ['machines'] });
+      qc.invalidateQueries({ queryKey: ['production-history'] });
+      setTarget(null);
+    } catch (e: any) {
+      message.error(e?.message || '操作失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const prodTag = (number: string) => {
+    const st = productionStatusOf(latestMap[number]);
+    const meta = PRODUCTION_STATUS_META[st] || PRODUCTION_STATUS_META.ready;
+    const tag = <Tag color={meta.color} style={{ margin: 0, fontWeight: 600 }}>{meta.label}</Tag>;
+    if (st === 'waiting_repair') {
+      return (
+        <Tooltip title="待维修由维修工单自动驱动；工单完成后自动恢复可生产">
+          <span>{tag}</span>
+        </Tooltip>
+      );
+    }
+    return (
+      <Dropdown menu={{ items: menuItems(number) }} trigger={['click']}>
+        <a onClick={e => e.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
+          {tag} <DownOutlined style={{ fontSize: 10 }} />
+        </a>
+      </Dropdown>
+    );
+  };
+
+  // 采集器机器判定（与后端 collectorIpOf 同规则）：we-1xx / szx3-N
+  const isCollectorMachine = (n: string) => /^(?:we|szx3)-(\d+)$/.test(n) && parseInt(n.replace(/^[^-]+-/, ''), 10) >= 100;
+
+  // 设备部件状态标签：connected + 传输新鲜度（ageS 秒前有数据 = 传输速率状态）
+  const devTag = (d: any) => {
+    if (!d) return <Tag style={{ margin: 0, opacity: 0.5 }}>无</Tag>;
+    const age = d.ageS ?? d.age_s;           // 兼容快照/直连两种字段命名
+    const seen = d.everSeen ?? d.ever_seen;
+    if (d.status === 'connected') {
+      if (seen === false) return <Tag color="orange" style={{ margin: 0 }}>已连接·无数据</Tag>;
+      if (typeof age === 'number') {
+        if (age <= 2) return <Tag color="green" style={{ margin: 0 }}>实时 {age}s</Tag>;
+        if (age <= 10) return <Tag color="orange" style={{ margin: 0 }}>延迟 {age}s</Tag>;
+        return <Tag color="red" style={{ margin: 0 }}>断流 {age}s</Tag>;
+      }
+      return <Tag color="green" style={{ margin: 0 }}>已连接</Tag>;
+    }
+    return <Tag color="red" style={{ margin: 0 }}>{d.status === 'unknown' ? '未知' : '断开'}</Tag>;
+  };
+
+  const histColumns = [
+    { title: '时间', dataIndex: 'createdAt', width: 160, render: (v: string) => formatTime(v) },
+    {
+      title: '变更', key: 'change', width: 180,
+      render: (_: any, r: any) => (
+        <span style={{ whiteSpace: 'nowrap' }}>
+          <Tag style={{ margin: 0 }}>{r.oldStatus ? (PRODUCTION_STATUS_META[r.oldStatus]?.label || r.oldStatus) : '初始'}</Tag>
+          {' → '}
+          <Tag color={PRODUCTION_STATUS_META[r.newStatus]?.color} style={{ margin: 0 }}>
+            {PRODUCTION_STATUS_META[r.newStatus]?.label || r.newStatus}
+          </Tag>
+        </span>
+      ),
+    },
+    { title: '原因', dataIndex: 'reason', render: (v: string) => v || '-' },
+    { title: '操作人', key: 'op', render: (_: any, r: any) => r.operatorName || (r.source === 'ticket' ? '工单联动' : '-') },
+    {
+      title: '来源', dataIndex: 'source', width: 80,
+      render: (v: string) => (v === 'ticket'
+        ? <Tag color="purple" style={{ margin: 0 }}>工单</Tag>
+        : <Tag style={{ margin: 0 }}>人工</Tag>),
+    },
+  ];
+
+  const columns: any[] = [
+    {
+      title: '机器编号', dataIndex: 'machineNumber',
+      render: (v: string) => <strong style={{ fontFamily: 'monospace' }}>{v}</strong>,
+    },
+    { title: '设备类型', dataIndex: 'deviceType', render: (v: string) => eqLabel(v) },
+    { title: '生产状态', dataIndex: 'machineNumber', key: 'prod', render: (num: string) => prodTag(num) },
+    {
+      title: '设备挂接', dataIndex: 'machineNumber', key: 'bind',
+      render: (num: string) => {
+        const st = effectiveMap[num] || 'offline';
+        const meta = MACHINE_STATUS_META[st] || MACHINE_STATUS_META.offline;
+        return <Tag color={meta.color} style={{ margin: 0 }}>{meta.label}</Tag>;
+      },
+    },
+    {
+      title: '主机', dataIndex: 'machineNumber', key: 'host',
+      render: (num: string) => {
+        const m = latestMap[num];
+        if (m?.hostOnline === undefined) return <span style={{ opacity: 0.45 }}>无代理</span>;
+        return <span style={{ color: m.hostOnline ? '#52c41a' : '#999' }}>{m.hostOnline ? '🟢 在线' : '⚫ 离线'}</span>;
+      },
+    },
+    {
+      title: '备注/原因', key: 'reason',
+      render: (_: any, r: any) => r.productionReason
+        ? <Typography.Text ellipsis style={{ maxWidth: 220 }} title={r.productionReason}>{r.productionReason}</Typography.Text>
+        : <span style={{ opacity: 0.45 }}>-</span>,
+    },
+    { title: '更新人', dataIndex: 'productionUpdatedByName', render: (v: string, r: any) => v || (r.productionSource === 'ticket' ? '工单联动' : '-') },
+    { title: '更新时间', dataIndex: 'productionUpdatedAt', render: (v: string) => v ? formatTime(v) : '-' },
+    {
+      title: '操作', dataIndex: 'machineNumber', key: 'op', width: 220,
+      render: (num: string) => (
+        <Flex gap={4} wrap="wrap">
+          <Button size="small" type="link" onClick={e => { e.stopPropagation(); setHistMachine(num); }}>历史</Button>
+          {isCollectorMachine(num) && (
+            <Button size="small" type="link" onClick={e => { e.stopPropagation(); setInfoMachine(num); }}>采集器</Button>
+          )}
+          <Dropdown menu={{ items: menuItems(num) }} trigger={['click']}>
+            <Button size="small" icon={<DownOutlined />} onClick={e => e.stopPropagation()}>变更状态</Button>
+          </Dropdown>
+        </Flex>
+      ),
+    },
+  ];
+
+  return (
+    <PageContainer
+      title="机器状态"
+      subtitle="生产状态可视化：可生产 / 在生产 / 待维修 / 在测试（待维修由维修工单自动驱动）"
+      extra={
+        <Button icon={<ReloadOutlined />} onClick={() => {
+          qc.invalidateQueries({ queryKey: ['machines'] });
+          qc.invalidateQueries({ queryKey: ['production-history'] });
+        }}>刷新</Button>
+      }
+    >
+      {/* 统计卡片 */}
+      <Row gutter={12} style={{ marginBottom: 12 }}>
+        <Col span={Math.floor(24 / (PRODUCTION_STATUS_ORDER.length + 1))}><Card size="small"><Statistic title={deviceTypeFilter === 'all' ? '机器总数' : `${eqLabel(deviceTypeFilter)} 数量`} value={deviceFiltered.length} /></Card></Col>
+        {PRODUCTION_STATUS_ORDER.map(s => (
+          <Col key={s} span={Math.floor(24 / (PRODUCTION_STATUS_ORDER.length + 1))}>
+            <Card size="small">
+              <Statistic
+                title={PRODUCTION_STATUS_META[s].label}
+                value={counts[s]}
+                valueStyle={{ color: PRODUCTION_STATUS_META[s].color === 'red' ? '#ff4d4f' : undefined }}
+              />
+            </Card>
+          </Col>
+        ))}
+      </Row>
+
+      {/* 筛选栏 */}
+      <Flex wrap gap={8} align="center" style={{ marginBottom: 12 }}>
+        <Radio.Group value={prodFilter} onChange={e => setProdFilter(e.target.value)} optionType="button" buttonStyle="solid">
+          <Radio.Button value="all">全部 ({deviceFiltered.length})</Radio.Button>
+          {PRODUCTION_STATUS_ORDER.map(s => (
+            <Radio.Button key={s} value={s}>{PRODUCTION_STATUS_META[s].label} ({counts[s]})</Radio.Button>
+          ))}
+        </Radio.Group>
+        <Select
+          value={deviceTypeFilter}
+          onChange={setDeviceTypeFilter}
+          options={deviceTypeOptions}
+          style={{ width: 180 }}
+          size="middle"
+        />
+        <Input.Search
+          placeholder="搜索机器编号..." allowClear style={{ width: 220 }}
+          onSearch={setSearch}
+          onChange={e => { if (!e.target.value) setSearch(''); }}
+        />
+      </Flex>
+
+      {visible.length === 0 && !machines.isLoading ? (
+        <Empty description="暂无符合条件的机器" style={{ marginTop: 60 }} />
+      ) : (
+        <Table
+          rowKey="machineNumber" size="small" loading={machines.isLoading}
+          columns={columns}
+          dataSource={visible.map(n => latestMap[n])}
+          onRow={(r: any) => ({
+            style: {
+              cursor: 'pointer',
+              background: productionStatusOf(r) === 'waiting_repair' ? '#fff7f6' : undefined,
+            },
+            onClick: () => setHistMachine(r.machineNumber),
+          })}
+          pagination={{ pageSize: 20, showTotal: t => `共 ${t} 台` }}
+        />
+      )}
+
+      {/* 变更记录 */}
+      <Card size="small" style={{ marginTop: 20 }} title="生产状态变更记录" extra={
+        <Input.Search
+          placeholder="按机器编号筛选..." allowClear style={{ width: 200 }} size="small"
+          onSearch={setHistSearch}
+          onChange={e => { if (!e.target.value) setHistSearch(''); }}
+        />
+      }>
+        <Table
+          size="small"
+          rowKey="id"
+          loading={history.isLoading}
+          dataSource={histItems}
+          locale={{ emptyText: '暂无变更记录' }}
+          pagination={{ pageSize: 10, showTotal: t => `共 ${t} 条` }}
+          columns={[
+            { title: '时间', dataIndex: 'createdAt', width: 150, render: (v: string) => formatTime(v) },
+            { title: '机器', dataIndex: 'machineNumber', width: 110, render: (v: string) => <strong style={{ fontFamily: 'monospace' }}>{v}</strong> },
+            {
+              title: '变更', key: 'change', width: 180,
+              render: (_: any, r: any) => (
+                <span style={{ whiteSpace: 'nowrap' }}>
+                  <Tag style={{ margin: 0 }}>{r.oldStatus ? (PRODUCTION_STATUS_META[r.oldStatus]?.label || r.oldStatus) : '初始'}</Tag>
+                  {' → '}
+                  <Tag color={PRODUCTION_STATUS_META[r.newStatus]?.color} style={{ margin: 0 }}>
+                    {PRODUCTION_STATUS_META[r.newStatus]?.label || r.newStatus}
+                  </Tag>
+                </span>
+              ),
+            },
+            { title: '原因', dataIndex: 'reason', render: (v: string) => v || '-' },
+            { title: '操作人', key: 'op', render: (_: any, r: any) => r.operatorName || (r.source === 'ticket' ? '工单联动' : '-') },
+            {
+              title: '来源', dataIndex: 'source', width: 80,
+              render: (v: string) => (v === 'ticket'
+                ? <Tag color="purple" style={{ margin: 0 }}>工单</Tag>
+                : <Tag style={{ margin: 0 }}>人工</Tag>),
+            },
+          ]}
+        />
+      </Card>
+
+      {/* 单台机器历史弹窗 */}
+      <Modal
+        title={histMachine ? `${histMachine} · 生产状态变更历史` : ''}
+        open={!!histMachine}
+        onCancel={() => setHistMachine(null)}
+        footer={null}
+        width={720}
+      >
+        {machineHistory.isLoading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+        ) : (machineHistory.data || []).length === 0 ? (
+          <Empty description="暂无变更记录" />
+        ) : (
+          <Table
+            size="small"
+            rowKey="id"
+            dataSource={machineHistory.data || []}
+            pagination={{ pageSize: 10, showTotal: t => `共 ${t} 条` }}
+            columns={histColumns}
+          />
+        )}
+      </Modal>
+
+      {/* 采集器综合状态弹窗（机器状态信息） */}
+      <Modal
+        title={infoMachine ? `${infoMachine} · 机器状态信息` : ''}
+        open={!!infoMachine}
+        onCancel={() => setInfoMachine(null)}
+        footer={<Button onClick={() => setInfoMachine(null)}>关闭</Button>}
+        width={720}
+      >
+        {machineInfo.isLoading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin tip="正在从采集器读取状态..." /></div>
+        ) : machineInfo.isError ? (
+          <Alert type="error" showIcon message="无法连接采集器" description={(machineInfo.error as Error)?.message || '请确认机器在线后重试'} />
+        ) : !machineInfo.data?.success ? (
+          <Empty description={machineInfo.data?.error || '暂无数据'} />
+        ) : (() => {
+          const info = machineInfo.data;
+          const sys = info.system || {};
+          const dev = info.devices || {};
+          const task = info.task;
+          const csMeta: Record<string, { l: string; c?: string }> = {
+            RECORD: { l: '录制中', c: 'red' }, ACTIVE: { l: '就绪', c: 'green' },
+            ALIGN: { l: '对齐中', c: 'orange' }, INIT: { l: '准备中', c: 'orange' },
+            BOOT: { l: '启动中', c: 'orange' }, STOPPED: { l: '已停止' },
+          };
+          const cs = csMeta[sys.controlState] || { l: sys.controlState || '未知' };
+          const camName = (n: string) => ({
+            ego_camera: '前置相机', wrist_left: '左手腕相机', wrist_right: '右手腕相机',
+            vst_left: '头显左眼', vst_right: '头显右眼', overlay: '合成画面',
+          } as Record<string, string>)[n] || n;
+          const cell = (label: string, node: ReactNode, detail?: ReactNode) => (
+            <div key={label} style={{ flex: '1 1 30%', minWidth: 150, background: '#fafafa', borderRadius: 8, padding: '8px 10px' }}>
+              <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 4 }}>{label}</div>
+              <div>{node}</div>
+              {!!detail && <div style={{ fontSize: 11, opacity: 0.65, marginTop: 4 }}>{detail}</div>}
+            </div>
+          );
+          return (
+            <div>
+              {(machineInfo.data as any)?.partial?.importer && <Alert type="warning" showIcon style={{ marginBottom: 8 }} message="Importer(5025) 暂不可达，任务/容器信息缺失" />}
+              {(machineInfo.data as any)?.partial?.hermesOffline && (
+                <div style={{ background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 8, padding: '6px 12px', fontSize: 13, color: '#8c8c8c', marginBottom: 8 }}>
+                  采集程序未运行（未在采集或标定中）——工作阶段与摄像头传输数据暂缺，属正常现象
+                </div>
+              )}
+              {(machineInfo.data as any)?.partial?.hermesFailed && <Alert type="warning" showIcon style={{ marginBottom: 8 }} message="采集程序(5006) 暂不可达，工作阶段/传输状态缺失" />}
+
+              {/* 系统程序状态 */}
+              <Descriptions size="small" column={2} bordered style={{ marginBottom: 12 }}
+                items={[
+                  { key: 'act', label: '系统程序', children: (
+                    <Flex gap={4} wrap="wrap">
+                      <Tag color={sys.activity === 'running' ? 'green' : 'default'} style={{ margin: 0 }}>{sys.activity === 'running' ? '运行中' : sys.activity === 'idle' ? '空闲' : (sys.activity || '未知')}</Tag>
+                      <Tag color={cs.c || 'default'} style={{ margin: 0 }}>{cs.l}</Tag>
+                      {sys.isRecording && <Tag color="red" style={{ margin: 0 }}>● 录制中</Tag>}
+                      {sys.emergencyStopped && <Tag color="red" style={{ margin: 0 }}>急停</Tag>}
+                    </Flex>
+                  ) },
+                  { key: 'err', label: '错误数', children: (sys.errorCount ?? 0) > 0 ? <Tag color="red" style={{ margin: 0 }}>{sys.errorCount}</Tag> : <Tag color="green" style={{ margin: 0 }}>0</Tag> },
+                  { key: 'ver', label: '程序版本', children: `Importer ${info.importerVersion || '-'} / 采集 ${info.collectorVersion || '-'}` },
+                  { key: 'id', label: '采集器', children: `${info.collectorName || '-'}（主机 ${info.computerId || '-'}）` },
+                ]}
+              />
+
+              {/* 当前任务 */}
+              <Card size="small" title="当前任务" style={{ marginBottom: 12 }}>
+                {task ? (
+                  <>
+                    <Flex justify="space-between" align="center" wrap="wrap" gap={8}>
+                      <div>
+                        <Typography.Text strong>{task.name}</Typography.Text>
+                        {task.isTraining && <Tag color="purple" style={{ marginLeft: 8 }}>培训</Tag>}
+                        <div style={{ fontSize: 12, opacity: 0.65, marginTop: 2 }}>
+                          采集员：{task.operator?.name}{task.operator?.level != null ? `（等级 ${task.operator.level}）` : ''}
+                        </div>
+                      </div>
+                      <Tag color={task.state === 'active' ? 'blue' : 'default'} style={{ margin: 0 }}>{task.state === 'active' ? '进行中' : (task.state || '-')}</Tag>
+                    </Flex>
+                    <Progress
+                      style={{ marginTop: 10, marginBottom: 0 }}
+                      percent={task.percent ?? 0}
+                      format={() => `${task.hoursCompleted != null ? Number(task.hoursCompleted).toFixed(2) : '0'} / ${task.hours != null ? Number(task.hours).toFixed(2) : '-'} 小时`}
+                    />
+                  </>
+                ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有任务" />}
+              </Card>
+
+              {/* 设备状态 */}
+              <Card size="small" title="设备状态" style={{ marginBottom: 12 }}>
+                {!dev.dexterousHands?.left && !dev.dexterousHands?.right && !dev.quest && !dev.gloves?.left && !dev.gloves?.right && !dev.cameras?.length && !dev.other?.length && !info.questInfo ? (
+                  <div style={{ color: '#8c8c8c', fontSize: 13, padding: '4px 0' }}>
+                    采集程序未运行，组件状态不可读取——程序启动后这里会显示灵巧手 / 手套 / Quest / 摄像头的连接与传输状态
+                  </div>
+                ) : (
+                  <>
+                    <Flex wrap="wrap" gap={8}>
+                      {(() => {
+                        const handDetail = (side: string, net: any) => (
+                          <>
+                            {net?.snCode && <span style={{ fontFamily: 'monospace' }}>SN: {net.snCode}　</span>}
+                            {info.teleopDelay && info.teleopDelay[side] != null && <span>延迟 {Math.round(Number(info.teleopDelay[side]))}ms　</span>}
+                            {net?.connected === false && <span style={{ color: '#cf1322' }}>网络不可达</span>}
+                          </>
+                        );
+                        const lNet = info.devicesNet?.dexterousHands?.left, rNet = info.devicesNet?.dexterousHands?.right;
+                        return (
+                          <>
+                            {cell('灵巧手（左）', devTag(dev.dexterousHands?.left ?? (lNet?.connected ? { status: 'connected' } : null)), handDetail('left', lNet))}
+                            {cell('灵巧手（右）', devTag(dev.dexterousHands?.right ?? (rNet?.connected ? { status: 'connected' } : null)), handDetail('right', rNet))}
+                          </>
+                        );
+                      })()}
+                      {(() => {
+                        const qi = info.questInfo;
+                        const netOff = qi && qi.netConnected === false;
+                        return cell('Quest', devTag(dev.quest ?? (qi && qi.netConnected ? { status: 'connected' } : null)),
+                          <span>
+                            {qi?.serialNumber && <span style={{ fontFamily: 'monospace' }}>SN: {qi.serialNumber}　</span>}
+                            {qi && !qi.serialNumber && qi.adbStatus === 'unauthorized' && <span style={{ color: '#d46b08' }}>USB 调试未授权　</span>}
+                            {qi && qi.batteryLevel != null && <span>电量 {qi.batteryLevel}%{qi.batteryStatus === 'charging' ? '（充电中）' : qi.batteryStatus === 'full' ? '（已充满）' : ''}{qi.batteryTemp != null ? `　${qi.batteryTemp}℃` : ''}</span>}
+                            {!qi?.serialNumber && !qi?.batteryLevel && netOff && <span style={{ color: '#cf1322' }}>网络不可达</span>}
+                          </span>);
+                      })()}
+                      {cell('手套（左）', devTag(dev.gloves?.left),
+                        info.devicesNet?.gloves?.left ? <span style={{ fontFamily: 'monospace' }}>SN: {info.devicesNet.gloves.left.snCode || '未读取'}</span> : null)}
+                      {cell('手套（右）', devTag(dev.gloves?.right),
+                        info.devicesNet?.gloves?.right ? <span style={{ fontFamily: 'monospace' }}>SN: {info.devicesNet.gloves.right.snCode || '未读取'}</span> : null)}
+                      {(dev.marvin || dev.other?.some((o: any) => o.key === 'robot/marvin') || info.devicesNet?.roboticArm) && cell('机械臂 Marvin',
+                        devTag(dev.marvin ?? (info.devicesNet?.roboticArm?.connected ? { status: 'connected' } : null)),
+                        info.devicesNet?.roboticArm && info.devicesNet.roboticArm.connected === false ? <span style={{ color: '#cf1322' }}>网络不可达</span> : null)}
+                      {(dev.cameras || []).map((c: any) => {
+                        const res = (info.sensors || []).find((s: any) => s.id === c.name);
+                        return cell(camName(c.name), devTag(c), res && res.width ? `${res.width}×${res.height}` : null);
+                      })}
+                    </Flex>
+                    {!!info.vstFps && (
+                      <div style={{ fontSize: 11, opacity: 0.65, marginTop: 8 }}>
+                        头显透视配置帧率 {info.vstFps} fps——采集接口未提供摄像头实时帧率，实际传输状况以各路「实时/延迟/断流」为准
+                      </div>
+                    )}
+                  </>
+                )}
+              </Card>
+
+              {/* 容器 + 告警 */}
+              <Card size="small" title="采集器容器">
+                <Flex gap={4} wrap="wrap" style={{ marginBottom: (info.degraded?.length || info.errors?.length) ? 8 : 0 }}>
+                  {(info.containers || []).map((c: any) => (
+                    <Tag key={c.name} color={c.status === 'running' ? 'green' : 'red'} style={{ margin: 0 }}>
+                      {c.name}: {c.status === 'running' ? '运行中' : c.status}
+                    </Tag>
+                  ))}
+                  {!info.containers?.length && <span style={{ opacity: 0.45 }}>-</span>}
+                </Flex>
+                {!!info.degraded?.length && <Alert type="warning" showIcon style={{ marginBottom: 8 }} message={`降级部件：${info.degraded.join('、')}`} />}
+                {!!info.errors?.length && <Alert type="error" showIcon message={`采集器错误：${info.errors.length} 条`} description={<pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(info.errors, null, 2)}</pre>} />}
+              </Card>
+              <div style={{ color: '#8c8c8c', fontSize: 12, textAlign: 'right' }}>
+                {info.source === 'agent'
+                  ? <>数据来源：心跳快照（{info.dataAgeSec != null ? info.dataAgeSec : '?'} 秒前上报，每 30 秒自动更新）</>
+                  : '数据来源：实时抓取'}
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* 状态切换弹窗 */}
+      <Modal
+        title={target ? `${target.number} 标记为「${PRODUCTION_STATUS_META[target.status]?.label || ''}」` : ''}
+        open={!!target}
+        onOk={confirmSwitch}
+        confirmLoading={saving}
+        onCancel={() => setTarget(null)}
+        okText="确认" cancelText="取消"
+      >
+        <p style={{ marginBottom: 8 }}>
+          机器编号：<strong>{target?.number}</strong>
+        </p>
+        <Input.TextArea
+          rows={3} maxLength={500} showCount
+          placeholder="变更原因/备注（可选），如：排产任务、维修后复测…"
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+        />
+      </Modal>
+    </PageContainer>
+  );
+}

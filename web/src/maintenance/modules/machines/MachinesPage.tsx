@@ -6,6 +6,7 @@ import {
 } from 'antd';
 import {
   PlusOutlined, ImportOutlined, DeleteOutlined, AppstoreOutlined, TableOutlined, SwapOutlined, WarningOutlined,
+  CheckCircleOutlined, DisconnectOutlined, VideoCameraOutlined,
 } from '@ant-design/icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { PageContainer } from '@common/components/PageContainer';
@@ -67,6 +68,33 @@ export default function MachinesPage() {
   };
   const boundSN = (num: string, hand: 'left' | 'right') =>
     registry.find(r => r.machineNumber === num && r.handType === hand && r.status === 'in_use');
+
+  const collectorMeta = (machine: any) => {
+    const hermes = machine?.hermes;
+    const importer = machine?.importer;
+    if (machine?.hostOnline === false) {
+      return { color: 'red', icon: <DisconnectOutlined />, text: '采集代理离线' };
+    }
+    if (!hermes && !importer) {
+      return { color: 'default', icon: <DisconnectOutlined />, text: '未连接采集代理' };
+    }
+    const hermesOk = hermes?.reachable !== false;
+    const importerOk = importer?.reachable !== false;
+    const degraded = hermes?.health?.degraded || [];
+    const recording = hermes?.state?.isRecording === true;
+    const stale = importer?.machineConfigStale || importer?.taskStale
+      || hermes?.healthStale || hermes?.stateStale;
+    if (!hermesOk || !importerOk) {
+      return { color: 'red', icon: <DisconnectOutlined />, text: '采集服务异常' };
+    }
+    if ((!hermes?.healthStale && (degraded.length || hermes?.health?.allConnected === false))
+      || (!hermes?.stateStale && hermes?.state?.emergencyStopped === true)) {
+      return { color: 'orange', icon: <WarningOutlined />, text: '采集组件降级' };
+    }
+    if (stale) return { color: 'orange', icon: <WarningOutlined />, text: '采集状态部分未知' };
+    if (recording) return { color: 'green', icon: <VideoCameraOutlined />, text: '正在录制' };
+    return { color: 'green', icon: <CheckCircleOutlined />, text: '采集正常' };
+  };
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['machines'] });
@@ -166,6 +194,16 @@ export default function MachinesPage() {
                 )}
               </div>
             )}
+            <div style={{ marginTop: 4 }}>
+              {(() => {
+                const collector = collectorMeta(m);
+                return collector ? (
+                  <Tag color={collector.color} icon={collector.icon} style={{ margin: 0 }}>
+                    {collector.text}
+                  </Tag>
+                ) : null;
+              })()}
+            </div>
           </div>
           <div style={{ fontSize: 12, opacity: leftSN ? 0.85 : 0.45, marginTop: 6 }}>
             🧤 左手: {leftSN ? leftSN.snCode : '未绑定'}
@@ -207,6 +245,13 @@ export default function MachinesPage() {
             )}
           </Flex>
         ),
+    },
+    {
+      title: '采集状态', key: 'collector',
+      render: (_: any, r: any) => {
+        const meta = collectorMeta(r);
+        return meta ? <Tag color={meta.color} icon={meta.icon}>{meta.text}</Tag> : <span style={{ opacity: 0.45 }}>无采集代理</span>;
+      },
     },
     {
       title: '手套绑定', dataIndex: 'machineNumber', key: 'binding',
@@ -311,6 +356,63 @@ export default function MachinesPage() {
               <Col span={12}><div style={{ opacity: 0.6 }}>更新人</div>{detailMachine.updatedBy || '-'}</Col>
               <Col span={12}><div style={{ opacity: 0.6 }}>最近原因</div>{(detailMachine.onlineReason || detailMachine.offlineReason) || '-'}</Col>
             </Row>
+            {detailMachine && (
+              <>
+                <div style={{ marginTop: 18, marginBottom: 8, fontWeight: 600 }}>采集程序</div>
+                {!detailMachine.importer && !detailMachine.hermes && (
+                  <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 10 }}>
+                    尚未收到采集代理心跳；请在该采集机部署并启动 machine-heartbeat-agent。
+                  </Typography.Text>
+                )}
+                <Row gutter={[12, 8]} style={{ fontSize: 13 }}>
+                  <Col span={12}>
+                    <div style={{ opacity: 0.6 }}>采集状态</div>
+                    {(() => { const meta = collectorMeta(detailMachine); return meta ? <Tag color={meta.color} icon={meta.icon}>{meta.text}</Tag> : '-'; })()}
+                  </Col>
+                  <Col span={12}>
+                    <div style={{ opacity: 0.6 }}>Hermes 版本</div>
+                    {detailMachine.hermes?.version || '-'}
+                  </Col>
+                  <Col span={12}>
+                    <div style={{ opacity: 0.6 }}>控制阶段</div>
+                    {detailMachine.hermes?.state?.controlState || '-'}
+                    {detailMachine.hermes?.state?.isRecording === true && <Tag color="green" style={{ marginLeft: 6 }}>录制中</Tag>}
+                  </Col>
+                  <Col span={12}>
+                    <div style={{ opacity: 0.6 }}>Importer 机器 ID</div>
+                    {detailMachine.importer?.machineId || detailMachine.importer?.computerId || '-'}
+                  </Col>
+                  <Col span={12}>
+                    <div style={{ opacity: 0.6 }}>最近采集检查</div>
+                    {formatTime(detailMachine.hermes?.checkedAt || detailMachine.importer?.checkedAt)}
+                  </Col>
+                  <Col span={24}>
+                    <div style={{ opacity: 0.6 }}>当前任务</div>
+                    {detailMachine.importer?.task
+                      ? <span>{detailMachine.importer.task.template?.refName || detailMachine.importer.task.template?.name || detailMachine.importer.task.id || '-'}
+                        {detailMachine.importer.task.hours != null && <span style={{ opacity: 0.65 }}>（{detailMachine.importer.task.hoursCompleted || 0}/{detailMachine.importer.task.hours} 小时）</span>}
+                        {detailMachine.importer.task.operator?.name && <span style={{ opacity: 0.65 }}> · {detailMachine.importer.task.operator.name}</span>}
+                        {detailMachine.importer.taskStale && <Tag color="orange" style={{ marginLeft: 6 }}>可能已过期</Tag>}
+                      </span>
+                      : <span style={{ opacity: 0.45 }}>{detailMachine.importer?.taskStale ? '任务状态未知' : '当前无任务'}</span>}
+                  </Col>
+                  <Col span={24}>
+                    <div style={{ opacity: 0.6 }}>异常</div>
+                    {(() => {
+                      const alerts = detailMachine.edgeAlerts || [];
+                      const degraded = detailMachine.hermes?.health?.degraded || [];
+                      const errors = detailMachine.hermes?.state?.errors || [];
+                      if (!alerts.length && !degraded.length && !errors.length) return <span style={{ color: '#22c55e' }}>无</span>;
+                      return <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                        {alerts.slice(0, 5).map((a: any, i: number) => <Typography.Text type="danger" key={`${a.code || 'alert'}-${i}`}>{a.message || a.code}</Typography.Text>)}
+                        {degraded.length > 0 && <Typography.Text type="warning">降级组件：{degraded.join('、')}</Typography.Text>}
+                        {errors.length > 0 && <Typography.Text type="danger">Hermes 错误：{errors.slice(0, 3).map((e: any) => typeof e === 'string' ? e : JSON.stringify(e)).join('；')}</Typography.Text>}
+                      </Space>;
+                    })()}
+                  </Col>
+                </Row>
+              </>
+            )}
             <Flex gap={8} wrap style={{ marginTop: 16 }}>
               <Button type="primary" onClick={() => { setDetailNumber(null); setFormOpen({ number: detailNumber!, status: 'online' }); }}>上线</Button>
               <Button danger onClick={() => { setDetailNumber(null); setFormOpen({ number: detailNumber!, status: 'offline' }); }}>下线</Button>

@@ -31,6 +31,8 @@ class GloveSNDetector {
     this.rdc2Path = '/var/.rdc2';
     this.wujiCalibPath = '/var/.rdc2/wuji_calib';
     this.containerName = options.containerName || 'importer-staging';
+    // 采集程序容器（mono-staging / exodus-staging），日志里含设备 SN 解析记录
+    this.collectorContainer = options.collectorContainer || process.env.COLLECTOR_CONTAINER || 'mono-staging';
 
     // 手套 IP
     // 注意：灵巧手是 192.168.1.110:7447 / 192.168.1.111:7447
@@ -276,25 +278,32 @@ class GloveSNDetector {
       { name: 'wuji_calib', fn: () => this.detectFromCalibration() },
       { name: 'container', fn: () => this.detectFromContainer() },
       { name: 'GMS backend', fn: () => this.detectFromGMS() },
+      { name: 'collector-logs', fn: () => this.detectFromCollectorLogs() },
     ];
 
-    let finalResult = { left: null, right: null };
+    let finalResult = { left: null, right: null, handLeft: null, handRight: null };
 
     for (const method of methods) {
       console.log(`[SN Detector] 尝试方式: ${method.name}...`);
       const result = await method.fn();
 
       if (result) {
-        // 合并结果（优先使用第一个检测到的）
+        // 合并结果（优先使用先检测到的；日志方式额外提供灵巧手 SN）
         if (result.left && !finalResult.left) {
           finalResult.left = result.left;
         }
         if (result.right && !finalResult.right) {
           finalResult.right = result.right;
         }
+        if (result.handLeft && !finalResult.handLeft) {
+          finalResult.handLeft = result.handLeft;
+        }
+        if (result.handRight && !finalResult.handRight) {
+          finalResult.handRight = result.handRight;
+        }
 
         // 如果两个都找到了，提前结束
-        if (finalResult.left && finalResult.right) {
+        if (finalResult.left && finalResult.right && finalResult.handLeft && finalResult.handRight) {
           break;
         }
       }
@@ -309,6 +318,54 @@ class GloveSNDetector {
     console.log('');
 
     return finalResult;
+  }
+
+  // ==================== 方式4: 从采集程序容器日志提取 ====================
+  // 采集程序连接手套/灵巧手时会打印解析到的 SN，例如：
+  //   WujiGlove (wuji_glove_l): ... using the directly-reachable WG1JA06260610005 ...
+  // 这是设备真实上报的 SN，最权威；灵巧手同理（WH2 开头）。
+  async detectFromCollectorLogs() {
+    try {
+      const cmd = `docker logs --tail 200000 ${this.collectorContainer} 2>&1 | grep -aE "WujiGlove|WujiHand"`;
+      let stdout = '';
+      try {
+        const r = await execAsync(cmd, { timeout: 9000, maxBuffer: 20 * 1024 * 1024 });
+        stdout = r.stdout || '';
+      } catch (e) {
+        // 容器不存在或无日志——静默失败（grep 无匹配退出码 1 也走这里）
+        if (e.stdout) stdout = e.stdout;
+        if (!stdout) return null;
+      }
+
+      const result = { left: null, right: null, handLeft: null, handRight: null };
+      const snRe = /W(?:G|H)[0-9A-Z][JK][A-Z0-9]{6,}/;
+      // 逐行扫描，后出现的覆盖先出现的——日志尾部是最近一次连接解析结果
+      for (const line of stdout.split('\n')) {
+        const isLeft = /wuji_glove_l|hand_left|wuji_hand_l/.test(line);
+        const isRight = /wuji_glove_r|hand_right|wuji_hand_r/.test(line);
+        if (!isLeft && !isRight) continue;
+        const m = line.match(snRe);
+        if (!m) continue;
+        const sn = m[0].toUpperCase();
+        const isHand = /WujiHand|wuji_hand/.test(line) || sn.startsWith('WH');
+        if (isHand) {
+          if (isLeft) result.handLeft = sn;
+          if (isRight) result.handRight = sn;
+        } else {
+          if (isLeft) result.left = sn;
+          if (isRight) result.right = sn;
+        }
+      }
+
+      if (result.left || result.right || result.handLeft || result.handRight) {
+        console.log('[SN Detector] 从采集容器日志检测到 SN:', JSON.stringify(result));
+        return result;
+      }
+      return null;
+    } catch (error) {
+      console.error('[SN Detector] 读取容器日志失败:', error.message);
+      return null;
+    }
   }
 
   // ==================== 上报到 GMS 后端 ====================

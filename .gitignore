@@ -11,3 +11,4 @@ Sout/
 Thumbs.db
 cloudbaserc.json
 .claude/
+*.tar.gz

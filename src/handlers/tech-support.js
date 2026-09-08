@@ -24,6 +24,8 @@ module.exports = function createTechSupportHandlers(deps) {
     fmtDuration: _fmtDuration,
     // Phase B: SLA 配置存取（settings 表辅助函数，可选注入）
     getSetting, saveSetting,
+    // 机器生产状态写入口（machines 域注入，可选）：提交工单→待维修，完成工单→可生产
+    setProductionStatus,
   } = deps;
 
   // SLA 配置缓存（启动加载，PUT 时刷新）
@@ -236,6 +238,84 @@ module.exports = function createTechSupportHandlers(deps) {
     sendJSON(res, out);
   }
 
+  // ==================== 常见故障模板（运营共享） ====================
+  // 存储：settings 表 skey='tech_support_common_faults'，JSON 数组。
+  // 任何运营账户（含普通 user）均可添加，全运营账户可见可用；仅添加人/超管可删除。
+  const COMMON_FAULTS_SKEY = 'tech_support_common_faults';
+  const COMMON_FAULTS_MAX = 100;
+
+  async function _readCommonFaults() {
+    if (!getSetting) return [];
+    try {
+      const v = await getSetting(COMMON_FAULTS_SKEY);
+      return Array.isArray(v) ? v : [];
+    } catch (e) {
+      console.error('[TECH_SUPPORT] 读取常见故障失败:', e.message);
+      return [];
+    }
+  }
+
+  function _isOperations(authUser) {
+    return authUser && (authUser.system === 'operations' || authUser.role === 'superadmin');
+  }
+
+  // GET /api/tech-support/common-faults（登录即可读）
+  async function handleListCommonFaults(req, res) {
+    sendJSON(res, { success: true, faults: await _readCommonFaults() });
+  }
+
+  // POST /api/tech-support/common-faults（运营可添加）
+  async function handleAddCommonFault(req, res, authUser, body) {
+    if (!_isOperations(authUser)) {
+      return sendJSON(res, { error: '仅运营用户可添加常见故障' }, 403);
+    }
+    const faultType = String((body && body.faultType) || '').trim();
+    const faultDescription = String((body && body.faultDescription) || '').trim();
+    if (!faultType || !faultDescription) {
+      return sendJSON(res, { error: '故障现象和故障说明都不能为空' }, 400);
+    }
+    if (faultType.length > 50) return sendJSON(res, { error: '故障现象过长（最多 50 字）' }, 400);
+    if (faultDescription.length > 500) return sendJSON(res, { error: '故障说明过长（最多 500 字）' }, 400);
+    if (!saveSetting) return sendJSON(res, { error: '配置服务不可用' }, 503);
+
+    const list = await _readCommonFaults();
+    if (list.some(f => f.faultType === faultType && f.faultDescription === faultDescription)) {
+      return sendJSON(res, { error: '该常见故障已存在，请勿重复添加' }, 400);
+    }
+    list.unshift({
+      id: `cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      faultType,
+      faultDescription,
+      createdBy: authUser.userId || '',
+      createdByName: authUser.displayName || authUser.username || '',
+      createdAt: new Date().toISOString(),
+    });
+    while (list.length > COMMON_FAULTS_MAX) list.pop();
+    await saveSetting(COMMON_FAULTS_SKEY, list);
+    console.log(`[TECH_SUPPORT] 常见故障已添加 by ${authUser.username}: ${faultType}`);
+    sendJSON(res, { success: true, faults: list });
+  }
+
+  // DELETE /api/tech-support/common-faults/:id（添加人或超管可删）
+  async function handleDeleteCommonFault(req, res, authUser, id) {
+    if (!_isOperations(authUser)) {
+      return sendJSON(res, { error: '仅运营用户可管理常见故障' }, 403);
+    }
+    if (!id) return sendJSON(res, { error: '缺少常见故障 ID' }, 400);
+    if (!saveSetting) return sendJSON(res, { error: '配置服务不可用' }, 503);
+
+    const list = await _readCommonFaults();
+    const idx = list.findIndex(f => f.id === id);
+    if (idx < 0) return sendJSON(res, { error: '常见故障不存在或已被删除' }, 404);
+    if (authUser.role !== 'superadmin' && list[idx].createdBy && list[idx].createdBy !== authUser.userId) {
+      return sendJSON(res, { error: '仅添加人或管理员可删除该常见故障' }, 403);
+    }
+    const removed = list.splice(idx, 1)[0];
+    await saveSetting(COMMON_FAULTS_SKEY, list);
+    console.log(`[TECH_SUPPORT] 常见故障已删除 by ${authUser.username}: ${removed.faultType} (${id})`);
+    sendJSON(res, { success: true, faults: list });
+  }
+
   async function handleSubmitTechSupport(req, res, authUser, body) {
     if (authUser.system !== 'operations' && authUser.role !== 'superadmin') {
       return sendJSON(res, { error: '仅运营用户可提交技术支持请求' }, 403);
@@ -296,6 +376,13 @@ module.exports = function createTechSupportHandlers(deps) {
     });
     await saveTechSupport(id, item);
     await _updateMachineStatusByNumber(item.machineNumber, 'waiting_repair');
+    // 生产状态联动：提交工单 → 待维修
+    if (typeof setProductionStatus === 'function') {
+      setProductionStatus({
+        machineNumber: item.machineNumber, status: 'waiting_repair', source: 'ticket',
+        ticketId: id, reason: `提交维修工单：${faultType}`,
+      }).catch(e => console.error('[Production Status] 工单联动失败:', e.message));
+    }
     broadcastChange('tech_support', ['machines'], { action: 'created', id });
     sendJSON(res, { success: true, item });
     setImmediate(() => {
@@ -367,105 +454,46 @@ module.exports = function createTechSupportHandlers(deps) {
       console.error('[EDGE-TICKET] 系统账号读取失败，使用默认提交人名:', e.message);
     }
 
-    // 构建详细的故障描述（比人工建单更详细）
-    let detailedDescription = `【系统自动检测·边缘代理】${faultDescription}`;
+    // 构建故障描述（精简版：只保留排障必需信息）
+    let detailedDescription = `【系统自动检测】${machineNumber || ''} ${faultDescription}`;
 
-    // 添加诊断详情
+    // 诊断详情（仅 SN 冲突类告警会产生这段）
     if (diagnostics) {
-      detailedDescription += '\n\n━━━━━━ 诊断详情 ━━━━━━';
-      if (diagnostics.observedSN) {
-        detailedDescription += `\n• 观测到的 SN: ${diagnostics.observedSN}`;
-      }
-      if (diagnostics.registeredSN) {
-        detailedDescription += `\n• 系统登记 SN: ${diagnostics.registeredSN}`;
-      }
-      if (diagnostics.expectedHand) {
-        detailedDescription += `\n• 应该接入: ${diagnostics.expectedHand === 'left' ? '左手' : '右手'}网口`;
-      }
-      if (diagnostics.actualHand) {
-        detailedDescription += `\n• 实际接入: ${diagnostics.actualHand === 'left' ? '左手' : '右手'}网口`;
-      }
-      if (diagnostics.deviceStatus) {
-        detailedDescription += `\n• 设备状态: ${diagnostics.deviceStatus}`;
-      }
-      if (diagnostics.boundMachine) {
-        detailedDescription += `\n• 绑定机器: ${diagnostics.boundMachine}`;
-      }
+      const diagLines = [];
+      if (diagnostics.observedSN) diagLines.push(`观测SN ${diagnostics.observedSN}`);
+      if (diagnostics.registeredSN) diagLines.push(`登记SN ${diagnostics.registeredSN}`);
+      if (diagnostics.expectedHand) diagLines.push(`应接${diagnostics.expectedHand === 'left' ? '左' : '右'}口`);
+      if (diagnostics.actualHand) diagLines.push(`实接${diagnostics.actualHand === 'left' ? '左' : '右'}口`);
+      if (diagnostics.deviceStatus) diagLines.push(diagnostics.deviceStatus);
+      if (diagnostics.boundMachine) diagLines.push(`绑定机器 ${diagnostics.boundMachine}`);
+      if (diagLines.length) detailedDescription += `\n诊断: ${diagLines.join('，')}`;
     }
 
-    // 添加设备快照
+    // 设备快照：压缩为单行（含 SN / 电量）
     if (deviceSnapshot) {
-      detailedDescription += '\n\n━━━━━━ 设备状态快照 ━━━━━━';
-      if (deviceSnapshot.leftGlove !== undefined) {
-        detailedDescription += `\n• 左手手套: ${deviceSnapshot.leftGlove ? '✅ 已连接' : '❌ 未连接'}`;
-        if (deviceSnapshot.leftGloveSN) {
-          detailedDescription += ` (SN: ${deviceSnapshot.leftGloveSN})`;
-        }
-      }
-      if (deviceSnapshot.rightGlove !== undefined) {
-        detailedDescription += `\n• 右手手套: ${deviceSnapshot.rightGlove ? '✅ 已连接' : '❌ 未连接'}`;
-        if (deviceSnapshot.rightGloveSN) {
-          detailedDescription += ` (SN: ${deviceSnapshot.rightGloveSN})`;
-        }
-      }
-      if (deviceSnapshot.leftDexterous !== undefined) {
-        detailedDescription += `\n• 左手灵巧手: ${deviceSnapshot.leftDexterous ? '✅ 已连接' : '❌ 未连接'}`;
-      }
-      if (deviceSnapshot.rightDexterous !== undefined) {
-        detailedDescription += `\n• 右手灵巧手: ${deviceSnapshot.rightDexterous ? '✅ 已连接' : '❌ 未连接'}`;
-      }
-      if (deviceSnapshot.roboticArm !== undefined) {
-        detailedDescription += `\n• 机械臂: ${deviceSnapshot.roboticArm ? '✅ 已连接' : '❌ 未连接'}`;
-      }
-      if (deviceSnapshot.quest !== undefined) {
-        detailedDescription += `\n• Quest 头显: ${deviceSnapshot.quest ? '✅ 已连接' : '❌ 未连接'}`;
-        if (deviceSnapshot.questBattery) {
-          detailedDescription += ` (电量: ${deviceSnapshot.questBattery}%)`;
-        }
-      }
+      const dev = [];
+      if (deviceSnapshot.leftGlove !== undefined) dev.push(`${deviceSnapshot.leftGlove ? '✅' : '❌'}手套L${deviceSnapshot.leftGloveSN ? '/' + deviceSnapshot.leftGloveSN : ''}`);
+      if (deviceSnapshot.rightGlove !== undefined) dev.push(`${deviceSnapshot.rightGlove ? '✅' : '❌'}手套R${deviceSnapshot.rightGloveSN ? '/' + deviceSnapshot.rightGloveSN : ''}`);
+      if (deviceSnapshot.leftDexterous !== undefined) dev.push(`${deviceSnapshot.leftDexterous ? '✅' : '❌'}灵巧手L`);
+      if (deviceSnapshot.rightDexterous !== undefined) dev.push(`${deviceSnapshot.rightDexterous ? '✅' : '❌'}灵巧手R`);
+      if (deviceSnapshot.quest !== undefined) dev.push(`${deviceSnapshot.quest ? '✅' : '❌'}Quest${deviceSnapshot.questBattery ? `(${deviceSnapshot.questBattery}%)` : ''}`);
+      if (deviceSnapshot.roboticArm !== undefined) dev.push(`${deviceSnapshot.roboticArm ? '✅' : '❌'}机械臂`);
+      if (dev.length) detailedDescription += `\n设备: ${dev.join(' ')}`;
     }
 
-    // 添加环境信息
-    if (environmentInfo) {
-      detailedDescription += '\n\n━━━━━━ 环境信息 ━━━━━━';
-      if (environmentInfo.hostname) {
-        detailedDescription += `\n• 主机名: ${environmentInfo.hostname}`;
-      }
-      if (environmentInfo.ipAddress) {
-        detailedDescription += `\n• IP 地址: ${environmentInfo.ipAddress}`;
-      }
-      if (environmentInfo.agentVersion) {
-        detailedDescription += `\n• 代理版本: ${environmentInfo.agentVersion}`;
-      }
-      if (environmentInfo.lastHeartbeat) {
-        detailedDescription += `\n• 最后心跳: ${new Date(environmentInfo.lastHeartbeat).toLocaleString('zh-CN')}`;
-      }
-      if (environmentInfo.cpuCount) {
-        detailedDescription += `\n• CPU 核心数: ${environmentInfo.cpuCount}`;
-      }
-      if (environmentInfo.totalMemory) {
-        const memGB = (environmentInfo.totalMemory / 1024 / 1024 / 1024).toFixed(1);
-        detailedDescription += `\n• 总内存: ${memGB} GB`;
-      }
+    // 时间
+    if (alertContext && alertContext.firstDetected) {
+      detailedDescription += `\n检测时间: ${new Date(alertContext.firstDetected).toLocaleString('zh-CN')}`;
+    } else if (environmentInfo && environmentInfo.lastHeartbeat) {
+      detailedDescription += `\n检测时间: ${new Date(environmentInfo.lastHeartbeat).toLocaleString('zh-CN')}`;
     }
 
-    // 添加告警上下文
+    // 原因与建议（故障库中登记的才有）
     if (alertContext) {
-      detailedDescription += '\n\n━━━━━━ 告警上下文 ━━━━━━';
-      if (alertContext.firstDetected) {
-        detailedDescription += `\n• 首次检测: ${new Date(alertContext.firstDetected).toLocaleString('zh-CN')}`;
-      }
-      if (alertContext.occurrenceCount) {
-        detailedDescription += `\n• 发生次数: ${alertContext.occurrenceCount}`;
-      }
+      if (alertContext.possibleCause) detailedDescription += `\n可能原因: ${alertContext.possibleCause}`;
+      if (alertContext.suggestedAction) detailedDescription += `\n建议操作: ${alertContext.suggestedAction}`;
       if (alertContext.relatedAlerts && alertContext.relatedAlerts.length > 0) {
-        detailedDescription += `\n• 相关告警: ${alertContext.relatedAlerts.join(', ')}`;
-      }
-      if (alertContext.possibleCause) {
-        detailedDescription += `\n• 可能原因: ${alertContext.possibleCause}`;
-      }
-      if (alertContext.suggestedAction) {
-        detailedDescription += `\n• 建议操作: ${alertContext.suggestedAction}`;
+        detailedDescription += `\n相关告警: ${alertContext.relatedAlerts.join('、')}`;
       }
     }
 
@@ -510,6 +538,13 @@ module.exports = function createTechSupportHandlers(deps) {
     });
     await saveTechSupport(id, item);
     await _updateMachineStatusByNumber(machineNumber, 'waiting_repair');
+    // 生产状态联动：告警自动建单 → 待维修
+    if (typeof setProductionStatus === 'function') {
+      setProductionStatus({
+        machineNumber, status: 'waiting_repair', source: 'ticket',
+        ticketId: id, reason: `告警自动建单：${faultType}`,
+      }).catch(e => console.error('[Production Status] 自动单联动失败:', e.message));
+    }
     broadcastChange('tech_support', ['machines'], { action: 'created', id, auto: true });
     setImmediate(() => {
       try { if (realtime && realtime.notifyNewTechSupport) realtime.notifyNewTechSupport(item); } catch {}
@@ -641,6 +676,13 @@ module.exports = function createTechSupportHandlers(deps) {
     await saveTechSupport(id, item);
     await _syncInventoryFromSN(pool);
     await _recomputeMachineStatusFromGloves(item.machineNumber);
+    // 生产状态联动：维修完成 → 可生产
+    if (typeof setProductionStatus === 'function') {
+      setProductionStatus({
+        machineNumber: item.machineNumber, status: 'ready', source: 'ticket',
+        ticketId: id, reason: '维修工单完成，恢复可生产',
+      }).catch(e => console.error('[Production Status] 完成联动失败:', e.message));
+    }
     broadcastChange('tech_support', ['machines', 'sn_registry', 'inventory'], { action: 'completed', id });
     sendJSON(res, { success: true, item });
     setImmediate(() => {
@@ -665,6 +707,13 @@ module.exports = function createTechSupportHandlers(deps) {
       } catch (e) {
         console.error('[TechSupport Delete] Machine status recompute failed:', e.message);
       }
+    }
+    // 未完成工单被删除（故障解除/误单）→ 生产状态恢复可生产；已是可生产则为空操作
+    if (!wasCompleted && machineNumber && typeof setProductionStatus === 'function') {
+      setProductionStatus({
+        machineNumber, status: 'ready', source: 'ticket',
+        ticketId: id, reason: '未完成工单被删除，恢复可生产',
+      }).catch(e => console.error('[Production Status] 删除联动失败:', e.message));
     }
 
     broadcastChange('tech_support', ['machines'], { action: 'deleted', id });
@@ -845,6 +894,9 @@ module.exports = function createTechSupportHandlers(deps) {
     handleGetTechSupportDetail,
     handleGetRepairResults,
     handleGetMySubmitHistory,
+    handleListCommonFaults,
+    handleAddCommonFault,
+    handleDeleteCommonFault,
     handleSubmitTechSupport,
     createSystemTicket,
     handleRespondTechSupport,

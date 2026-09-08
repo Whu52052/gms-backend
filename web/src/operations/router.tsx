@@ -18,6 +18,7 @@ const SOPPage = lazy(() => import('./modules/sop/SOPPage'));
 
 // 复用运维端页面
 const PopupMessagesPage = lazy(() => import('../maintenance/modules/popup-messages/PopupMessagesPage'));
+const MachineStatusPage = lazy(() => import('../maintenance/modules/machine-status/MachineStatusPage'));
 
 function Fallback() {
   return (
@@ -42,6 +43,7 @@ export function AppRoutes() {
           <Route path="tech-support/my" element={<TechSupportMyPage />} />
           <Route path="users" element={<OpsUsersPage />} />
           <Route path="popup-messages" element={<PopupMessagesPage />} />
+          <Route path="machine-status" element={<MachineStatusPage />} />
           <Route path="sop" element={<SOPPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

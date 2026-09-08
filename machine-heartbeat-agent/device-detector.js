@@ -43,7 +43,28 @@ class DeviceStatusDetector {
     this.lastStatus = null;
   }
 
-  // ==================== TCP 端口连接检测 ====================
+  // ==================== PING 检测（替代 TCP 端口检测）====================
+  async checkPingConnection(ip, timeout = 3000) {
+    try {
+      const startTime = Date.now();
+      // 使用 ping 命令：-c 1 发送1个包，-W 超时秒数
+      const timeoutSec = Math.ceil(timeout / 1000);
+      const { stdout, stderr } = await execAsync(`ping -c 1 -W ${timeoutSec} ${ip}`, { timeout: timeout + 500 });
+
+      const latency = Date.now() - startTime;
+
+      // 检查 ping 是否成功（输出包含 "1 received" 或 "1 packets received"）
+      if (stdout.includes('1 received') || stdout.includes('1 packets received')) {
+        return { connected: true, latency };
+      } else {
+        return { connected: false, error: 'no_response' };
+      }
+    } catch (err) {
+      return { connected: false, error: err.code || 'ping_failed' };
+    }
+  }
+
+  // ==================== TCP 端口连接检测（保留备用）====================
   async checkTCPConnection(ip, port, timeout = 3000) {
     return new Promise((resolve) => {
       const socket = new net.Socket();
@@ -76,6 +97,76 @@ class DeviceStatusDetector {
       const startTime = Date.now();
       socket.connect(port, ip);
     });
+  }
+
+  // ==================== 从 Docker 日志中提取手套 SN 码 ====================
+  async getGloveSNFromDockerLogs() {
+    try {
+      console.log(`[Device Detector] [DEBUG] 开始提取 SN 码...`);
+
+      // 第一步：列出所有容器
+      const { stdout: allContainers } = await execAsync('docker ps -a --format "{{.Names}}"', { timeout: 5000 });
+      console.log(`[Device Detector] [DEBUG] 所有容器: ${allContainers.split('\n').length} 个`);
+
+      // 第二步：过滤包含 mono 或 rdc 的容器
+      const containers = allContainers.split('\n').filter(c => c.trim() && (c.includes('mono') || c.includes('rdc')));
+      console.log(`[Device Detector] 找到 ${containers.length} 个 mono/rdc 容器: ${containers.join(', ')}`);
+
+      if (containers.length === 0) {
+        console.log(`[Device Detector] 未找到 mono/rdc 容器`);
+        return { left: null, right: null };
+      }
+
+      const snCodes = { left: null, right: null };
+
+      // 遍历所有容器，直到找到手套 SN 码
+      for (const containerName of containers) {
+        console.log(`[Device Detector] 从容器 ${containerName} 提取 SN 码...`);
+
+        // 直接获取日志，然后在 JS 中过滤
+        const { stdout: logs } = await execAsync(`docker logs ${containerName} 2>&1`, { timeout: 10000, maxBuffer: 10 * 1024 * 1024 });
+
+        // 在 JS 中过滤包含 glove 和 sn= 的行
+        const lines = logs.split('\n').filter(l => l.toLowerCase().includes('glove') && l.includes('sn='));
+        console.log(`[Device Detector] 找到 ${lines.length} 行包含手套 SN 的日志`);
+
+        if (lines.length === 0) continue;
+
+        // 解析日志提取 SN 码（从后往前查找，获取最新的）
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i];
+
+          // 匹配格式: wuji_glove_l ... sn=WG1JA06260625043
+          if (!snCodes.left) {
+            const leftMatch = line.match(/wuji_glove_l.*sn=(WG[0-9A-Z]+)/);
+            if (leftMatch) {
+              snCodes.left = leftMatch[1];
+              console.log(`[Device Detector] 左手 SN: ${snCodes.left}`);
+            }
+          }
+
+          if (!snCodes.right) {
+            const rightMatch = line.match(/wuji_glove_r.*sn=(WG[0-9A-Z]+)/);
+            if (rightMatch) {
+              snCodes.right = rightMatch[1];
+              console.log(`[Device Detector] 右手 SN: ${snCodes.right}`);
+            }
+          }
+
+          // 如果两个都找到了就可以退出
+          if (snCodes.left && snCodes.right) break;
+        }
+
+        // 如果已经找到两个 SN 码，就不需要继续检查其他容器
+        if (snCodes.left && snCodes.right) break;
+      }
+
+      return snCodes;
+    } catch (error) {
+      console.error(`[Device Detector] ❌ 从 Docker 日志提取手套 SN 码失败: ${error.message}`);
+      console.error(`[Device Detector] ❌ 错误堆栈:`, error.stack);
+      return { left: null, right: null };
+    }
   }
 
   // ==================== ADB 检测 Quest ====================
@@ -234,32 +325,34 @@ class DeviceStatusDetector {
       timestamp: new Date().toISOString(),
     };
 
-    // 1. 检测手套
-    console.log('[Device Detector] 检测手套...');
-    status.gloves.left = await this.checkTCPConnection(
-      this.devices.glove_left.ip,
-      this.devices.glove_left.port
-    );
-    status.gloves.right = await this.checkTCPConnection(
-      this.devices.glove_right.ip,
-      this.devices.glove_right.port
-    );
-    console.log(`  左手: ${status.gloves.left.connected ? '✅' : '❌'}`);
-    console.log(`  右手: ${status.gloves.right.connected ? '✅' : '❌'}`);
+    // 1. 检测手套（使用 PING）
+    console.log('[Device Detector] 检测手套（PING）...');
+    status.gloves.left = await this.checkPingConnection(this.devices.glove_left.ip);
+    status.gloves.right = await this.checkPingConnection(this.devices.glove_right.ip);
+    console.log(`  左手 (${this.devices.glove_left.ip}): ${status.gloves.left.connected ? '✅' : '❌'}`);
+    console.log(`  右手 (${this.devices.glove_right.ip}): ${status.gloves.right.connected ? '✅' : '❌'}`);
+
+    // 1.1 如果手套在线，尝试从 Docker 日志提取 SN 码
+    if (status.gloves.left.connected || status.gloves.right.connected) {
+      console.log('[Device Detector] 从 Docker 日志提取手套 SN 码...');
+      const snCodes = await this.getGloveSNFromDockerLogs();
+      if (snCodes.left) {
+        status.gloves.left.snCode = snCodes.left;
+        console.log(`  左手 SN: ${snCodes.left}`);
+      }
+      if (snCodes.right) {
+        status.gloves.right.snCode = snCodes.right;
+        console.log(`  右手 SN: ${snCodes.right}`);
+      }
+    }
     console.log('');
 
-    // 2. 检测灵巧手
-    console.log('[Device Detector] 检测灵巧手...');
-    status.dexterousHands.left = await this.checkTCPConnection(
-      this.devices.dexterous_left.ip,
-      this.devices.dexterous_left.port
-    );
-    status.dexterousHands.right = await this.checkTCPConnection(
-      this.devices.dexterous_right.ip,
-      this.devices.dexterous_right.port
-    );
-    console.log(`  左手: ${status.dexterousHands.left.connected ? '✅' : '❌'}`);
-    console.log(`  右手: ${status.dexterousHands.right.connected ? '✅' : '❌'}`);
+    // 2. 检测灵巧手（使用 PING）
+    console.log('[Device Detector] 检测灵巧手（PING）...');
+    status.dexterousHands.left = await this.checkPingConnection(this.devices.dexterous_left.ip);
+    status.dexterousHands.right = await this.checkPingConnection(this.devices.dexterous_right.ip);
+    console.log(`  左手 (${this.devices.dexterous_left.ip}): ${status.dexterousHands.left.connected ? '✅' : '❌'}`);
+    console.log(`  右手 (${this.devices.dexterous_right.ip}): ${status.dexterousHands.right.connected ? '✅' : '❌'}`);
     console.log('');
 
     // 3. 判断机器类型
@@ -338,7 +431,10 @@ class DeviceStatusDetector {
       },
       quest: {
         connected: this.lastStatus.quest?.connected || false,
-        battery: this.lastStatus.quest?.battery?.level || null,
+        serialNumber: this.lastStatus.quest?.serialNumber || null,
+        error: this.lastStatus.quest?.error || null,
+        // 完整电量对象 {level, status, temperature}，缺失时为 null
+        battery: this.lastStatus.quest?.battery || null,
       },
     };
 

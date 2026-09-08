@@ -48,6 +48,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { key: '/tech-support/submit', icon: 'S', label: '提交请求' },
       { key: '/tech-support/my', icon: 'L', label: '维修日志', adminOnly: true },
+      { key: '/machine-status', icon: 'M', label: '机器状态', adminOnly: true },
     ],
   },
   {
@@ -65,6 +66,7 @@ const TITLE_MAP: Record<string, string> = {
   '/requirements': '需求',
   '/tech-support/submit': '提交技术支持请求',
   '/tech-support/my': '我的技术支持请求',
+  '/machine-status': '机器状态',
   '/users': '账户管理',
   '/popup-messages': '弹窗句子管理',
   '/sop': 'SOP 文档',

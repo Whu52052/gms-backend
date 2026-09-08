@@ -15,7 +15,7 @@ export const queryClient = new QueryClient({
 // SSE/WS 事件 → 需要失效的查询键前缀
 const EVENT_QUERY_MAP: Record<string, string[]> = {
   inventory_updated: ['inventory'],
-  machines_updated: ['machines'],
+  machines_updated: ['machines', 'production-history'],
   transactions_updated: ['transactions'],
   settings_updated: ['settings'],
   equipment_config_updated: ['equipment-config', 'configs'],

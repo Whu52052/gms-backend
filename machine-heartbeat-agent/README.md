@@ -46,6 +46,9 @@ docker-compose logs -f
 | `GMS_BACKEND_URL` | GMS后端地址 | `http://10.5.51.216:8765` |
 | `MACHINE_NUMBER` | 机器编号（留空自动检测） | 自动检测 |
 | `HEARTBEAT_INTERVAL` | 心跳间隔（秒） | `30` |
+| `IMPORTER_API_URL` | Importer 只读 API 地址 | `http://127.0.0.1:5025` |
+| `HERMES_API_URL` | RDC2 Hermes 只读 API 地址 | `http://127.0.0.1:5006` |
+| `COLLECTOR_API_TIMEOUT` | 单个采集 API 请求超时（毫秒） | `3000` |
 | `DEVICE_TYPE` | 设备类型 | `workstation` |
 
 ## 机器编号检测规则

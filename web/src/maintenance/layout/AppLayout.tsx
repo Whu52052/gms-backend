@@ -10,6 +10,7 @@ import {
   UserOutlined, BellOutlined, MessageOutlined, HistoryOutlined, QuestionCircleOutlined,
   AppstoreOutlined, ReloadOutlined, MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined,
   ShopOutlined, FileSearchOutlined, SafetyCertificateOutlined, SwapOutlined,
+  MonitorOutlined,
 } from '@ant-design/icons';
 import { useAuthStore, isAdmin, isSuperAdmin } from '@common/stores/auth';
 import { useUIStore } from '@common/stores/ui';
@@ -144,6 +145,7 @@ export function AppLayout() {
       type: 'group', label: '现场运维',
       children: [
         { key: 'machines', icon: <DesktopOutlined />, label: '机器管理' },
+        { key: 'machine-status', icon: <MonitorOutlined />, label: '机器状态' },
         { key: 'machine-links', icon: <ApiOutlined />, label: '机器链接' },
         { key: 'storage-locations', icon: <HomeOutlined />, label: '库位管理' },
         { key: 'tech-support', icon: <QuestionCircleOutlined />, label: '技术支持' },

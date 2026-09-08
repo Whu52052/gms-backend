@@ -19,17 +19,25 @@
  *   POST   /api/machines/:number/unbind         → handleUnbindMachine
  *   GET    /api/machine-bindings                → handleGetMachineBindings
  *   POST   /api/machines/:number/sync-state     → handleSyncMachineState
+ *   GET    /api/machines/:number/status         → handleGetMachineStatus   (公开链接页, 免认证)
+ *   GET    /api/machines/:number/info           → handleGetMachineInfo     (采集器综合信息)
+ *   POST   /api/machines/production-status      → handleSetProductionStatus
+ *   GET    /api/machines/production-history     → handleGetProductionHistory
  *
- * Internal helper (not exported): unbindGlovesFromMachine — transactional
- * release of all in_use gloves on a machine; shared by handleAddMachine and
- * handleUnbindMachine.
+ * Internal helpers (not exported):
+ *   unbindGlovesFromMachine — transactional release of all in_use gloves on a
+ *     machine; shared by handleAddMachine and handleUnbindMachine.
+ *   loadProductionStatuses — machine_production 全量读取 (machineNumber → production* 字段),
+ *     merged into handleGetMachines / handleMobileGetMachines.
+ *   setProductionStatus — 生产状态变更唯一写入口（状态+历史+广播单点收敛）, exported for
+ *     tech-support.js 工单联动 (提交→待维修, 完成/删除→可生产).
  *
  * Deps: pool, sendJSON, _cached (cache wrapper), _cache (Map for invalidation),
  * saveMachine (dual-write: JSON data + redundant cols), saveMachineBinding,
  * readJSONById, deleteJSON, saveJSON (audit_log), _syncInventoryFromSN
  * (server.js, has broadcastSSE side effect), _insertTransaction (lib/db-helpers
  * alias), _snToInvType (lib/mappings), broadcastChange (Phase 1.2 helper),
- * broadcastSSE.
+ * broadcastSSE, loadEdgePresence (edge.js, 主机在线状态合并).
  *
  * `os` is required directly (node built-in, no injection needed).
  * saveMachine / saveMachineBinding are kept in server.js because migration
@@ -129,6 +137,16 @@ module.exports = function createMachinesHandlers(deps) {
         }
       }
 
+      // 合并生产状态（可生产/在生产/待维修/在测试）；无记录的机器前端按 ready 展示
+      try {
+        const prodMap = await loadProductionStatuses();
+        for (const m of result) {
+          if (prodMap[m.machineNumber]) Object.assign(m, prodMap[m.machineNumber]);
+        }
+      } catch (e) {
+        console.error('[Mobile Machines] production status 合并失败:', e.message);
+      }
+
       sendJSON(res, { success: true, machines: result });
     } catch (e) {
       console.error('[Mobile Machines] Error:', e);
@@ -224,7 +242,7 @@ module.exports = function createMachinesHandlers(deps) {
   // ==================== MACHINES CRUD ====================
 
   async function handleGetMachines(req, res, user) {
-    const result = await _cached('machines', async () => {
+    const records = await _cached('machines', async () => {
       const [rows] = await pool.execute('SELECT data FROM machines ORDER BY id DESC LIMIT 5000');
       const all = rows.map(r => JSON.parse(r.data));
       // 按 updatedAt 排序，确保最新的记录在前面
@@ -237,6 +255,33 @@ module.exports = function createMachinesHandlers(deps) {
       }
       return Array.from(latest.values());
     });
+    // Edge presence changes every heartbeat, so merge it outside the lifecycle
+    // record cache. Older agents simply produce no extra fields.
+    let result = records;
+    if (typeof loadEdgePresence === 'function') {
+      try {
+        const presence = await loadEdgePresence();
+        if (Object.keys(presence).length) {
+          result = records.map(machine => presence[machine.machineNumber]
+            ? { ...machine, ...presence[machine.machineNumber] }
+            : machine);
+        }
+      } catch (e) {
+        console.error('[Machines] edge presence 合并失败:', e.message);
+      }
+    }
+    // 合并生产状态（可生产/在生产/待维修/在测试）；无记录的机器前端按 ready 展示
+    try {
+      const prodMap = await loadProductionStatuses();
+      if (Object.keys(prodMap).length) {
+        result = result.map(machine => prodMap[machine.machineNumber]
+          ? { ...machine, ...prodMap[machine.machineNumber] }
+          : machine);
+      }
+    } catch (e) {
+      console.error('[Machines] production status 合并失败:', e.message);
+    }
+
     sendJSON(res, result);
   }
 
@@ -623,10 +668,442 @@ module.exports = function createMachinesHandlers(deps) {
     }
   }
 
+  // ==================== 机器生产状态（可生产/在生产/待维修/在测试）====================
+  // 与设备挂接状态（online/partial/offline）相互独立的生产维度：
+  //   ready=可生产  in_production=在生产  waiting_repair=待维修（工单联动驱动）  testing=在测试
+  const PRODUCTION_STATUSES = ['ready', 'in_production', 'waiting_repair', 'testing'];
+  const PRODUCTION_STATUS_META = {
+    ready: { label: '可生产' },
+    in_production: { label: '在生产' },
+    waiting_repair: { label: '待维修' },
+    testing: { label: '在测试' },
+  };
+
+  // 读取全量生产状态 map（machineNumber -> 状态字段）。变更频率低，直查不缓存；
+  // 状态变更后广播 machines_updated 会驱动前端刷新。
+  async function loadProductionStatuses() {
+    const [rows] = await pool.execute(
+      'SELECT machineNumber,status,reason,source,ticketId,updatedBy,updatedByName,updatedAt FROM machine_production'
+    );
+    const map = {};
+    for (const r of rows) {
+      map[r.machineNumber] = {
+        productionStatus: r.status || 'ready',
+        productionStatusLabel: (PRODUCTION_STATUS_META[r.status] || PRODUCTION_STATUS_META.ready).label,
+        productionReason: r.reason || '',
+        productionSource: r.source || 'manual',
+        productionTicketId: r.ticketId || '',
+        productionUpdatedBy: r.updatedBy || '',
+        productionUpdatedByName: r.updatedByName || '',
+        productionUpdatedAt: r.updatedAt || null,
+      };
+    }
+    return map;
+  }
+
+  // 生产状态变更的唯一写入口（状态 + 审计 + 广播收敛在单点，避免多入口规则漂移）。
+  // opts: {machineNumber, status, reason?, source?:'manual'|'ticket', ticketId?, operator?:{id,name}}
+  // 返回 {ok, changed, from, to}；目标状态与当前相同时 changed=false 且不写历史。
+  async function setProductionStatus(opts = {}) {
+    const machineNumber = (opts.machineNumber || '').toLowerCase().trim();
+    const status = opts.status;
+    if (!machineNumber || !PRODUCTION_STATUSES.includes(status)) {
+      return { ok: false, error: 'invalid_args' };
+    }
+    try {
+      const [rows] = await pool.execute(
+        'SELECT status FROM machine_production WHERE machineNumber = ?',
+        [machineNumber]
+      );
+      const prev = rows.length ? rows[0].status : null;
+      if (prev === status) return { ok: true, changed: false, from: prev, to: status };
+
+      const now = new Date().toISOString();
+      const reason = (opts.reason || '').slice(0, 500);
+      const source = opts.source === 'ticket' ? 'ticket' : 'manual';
+      const opId = opts.operator?.id || (source === 'ticket' ? 'system' : '');
+      const opName = opts.operator?.name || (source === 'ticket' ? '系统（工单联动）' : '');
+
+      await pool.execute(
+        `INSERT INTO machine_production (machineNumber,status,reason,source,ticketId,updatedBy,updatedByName,updatedAt)
+         VALUES (?,?,?,?,?,?,?,?)
+         ON DUPLICATE KEY UPDATE status=VALUES(status),reason=VALUES(reason),source=VALUES(source),
+           ticketId=VALUES(ticketId),updatedBy=VALUES(updatedBy),updatedByName=VALUES(updatedByName),updatedAt=VALUES(updatedAt)`,
+        [machineNumber, status, reason, source, opts.ticketId || '', opId, opName, now]
+      );
+
+      const histId = `mph-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const hist = {
+        id: histId, machineNumber, oldStatus: prev, newStatus: status,
+        reason, source, ticketId: opts.ticketId || '',
+        operator: opId, operatorName: opName, createdAt: now,
+      };
+      await pool.execute(
+        'INSERT INTO machine_production_history (id,machineNumber,newStatus,data,createdAt) VALUES (?,?,?,?,?)',
+        [histId, machineNumber, status, JSON.stringify(hist), now]
+      );
+
+      console.log(`[Production Status] ${machineNumber}: ${prev || '(无记录)'} -> ${status} (${source}${opts.ticketId ? ',ticket=' + opts.ticketId : ''})`);
+      try { broadcastSSE('machines_updated', { machineNumber, productionStatus: status }); } catch {}
+      return { ok: true, changed: true, from: prev, to: status };
+    } catch (e) {
+      console.error('[Production Status] setProductionStatus error:', e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+
+  // 人工切换生产状态：POST /api/machines/production-status
+  // body: {machineNumber, status: 'ready'|'in_production'|'testing', reason?}
+  // waiting_repair 只能由工单流程进入/离开；待维修中禁止直接投产（超管也不行，必须先关单）。
+  async function handleSetProductionStatus(req, res, user, body) {
+    try {
+      const b = body || {};
+      const machineNumber = (b.machineNumber || '').trim().toLowerCase();
+      const status = b.status;
+      if (!machineNumber) return sendJSON(res, { error: '机器编号不能为空' }, 400);
+      if (!['ready', 'in_production', 'testing'].includes(status)) {
+        return sendJSON(res, { error: '目标状态无效（待维修状态由维修工单自动驱动）' }, 400);
+      }
+      const [rows] = await pool.execute(
+        'SELECT status FROM machine_production WHERE machineNumber = ?', [machineNumber]
+      );
+      const prev = rows.length ? rows[0].status : null;
+      if (prev === 'waiting_repair' && status === 'in_production') {
+        return sendJSON(res, { error: '该机器待维修，不能标记为在生产；请先完成维修工单' }, 409);
+      }
+      const reason = (b.reason || '').trim().slice(0, 500);
+      const result = await setProductionStatus({
+        machineNumber, status, reason, source: 'manual',
+        operator: { id: user?.userId || user?.id || '', name: user?.displayName || user?.username || '' },
+      });
+      if (!result.ok) return sendJSON(res, { error: result.error || '更新失败' }, 500);
+      sendJSON(res, { success: true, changed: result.changed, from: result.from, to: result.to });
+    } catch (e) {
+      console.error('[Production Status] manual set error:', e);
+      sendJSON(res, { error: '服务器内部错误' }, 500);
+    }
+  }
+
+  // 生产状态变更记录：GET /api/machines/production-history?machineNumber=xxx&limit=200
+  async function handleGetProductionHistory(req, res) {
+    try {
+      const url = new URL(req.url, 'http://x');
+      const machineNumber = (url.searchParams.get('machineNumber') || '').trim().toLowerCase();
+      let limit = parseInt(url.searchParams.get('limit') || '200', 10);
+      if (!Number.isFinite(limit) || limit <= 0) limit = 200;
+      limit = Math.min(limit, 500);
+      let rows;
+      if (machineNumber) {
+        [rows] = await pool.execute(
+          'SELECT data FROM machine_production_history WHERE machineNumber = ? ORDER BY createdAt DESC, id DESC LIMIT ' + limit,
+          [machineNumber]
+        );
+      } else {
+        [rows] = await pool.execute(
+          'SELECT data FROM machine_production_history ORDER BY createdAt DESC, id DESC LIMIT ' + limit
+        );
+      }
+      const items = rows.map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+      sendJSON(res, { success: true, items });
+    } catch (e) {
+      console.error('[Production Status] history error:', e);
+      sendJSON(res, { error: '服务器内部错误' }, 500);
+    }
+  }
+
+  // ==================== 采集器综合状态（机器状态信息） ====================
+  // 采集器机器判定：we-100~we-1xx 与 szx3-N 一一对应（IP 10.5.51.N）。
+  // 实测网段 10.5.51.100~119 全部部署采集器；库内编号是 we-1xx，旧逻辑只认
+  // szx3- 前缀导致永远匹配不上。纯手套机器（1~99）无采集器。
+  function collectorIpOf(machineNumber) {
+    const m = /^(?:we|szx3)-(\d+)$/.exec(machineNumber || '');
+    if (!m) return null;
+    const n = parseInt(m[1], 10);
+    return n >= 100 && n <= 254 ? `10.5.51.${n}` : null;
+  }
+
+  async function _fetchCollectorJSON(url, timeoutMs) {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { Accept: 'application/json' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  // /state 的 robots.robot_1 条目清单 → topic→data 映射
+  function _stateTopicMap(state) {
+    const items = (state && state.robots && state.robots.robot_1) || [];
+    const map = {};
+    for (const it of items) if (it && it.topic) map[it.topic] = it.data;
+    return map;
+  }
+
+  // components（camera/robot/gello/*）按语义分组。
+  // ageS（距上次收到该部件数据几秒）来自 5006 /health，作为传输新鲜度（传输速率状态）：
+  // ≈0s 实时；持续增大=断流。5006 不可用时退回 5025 的 status（无 ageS）。
+  function _groupComponents(components, healthComponents) {
+    const out = {
+      dexterousHands: { left: null, right: null },
+      gloves: { left: null, right: null },
+      quest: null, marvin: null, cameras: [], other: [],
+    };
+    const ages = healthComponents || {};
+    for (const [key, val] of Object.entries(components || {})) {
+      const ageRaw = ages[key] && ages[key].age_s;
+      const entry = {
+        key,
+        status: (val && val.status) || 'unknown',
+        ageS: typeof ageRaw === 'number' ? Math.round(ageRaw * 10) / 10 : null,
+        everSeen: ages[key] ? !!ages[key].ever_seen : null,
+      };
+      if (key === 'robot/wuji_hand_l' || key === 'robot/wuji_glove_l') out.dexterousHands.left = entry;
+      else if (key === 'robot/wuji_hand_r' || key === 'robot/wuji_glove_r') out.dexterousHands.right = entry;
+      else if (key === 'gello/wuji_glove_l') out.gloves.left = entry;
+      else if (key === 'gello/wuji_glove_r') out.gloves.right = entry;
+      else if (key === 'gello/quest_controller' || key === 'quest/overlay') out.quest = entry;
+      else if (key === 'robot/marvin') out.marvin = entry;
+      else if (key.startsWith('camera/')) out.cameras.push({ name: key.slice('camera/'.length), ...entry });
+      else out.other.push(entry);
+    }
+    out.cameras.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  }
+
+  // GET /api/machines/:machineNumber/info
+  // 数据源链：
+  //   1) 心跳 agent 快照（edge_hosts，30s 上报，<90s 视为新鲜）——优先，零实时请求
+  //   2) 直连采集器（5025 /api/core/health + 5006 /health /version /state）——无 agent 或快照过期时兜底
+  // 两路输出相同的响应结构；source 标识来源（agent/live），dataAgeSec 为快照数据年龄。
+  async function handleGetMachineInfo(req, res, user, machineNumber) {
+    try {
+      if (!machineNumber) return sendJSON(res, { error: '机器编号不能为空' }, 400);
+      const ip = collectorIpOf(machineNumber);
+      if (!ip) return sendJSON(res, { error: '该机器未部署采集器（仅 we-1xx / szx3-* 灵巧手机器提供）' }, 400);
+
+      // ---------- 数据源 1：心跳 agent 快照 ----------
+      let snap = null;
+      try {
+        const presence = await loadEdgePresence();
+        const ep = presence && presence[machineNumber];
+        if (ep && ep.hostLastSeen && (ep.importer || ep.hermes)
+          && Date.now() - new Date(ep.hostLastSeen).getTime() < 90 * 1000) {
+          snap = ep;
+        }
+      } catch { /* edge_hosts 不可用时静默走直连 */ }
+
+      if (snap) {
+        const imp = snap.importer || {};
+        const her = snap.hermes || {};
+        const comps = (her.health && her.health.components) || {};
+        // 组件条目对齐直连路径的字段形状（kind/status/age_s/ever_seen），前端无需区分来源
+        const entry = c => ({
+          kind: c.kind || null,
+          status: c.status || 'disconnected',
+          age_s: c.ageS != null ? c.ageS : null,
+          ever_seen: c.everSeen != null ? c.everSeen : null,
+        });
+        const devices = { dexterousHands: {}, gloves: {}, quest: null, marvin: null, cameras: [], other: [] };
+        for (const [key, c] of Object.entries(comps)) {
+          if (key === 'robot/wuji_hand_l') devices.dexterousHands.left = entry(c);
+          else if (key === 'robot/wuji_hand_r') devices.dexterousHands.right = entry(c);
+          else if (key === 'robot/wuji_glove_l') devices.gloves.left = entry(c);
+          else if (key === 'robot/wuji_glove_r') devices.gloves.right = entry(c);
+          else if (key === 'quest/overlay') devices.quest = entry(c);
+          else if (key === 'robot/marvin') devices.marvin = entry(c);
+          else if (key.startsWith('camera/')) devices.cameras.push({ name: key.slice('camera/'.length), ...entry(c) });
+          else devices.other.push({ key, ...entry(c) });
+        }
+        devices.cameras.sort((a, b) => a.name.localeCompare(b.name));
+
+        const it = imp.task || null;
+        const task = it ? {
+          id: it.id,
+          name: (it.template && (it.template.refName || it.template.name)) || '未知任务',
+          state: it.state || null,
+          hours: it.hours != null ? it.hours : null,
+          hoursCompleted: it.hoursCompleted != null ? it.hoursCompleted : 0,
+          percent: it.hours ? Math.min(100, Math.round(((it.hoursCompleted || 0) / it.hours) * 100)) : null,
+          createTime: it.createTime || null,
+          endTime: it.endTime || null,
+          isTraining: !!(it.template && it.template.isTraining),
+          operator: {
+            name: (it.operator && (it.operator.name || it.operator.localized_name)) || '未知',
+            level: it.operator ? it.operator.level : null,
+            email: null,
+            state: it.operator ? it.operator.state : null,
+          },
+          steps: [], verbs: [], objects: [],
+        } : null;
+
+        const herDown = her.reachable === false;
+        // agent 独有数据：Quest 电量（ADB）、设备网络可达（ping）、传感器分辨率、头显配置帧率
+        const q = snap.edgeQuest || null;
+        const dnet = snap.edgeDevices || null;
+        const sensors = Array.isArray(her.sensors) ? her.sensors : null;
+        sendJSON(res, {
+          success: true,
+          machineNumber,
+          source: 'agent',
+          dataAgeSec: Math.max(0, Math.round((Date.now() - new Date(snap.hostLastSeen).getTime()) / 1000)),
+          collectorName: imp.machineId || null,
+          computerId: imp.computerId || null,
+          importerVersion: imp.importerVersion || null,
+          collectorVersion: her.version || null,
+          channel: imp.channel || null,
+          vstFps: imp.vst && imp.vst.fps != null ? imp.vst.fps : null,
+          sensors,
+          teleopDelay: (her.state && her.state.teleopDelay) || null,
+          questInfo: q ? {
+            netConnected: !!q.connected,
+            serialNumber: q.serialNumber || null,
+            adbStatus: q.adbStatus || null,
+            batteryLevel: q.battery && q.battery.level != null ? q.battery.level : null,
+            batteryStatus: q.battery && q.battery.status ? q.battery.status : null,
+            batteryTemp: q.battery && q.battery.temperature != null ? q.battery.temperature : null,
+            controllers: q.controllers || null,
+          } : null,
+          devicesNet: dnet ? {
+            gloves: dnet.gloves || null,
+            dexterousHands: dnet.dexterousHands || null,
+            roboticArm: dnet.roboticArm || null,
+          } : null,
+          system: {
+            activity: imp.activity || null,
+            collectorAlive: imp.collectorAlive != null ? !!imp.collectorAlive : (her.reachable !== false),
+            observerAlive: !!imp.observerAlive,
+            loggedIn: !!imp.loggedIn,
+            idleTimeSecs: imp.idleTimeSecs != null ? imp.idleTimeSecs : null,
+            controlState: (her.state && her.state.controlState) || null,
+            isRecording: !!(her.state && her.state.isRecording),
+            emergencyStopped: !!(her.state && her.state.emergencyStopped),
+            errorCount: her.state && her.state.errorCount != null ? her.state.errorCount
+              : (her.health ? (her.health.errors || []).length : 0),
+          },
+          containers: [
+            { name: 'importer', status: imp.reachable === false ? 'exited' : 'running' },
+            { name: '采集程序(rdc-exodus)', status: herDown ? 'exited' : 'running' },
+          ],
+          devices,
+          task,
+          degraded: (her.health && her.health.degraded) || [],
+          errors: (her.health && her.health.errors) || [],
+          partial: {
+            importer: imp.reachable === false,
+            hermesOffline: herDown,       // 采集程序未运行（正常，灰色提示）
+            hermesFailed: false,          // 快照来源无法区分真故障，不误报警告
+          },
+        });
+        return;
+      }
+
+      // ---------- 数据源 2：直连采集器（兜底） ----------
+      const base = `http://${ip}`;
+      const [coreR, healthR, versionR, stateR, sensorsR] = await Promise.allSettled([
+        _fetchCollectorJSON(`${base}:5025/api/core/health`, 6000),
+        _fetchCollectorJSON(`${base}:5006/health`, 4000),
+        _fetchCollectorJSON(`${base}:5006/version`, 4000),
+        _fetchCollectorJSON(`${base}:5006/state`, 4000),
+        _fetchCollectorJSON(`${base}:5006/sensors`, 4000),
+      ]);
+      const core = coreR.status === 'fulfilled' ? coreR.value : null;
+      const hermesHealth = healthR.status === 'fulfilled' ? healthR.value : null;
+      const hermesVersion = versionR.status === 'fulfilled' && versionR.value && versionR.value.content
+        ? versionR.value.content.version : null;
+      const stateMap = stateR.status === 'fulfilled' ? _stateTopicMap(stateR.value) : {};
+
+      const ciInfo = (core && core.collector_info && core.collector_info.info) || {};
+      const devices = _groupComponents(ciInfo.components || (hermesHealth && hermesHealth.components) || {}, hermesHealth && hermesHealth.components);
+
+      // 当前任务 + 操作员（无任务时 task_config 为空对象）
+      const tc = core && core.task_config && core.task_config.id ? core.task_config : null;
+      const tpl = (tc && tc.template) || {};
+      const op = (tc && tc.operator) || {};
+      const task = tc ? {
+        id: tc.id,
+        name: tpl.ref_name || tpl.name || '未知任务',
+        state: tc.state || null,
+        hours: tc.hours != null ? tc.hours : null,
+        hoursCompleted: tc.hours_completed != null ? tc.hours_completed : 0,
+        percent: tc.hours ? Math.min(100, Math.round(((tc.hours_completed || 0) / tc.hours) * 100)) : null,
+        createTime: tc.create_time || null,
+        endTime: tc.end_time || null,
+        isTraining: !!tpl.is_training,
+        operator: {
+          name: op.name || op.localized_name || '未知',
+          level: op.level != null ? op.level : null,
+          email: op.email || null,
+          state: op.state || null,
+        },
+        steps: (tpl.steps && tpl.steps.payload) || [],
+        verbs: tpl.verbs || [],
+        objects: tpl.objects || [],
+      } : null;
+
+      const misc = (core && core.machine_config && core.machine_config.misc) || {};
+      const containers = Object.entries((core && core.containers) || {}).map(([name, status]) => ({ name, status }));
+
+      // 5006 不可用分两种语义：连接被拒绝 = 采集程序未运行（未在采集/标定，属正常）；
+      // 超时/其他异常 = 真故障。前端据此显示中性提示还是警告。
+      const _refused = r => {
+        if (r.status !== 'rejected') return false;
+        const cause = r.reason && r.reason.cause;
+        return !!(cause && (cause.code === 'ECONNREFUSED' || cause.code === 'ECONNRESET'));
+      };
+      const hermesAllDown = !hermesHealth && !hermesVersion && !Object.keys(stateMap).length;
+      const hermesOffline = hermesAllDown && _refused(healthR) && _refused(versionR) && _refused(stateR);
+
+      sendJSON(res, {
+        success: true,
+        machineNumber,
+        source: 'live',
+        dataAgeSec: 0,
+        collectorName: misc.machine_id || null,   // 如 szx3-iris-105
+        computerId: misc.computer_id || null,     // 如 szx3-105
+        importerVersion: (core && core.version) || null,
+        collectorVersion: hermesVersion,          // 采集程序(rdc-exodus)版本
+        channel: (core && core.channel) || null,
+        vstFps: (core && core.machine_config && core.machine_config.vst && core.machine_config.vst.fps) != null
+          ? core.machine_config.vst.fps : null,
+        sensors: sensorsR.status === 'fulfilled' && Array.isArray(sensorsR.value) ? sensorsR.value : null,
+        teleopDelay: {
+          left: stateMap['teleop/hand_left/delay'] != null ? stateMap['teleop/hand_left/delay'] : null,
+          right: stateMap['teleop/hand_right/delay'] != null ? stateMap['teleop/hand_right/delay'] : null,
+        },
+        questInfo: null,     // Quest 电量仅 agent（ADB 本机采集）可获取，直连路径无
+        devicesNet: null,    // 设备 ping 可达性仅 agent（本机网段）可获取，直连路径无
+        system: {
+          activity: (core && core.activity) || null,          // running / idle
+          collectorAlive: !!(core && core.is_collector_alive),
+          observerAlive: !!(core && core.is_observer_alive),
+          loggedIn: !!(core && core.is_logged_in),
+          idleTimeSecs: (core && core.idle_time_secs) != null ? core.idle_time_secs : null,
+          controlState: stateMap.control_state || ciInfo.status || null, // RECORD/ACTIVE/BOOT...
+          isRecording: !!stateMap.is_recording,
+          emergencyStopped: !!stateMap.is_emergency_stopped,
+          errorCount: stateMap.error_count != null ? stateMap.error_count : (ciInfo.errors ? ciInfo.errors.length : 0),
+        },
+        containers,
+        devices,
+        task,
+        degraded: ciInfo.degraded || (hermesHealth && hermesHealth.degraded) || [],
+        errors: ciInfo.errors || (hermesHealth && hermesHealth.errors) || [],
+        // 数据源降级标记：importer=true 表示 5025 拉取失败；hermesOffline=true 表示采集程序
+        // 未运行（正常）；hermesFailed=true 表示 5006 超时/异常（真故障）
+        partial: {
+          importer: !core,
+          hermesOffline,
+          hermesFailed: hermesAllDown && !hermesOffline,
+        },
+      });
+    } catch (e) {
+      console.error('[Machine Info] Error:', e);
+      sendJSON(res, { error: '服务器内部错误' }, 500);
+    }
+  }
+
   return {
     handleGetMachineCode,
     handleMobileGetMachines,
     handleGetMachineStatus,
+    handleGetMachineInfo,
     handleGetMachines,
     handleAddMachine,
     handleDeleteMachine,
@@ -634,5 +1111,8 @@ module.exports = function createMachinesHandlers(deps) {
     handleUnbindMachine,
     handleGetMachineBindings,
     handleSyncMachineState,
+    handleSetProductionStatus,
+    handleGetProductionHistory,
+    setProductionStatus,
   };
 };
